@@ -1,0 +1,18 @@
+{"1.2.0",
+[{<<"erlmcp">>,{pkg,<<"erlmcp">>,<<"0.5.1">>},0},
+ {<<"erlog">>,
+  {git,"https://github.com/rvirding/erlog.git",
+       {ref,"26ac2415c673683d7c816e3168048be012c86735"}},
+  0},
+ {<<"jesse">>,{pkg,<<"jesse">>,<<"1.8.1">>},1},
+ {<<"jsx">>,{pkg,<<"jsx">>,<<"3.1.0">>},1}]}.
+[
+{pkg_hash,[
+ {<<"erlmcp">>, <<"A00CD1B9017EEBFC8E77C37C0F8A670EE21538C1B515296F7292B5D439CAB449">>},
+ {<<"jesse">>, <<"C9E3670C7EE40F719734E3BC716578143AABA93FC7525A02A7D5CB300B3AD71E">>},
+ {<<"jsx">>, <<"D12516BAA0BB23A59BB35DCCAF02A1BD08243FCBB9EFE24F2D9D056CCFF71268">>}]},
+{pkg_hash_ext,[
+ {<<"erlmcp">>, <<"EB494438FA0DDAEA2BC2B4E9204D4486F07CFD7C826BC95D0A5C47B5AEDB28ED">>},
+ {<<"jesse">>, <<"0EDED3F18623FDA2F25989804A06CF518B4ACF2E9365B18C8E8C013D7E3C906F">>},
+ {<<"jsx">>, <<"0C5CC8FDC11B53CC25CF65AC6705AD39E54ECC56D1C22E4ADB8F5A53FB9427F3">>}]}
+].

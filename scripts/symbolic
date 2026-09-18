@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+# The `symbolic` CLI, run against a rebar3 release rather than relx's own
+# generated bin/symbolic_tools script — that script (start/stop/console/
+# rpc/eval/escript) is for managing a long-running node, and every one of
+# its one-shot-looking subcommands (`eval`, `escript`) actually RPCs into
+# an already-running node rather than running standalone. This wrapper
+# runs the CLI directly against the release's real on-disk ebin/priv
+# directories, the same shape our old escript build used, except NIFs
+# (erl_ts) actually work here since priv/ isn't inside a zip archive.
+# See docs/cli-erlang.md §1/§1.1.
+# Resolve $0 through any symlinks first — a global install typically
+# symlinks this script into e.g. /opt/homebrew/bin, and a naive
+# `dirname "$0"` would then resolve relative to the symlink's location,
+# not this release's real lib/ directory.
+SOURCE="$0"
+while [ -h "$SOURCE" ]; do
+    LINK_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    case "$SOURCE" in
+        /*) ;;
+        *) SOURCE="$LINK_DIR/$SOURCE" ;;
+    esac
+done
+DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+exec erl -pa "$DIR"/lib/*/ebin \
+    -noshell \
+    -eval "symbolic_cli:main(init:get_plain_arguments())" \
+    -extra "$@"

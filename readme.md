@@ -74,10 +74,12 @@ Inspired by the [Chiasmus MCP Server](https://github.com/yogthos/chiasmus).
 
 ## Supported languages
 
-**TypeScript and Erlang**, both real today via `symbolic parse` — `defines`
-and `calls` facts (including distinguishing plain calls from method calls
-in TypeScript, and local from remote calls in Erlang), dogfooded against
-this repo's own source and a real-world-style `.ts` file. More tree-sitter
+**TypeScript and Erlang**, both real today via `symbolic parse` — `defines`,
+`calls` (including distinguishing plain calls from method calls in
+TypeScript, and local from remote calls in Erlang), `comment`, and `doc`
+facts (every comment, plus which ones document a specific function),
+dogfooded against this repo's own source and a real-world-style `.ts`
+file. More tree-sitter
 grammars (Python, Go, Rust) can slot in the same way; see
 `docs/tree-sitter-erlang.md` §5 for the actual recipe (not hypothetical —
 what adding TypeScript really took, including two vendored-fork
@@ -119,6 +121,7 @@ usage/help text.
 
 ```ts
 // greeter.ts
+// Formats a full name from its parts.
 function formatName(first: string, last: string): string {
   return capitalize(first) + " " + capitalize(last);
 }
@@ -129,26 +132,47 @@ function greet(name: string): void {
   this.logger.info(formatted);
 }
 
+// Capitalizes the first letter of a word.
 function capitalize(word: string): string {
   return word.toUpperCase();
 }
+
+// TODO: handle names with a middle name too
 ```
 
 ```sh
 $ symbolic parse .
-defines(capitalize,'greeter.ts',11).
-defines(formatName,'greeter.ts',1).
-defines(greet,'greeter.ts',5).
-calls(capitalize,member(word,toUpperCase),'greeter.ts',12).
-calls(formatName,local(capitalize),'greeter.ts',2).
-calls(greet,local(formatName),'greeter.ts',6).
-calls(greet,member(console,log),'greeter.ts',7).
-calls(greet,member('this.logger',info),'greeter.ts',8).
+comment('greeter.ts',1,'Formats a full name from its parts.').
+comment('greeter.ts',12,'Capitalizes the first letter of a word.').
+comment('greeter.ts',17,'TODO: handle names with a middle name too').
+defines(capitalize,'greeter.ts',13).
+defines(formatName,'greeter.ts',2).
+defines(greet,'greeter.ts',6).
+calls(capitalize,member(word,toUpperCase),'greeter.ts',14).
+calls(formatName,local(capitalize),'greeter.ts',3).
+calls(greet,local(formatName),'greeter.ts',7).
+calls(greet,member(console,log),'greeter.ts',8).
+calls(greet,member('this.logger',info),'greeter.ts',9).
+doc(capitalize,'greeter.ts',13,'Capitalizes the first letter of a word.').
+doc(formatName,'greeter.ts',2,'Formats a full name from its parts.').
 ```
 
 A plain call (`bar()`) becomes `local(bar)`; a method call (`obj.method()`)
 becomes `member(obj, method)` — so a query can tell "calls that function
-directly" apart from "calls a method on something."
+directly" apart from "calls a method on something." Every comment becomes a
+`comment(File, Line, Text)` fact, unconditionally; a comment (or run of
+consecutive `//` lines) that sits immediately before a function also
+becomes a `doc(Function, File, Line, Text)` fact, attributed to that
+function at its own definition line — `greet` has no `doc/4` fact because
+nothing precedes it, and the trailing `// TODO: ...` line has a `comment/3`
+fact but no `doc/4`, because nothing follows it. Finding this attribution
+needed a part of the tree-sitter API this project hadn't used before: a
+comment is a **sibling** of the code it documents, not a parent/child of
+it, so extracting `doc/4` walks `node_next_sibling/1`/`node_prev_sibling/1`
+rather than the `node_parent/1` walk `calls/4` uses for caller attribution
+— see `docs/tree-sitter-erlang.md` §6 for a real inconsistency this
+uncovered in that part of the API (`node_is_null/1` doesn't apply to a
+missing sibling the way it does to a missing parent).
 
 ### Querying the facts
 
@@ -163,23 +187,82 @@ X = formatName                      # the only caller of capitalize
 
 $ symbolic query -file facts.pl 'defines(formatName, File, Line)'
 File = 'greeter.ts'
-Line = 1
+Line = 2
 
 $ symbolic query -file facts.pl 'calls(X, member(console, _), _, _)'
 X = greet                           # who calls a method on console
 
 $ symbolic query -file facts.pl 'calls(greet, X, _, Line)'
-Line = 6
+Line = 7
 X = local(formatName)               # greet's first call — one solution at a time
 
 $ symbolic query -file facts.pl 'calls(capitalize, member(_, missingMethod), _, _)'
 No.                                 # capitalize never calls a method by that name
+
+$ symbolic query -file facts.pl 'doc(formatName, File, Line, Text)'
+File = 'greeter.ts'
+Line = 2
+Text = 'Formats a full name from its parts.'
+
+$ symbolic query -file facts.pl 'defines(F, _, _), \+ doc(F, _, _, _)'
+F = greet                           # which functions have no doc comment
+
+$ symbolic query -file facts.pl 'comment(File, Line, Text), \+ doc(_, _, _, Text)'
+File = 'greeter.ts'
+Line = 17
+Text = 'TODO: handle names with a middle name too'   # comments not attached to any definition
 ```
 
 Because it's a real fact base, not a grep result, this composes: combine
 facts from multiple `parse` runs into one file, hand-edit it, or ask
 something no text search could answer directly — "what calls a method on
-`console`" is just `calls(X, member(console, _), _, _)`.
+`console`" is just `calls(X, member(console, _), _, _)`, and "which
+functions are undocumented" is just `defines(F, _, _), \+ doc(F, _, _, _)`.
+
+### Searching doc strings
+
+`Text` is an ordinary atom, so a query can match it exactly (as above) or
+search *inside* it — erlog ships `atom_codes/2` and `append/3` but no
+`sub_atom/5`, so a substring test is one line of Prolog, written using
+those two: split the text's code list at every position (`append(_,
+Suffix, Codes)`) and check whether the word's own codes are a prefix of
+that suffix (`append(Sub, _, Suffix)`). Rather than repeat that inline —
+which works, but leaks its own scratch variables (`Codes`, `Sub`,
+`Suffix`) into the printed bindings since they're free in the query term
+— define it once as a rule and append it to the fact file, the same
+"hand-edit the `.pl` file" workflow as above:
+
+```sh
+$ cat >> facts.pl << 'EOF'
+
+contains(Text, Word) :-
+    atom_codes(Text, Codes),
+    atom_codes(Word, Sub),
+    append(_, Suffix, Codes),
+    append(Sub, _, Suffix).
+EOF
+
+$ symbolic query -file facts.pl 'doc(Fun, File, Line, Text), contains(Text, first)'
+File = 'greeter.ts'
+Fun = capitalize
+Line = 13
+Text = 'Capitalizes the first letter of a word.'
+
+$ symbolic query -file facts.pl 'doc(Fun, File, Line, Text), contains(Text, name)'
+File = 'greeter.ts'
+Fun = formatName
+Line = 2
+Text = 'Formats a full name from its parts.'
+
+$ symbolic query -file facts.pl 'doc(Fun, File, Line, Text), contains(Text, xyz)'
+No.                                 # no doc string mentions "xyz"
+```
+
+Because `Word` is bound by the caller before `contains/2` runs, its
+internal variables never become free in the top-level query — only
+`Fun`/`File`/`Line`/`Text` show up in the answer. This is the same
+substring search a "find the doc-comment that mentions X" tool call would
+run, just issued by hand here.
 
 ## Install
 

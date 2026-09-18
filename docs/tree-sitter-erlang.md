@@ -220,6 +220,15 @@ them.
   or capping per-parse input size.
 - **Nodes need the source.** `node_text/2` slices the source string by byte
   range, so the source must live as long as the tree.
+- **Sibling navigation returns `undefined`, not a null resource.**
+  `node_parent/1` returns a null *resource* when there's no parent —
+  checked via `node_is_null/1`. `node_next_sibling/1` and
+  `node_prev_sibling/1` are inconsistent with that: when there's no such
+  sibling, they return the plain atom `undefined` instead. Calling
+  `node_is_null/1` on `undefined` raises `badarg`. Confirmed by testing,
+  not documented anywhere upstream — check `=:= undefined` (or pattern
+  match the atom directly) when walking siblings, e.g. the comment/doc-run
+  walk in `ts_extract_typescript.erl`/`ts_extract_erlang.erl`.
 
 ### 6.1 macOS-specific build issues (confirmed on Apple Silicon, OTP 29)
 

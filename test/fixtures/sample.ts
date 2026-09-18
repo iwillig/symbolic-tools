@@ -6,3 +6,10 @@ function foo(x: number) {
 function other() {
   bar(1);
 }
+
+// Capitalizes the first letter of a word.
+function capitalize(word: string): string {
+  return word.toUpperCase();
+}
+
+// standalone comment, not attached to anything

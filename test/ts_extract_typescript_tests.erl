@@ -24,3 +24,22 @@ extracts_member_call_test() ->
 no_duplicate_facts_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     ?assertEqual(lists:usort(Facts), lists:sort(Facts)).
+
+extracts_comment_test() ->
+    Facts = ts_extract_typescript:file(?FIXTURE),
+    Path = list_to_atom(?FIXTURE),
+    ?assert(lists:member(
+        {comment, Path, 10, 'Capitalizes the first letter of a word.'}, Facts)),
+    ?assert(lists:member(
+        {comment, Path, 15, 'standalone comment, not attached to anything'}, Facts)).
+
+extracts_doc_test() ->
+    Facts = ts_extract_typescript:file(?FIXTURE),
+    Path = list_to_atom(?FIXTURE),
+    ?assert(lists:member(
+        {doc, capitalize, Path, 11, 'Capitalizes the first letter of a word.'}, Facts)).
+
+standalone_comment_has_no_doc_test() ->
+    Facts = ts_extract_typescript:file(?FIXTURE),
+    ?assertEqual(
+        [], [F || {doc, _, _, 15, _} = F <- Facts]).
