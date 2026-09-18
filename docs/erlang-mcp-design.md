@@ -4,10 +4,13 @@ This document describes an alternative to [`readme.md`](../readme.md)'s
 Python + SWI-Prolog design: run Prolog **in-process on the BEAM**, with no
 external `swipl` binary, using [rebar3](https://rebar3.org/) as the build
 tool, [erlmcp](https://github.com/erlsci/erlmcp) as the MCP server SDK, and
-[erlog](https://github.com/rvirding/erlog) as the Prolog engine. This is a
-design document only — no server is implemented here. It targets the same
-four-tool contract as `readme.md` §3 so the two backends stay interchangeable
-from the client's point of view.
+[erlog](https://github.com/rvirding/erlog) as the Prolog engine. **Implemented**
+— `symbolic serve` (`src/symbolic_serve.erl`) is this design, built and
+verified end-to-end over real stdio JSON-RPC (see §2.1 for two real
+integration issues found and fixed along the way, not knowable from
+erlmcp's own docs). It targets the same four-tool contract as `readme.md`
+§3 so the two backends stay interchangeable from the client's point of
+view.
 
 ## 1. Architecture
 
@@ -25,33 +28,72 @@ process isolation (see §8).
 ## 2. Toolchain
 
 - **rebar3** — standard, no open questions.
-- **erlmcp** (`erlsci/erlmcp`, Apache 2.0, requires OTP 25+) — actively
-  maintained (commits as recently as 2026-05, 10+ tagged releases up to
-  0.5.1). It is a community SDK, not the official Anthropic one, so treat
-  anything beyond basic tool registration/call (resource subscriptions,
-  prompts, less-common error paths) as unverified until exercised against
-  the MCP spec directly.
+- **erlmcp** (`erlsci/erlmcp`, Apache 2.0, requires OTP 25+, **Hex package**
+  `erlmcp` — a plain `{erlmcp, "0.5.1"}` dependency, no vendoring needed,
+  unlike `erl_ts`). It is a community SDK, not the official Anthropic one;
+  §2.1 covers what turned out to actually need verifying.
 - **erlog** (`rvirding/erlog`, Apache 2.0) — **dormant**: last commit
   2022-04-18, latest tag `v0.6`. Written by Robert Virding (Erlang core
   team, LFE author), so the code quality is solid, but there will be no
   upstream fixes. Any gap found here (see §5) is either worked around
   locally or forked.
-- Add to `Brewfile`: `brew "erlang"`, `brew "rebar3"` (currently only
-  `swi-prolog` is listed, for the Python-backend design).
+- `Brewfile` already has `erlang`/`rebar3` (added when the CLI itself was
+  built) — nothing extra needed for the server.
+
+### 2.1 Two real integration issues, found by building it
+
+Neither is discoverable from erlmcp's own README/docs — both required
+actually compiling and running it.
+
+- **`erlmcp` 0.5.1 fails to compile on OTP 29.** It uses the prefix
+  `catch Expr` form, deprecated in OTP 29; something in the OTP 29
+  compiler escalates that specific deprecation to a hard error
+  (confirmed: not a `warnings_as_errors` setting — overriding erlmcp's
+  own `erl_opts` down to just `[debug_info]` still failed identically).
+  Fix: a rebar3 `overrides` entry adding the `nowarn_deprecated_catch`
+  compile directive named right in the warning text, scoped to just this
+  dependency (see `rebar.config`).
+- **The README's own usage example doesn't produce a working stdio
+  server.** `erlmcp_server:start_link({stdio, []}, Capabilities)` starts
+  a process, but it isn't wired into any actual stdin-reading loop unless
+  the `erlmcp` OTP application itself has been started first — and
+  nothing says so. The API that actually works, found by reading
+  `erlmcp_stdio.erl`/`erlmcp_stdio_server.erl` directly: call
+  `application:ensure_all_started(erlmcp)`, then
+  `erlmcp_stdio:start/0` (which goes through `erlmcp_sup`, erlmcp's real
+  top-level supervisor) and `erlmcp_stdio:add_tool/4` — not
+  `erlmcp_server:add_tool_with_schema/4`. Verified end-to-end with a
+  hand-written stdio JSON-RPC client: `initialize` → `tools/list` →
+  `tools/call` for all four tools, correct responses throughout.
 
 ## 3. Tool surface
 
-Same four primitives as `readme.md` §3, registered via
-`erlmcp_server:add_tool_with_schema/4`:
+**Implemented as designed**, in `src/symbolic_serve.erl`, registered via
+`erlmcp_stdio:add_tool/4` (not `erlmcp_server:add_tool_with_schema/4` —
+see §2.1):
 
 - `prolog_start_session() -> session_id` — starts a `prolog_session` child
   under `prolog_session_sup` (`simple_one_for_one`); the child calls
-  `erlog:new/0` and holds the resulting state.
+  `erlog:new/0` and holds the resulting state. The session_id ↔ pid
+  mapping lives in `prolog_session_registry`, a small ETS-backed
+  `gen_server` — MCP tool handlers are stateless (`Params -> Result`),
+  so something has to bridge them to a stateful `erlog` session across
+  separate tool calls; this is that bridge.
 - `prolog_consult(session_id, program: str) -> ok | error` — parses the
-  program text and asserts clauses into that session's `erlog` state.
-- `prolog_query(session_id, goal: str, max_solutions=1) -> bindings[] | error`
-  — proves the goal, returns bindings or `false`.
-- `prolog_end_session(session_id)` — terminates the child.
+  program text and asserts clauses into that session's `erlog` state, via
+  `prolog_session:consult_string/2` (writes to a temp file and reuses the
+  already-tested `erlog:consult/2` path, rather than reaching into
+  `erlog_int`'s internals).
+- `prolog_query(session_id, goal: str) -> bindings[] | error` — proves the
+  goal, returns bindings or `"No."` as plain text (structured erlog↔JSON
+  marshalling per §4 below is not yet built; text is enough for an LLM
+  agent to consume, and keeps this proportional to what's already built
+  for the CLI). Simpler than originally sketched: no `max_solutions`
+  param yet — one solution only, matching `erlog:prove/2`'s own single-
+  solution-per-call shape; backtracking via `next_solution/1` would be
+  the way to add multi-solution support later.
+- `prolog_end_session(session_id)` — terminates the child via the
+  supervisor and removes the registry entry.
 
 ## 4. Data marshalling (erlog term ↔ JSON)
 
@@ -281,6 +323,12 @@ pay either a process-spawn cost or an in-process-crash risk):
   `exit(WorkerPid, kill)` on timeout. This is the direct BEAM analogue of
   `readme.md` §6's `call_with_time_limit/2` requirement — same rule,
   different mechanism (preemptive process kill instead of a library call).
+  **Implemented**: `prolog_session:query/2,3` does exactly this (a 5s
+  default timeout, overridable via `query/3` — mainly so tests can use a
+  short one), verified with a real regression test: a deliberately cyclic
+  `loop(X) :- loop(X).` goal is killed within budget, and the session
+  stays usable for a normal query immediately afterward
+  (`test/prolog_session_timeout_tests.erl`).
 - Resource limits beyond wall-clock (memory, reduction count per session)
   can use `erlang:process_flag(max_heap_size, ...)` on the session process
   — no per-session container is needed for this class of limit, unlike the
@@ -288,7 +336,9 @@ pay either a process-spawn cost or an in-process-crash risk):
 
 ## 9. Testing strategy
 
-Same categories as `readme.md` §8, plus one specific to this engine:
+Same categories as `readme.md` §8, plus one specific to this engine. See
+[`testing-erlang.md`](testing-erlang.md) for the `rebar3` tooling
+(EUnit/Common Test/PropEr/cover) behind these bullets.
 
 - **Correctness**: same word-problem-style Prolog programs, run against
   both backends where possible to catch semantic divergence early (string
@@ -296,7 +346,9 @@ Same categories as `readme.md` §8, plus one specific to this engine:
 - **Cyclic-graph regression test**: a deliberately cyclic `depends/2` fact
   set and an untabled transitive-closure rule, asserted to *not* hang past
   the session timeout — this is the test that would have caught §5 before
-  shipping.
+  shipping. A single fixture only checks one graph shape; see
+  [`testing-erlang.md`](testing-erlang.md) §3.4 for generating this as a
+  PropEr property over random (including cyclic) graphs instead.
 - **Failure modes**: malformed programs, undefined predicates, no-solution
   queries — verify `erlog:prove/2`'s `{error, Error}` shape reaches the MCP
   client as a structured tool error, not a crashed session.
@@ -329,3 +381,7 @@ Same categories as `readme.md` §8, plus one specific to this engine:
 - Baseline design (Python + SWI-Prolog): [`readme.md`](../readme.md)
 - Tabling requirement this design must satisfy or work around:
   [`docs/prolog-as-primary-reasoner.md`](prolog-as-primary-reasoner.md)
+- Testing tooling (EUnit/Common Test/PropEr/cover) §9 runs on:
+  [`testing-erlang.md`](testing-erlang.md)
+- NLP tooling survey, scoped by this design's no-subprocess philosophy:
+  [`nlp-tooling.md`](nlp-tooling.md)

@@ -1,0 +1,16 @@
+{application, symbolic_tools, [
+    {description, "Prolog database and query tools for a software codebase"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        erlog,
+        erl_ts,
+        erlmcp
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["MIT"]},
+    {links, []}
+]}.

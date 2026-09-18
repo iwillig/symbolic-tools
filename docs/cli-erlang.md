@@ -1,4 +1,4 @@
-# Design: The CLI (escript / escriptize)
+# Design: The CLI (rebar3 release)
 
 This document covers how the symbolic-tools **command-line tool** (`symbolic`) is
 structured, built, and shipped. It is the Erlang counterpart to the MCP server
@@ -7,10 +7,13 @@ in [`erlang-mcp-design.md`](erlang-mcp-design.md) and the extraction layer in
 share the same core modules and differ only in the front end (argv vs. MCP
 messages). A design/research document only — no CLI is implemented here.
 
-**Recommendation up front:** write normal compiled modules with a thin `main/1`
-entry point, parse args with the built-in `getopt`, and ship a single
-self-contained binary via **`rebar3 escriptize`** (distributed through a
-Homebrew tap or a Nix flake).
+**Recommendation up front, implemented and working:** write normal compiled
+modules with a thin `main/1` entry point, parse args with stdlib `argparse`
+(§2), and ship via **`rebar3 release`**, run through a small custom wrapper
+script (§1.2) — **not `rebar3 escriptize`**, which was the original plan
+here but turned out to be fundamentally incompatible with NIFs (like
+`erl_ts`, [`tree-sitter-erlang.md`](tree-sitter-erlang.md)) once one
+entered the dependency tree. See §1.1.
 
 ## 1. Packaging
 
@@ -19,82 +22,129 @@ Three models exist for running Erlang as a CLI:
 | Model | What it is | Use when |
 |---|---|---|
 | **`escript`** (built-in) | a single `.erl` file run by the `escript` runtime; shebang `#!/usr/bin/env escript` | quick throwaway scripts |
-| **`rebar3 escriptize`** | bundles the OTP app **+ all Hex deps + a BEAM** into one self-contained executable | ✅ **the standard "ship one binary" path for `symbolic`** |
-| **`rebar3 release`** (or `relx`) | full OTP release: `sys.config`, start scripts, `releases/` tree | long-running nodes, multiple apps, config/upgrade story |
+| **`rebar3 escriptize`** | bundles the OTP app **+ all deps' `.beam`/`.app` files** into one self-contained executable | fine as long as nothing in the dependency tree is a NIF (§1.1) — no longer used here once `erl_ts` was added |
+| **`rebar3 release`** (or `relx`) | full OTP release: `sys.config`, start scripts, `releases/` tree, `priv/` kept as real files on disk | ✅ **what `symbolic` actually ships as**, specifically because `priv/` staying real files is what lets `erl_ts`'s NIF load at all |
 
 Avoid escript **"script mode"** for real logic — it is interpreted (slow) and
-disallows compile-only features. The idiomatic shape is: **normal modules + a
-thin `main/1`**, then let `escriptize` embed the compiled release.
+disallows compile-only features.
 
-`rebar.config`:
+### 1.1 Confirmed: NIFs cannot be shipped inside an escript
+
+Found while implementing `symbolic parse`'s tree-sitter extraction, and the
+reason this project moved off `escriptize`: `escript_incl_apps` only
+bundles a dependency's `.beam`/`.app` files into the escript's zip archive
+— never `priv/` — and `erlang:load_nif/2` cannot `dlopen` a shared library
+from inside a zip archive at all. Embedding `erl_ts` in `escript_incl_apps`
+produced a module that *looks* loaded (`code:which/1` finds it) but
+crashes with `undefined function` the moment any of its NIF functions are
+called — worse than not embedding it, since the failure is silent until
+the crash. `symbolic_parse` still guards this defensively with
+`code:ensure_loaded(erl_ts)`, but the real fix was switching packaging
+entirely, not routing around it — see §1.2.
+
+### 1.2 The release, and why relx's own script doesn't work as the CLI
+
+`rebar.config` (the real, verified config keys — an earlier draft of this
+document used a fictional `{escriptize, [...]}` tuple):
 
 ```erlang
-{escriptize, [
-  {main_app, symbolic_tools},        % required: the app to run
-  {main_module, symbolic_cli},      % module exporting main/1
-  {name, "symbolic"},               % output file name
-  {embed_release, true},            % default: self-contained (VM included)
-  {env, [{kernel, [
-              {stdout, ...}, ...     % optional VM args
-   ]}]}
+{relx, [
+    {release, {symbolic_tools, "0.1.0"}, [erlog, erl_ts, symbolic_tools]},
+    {dev_mode, true},        % symlinked app dirs, fast local builds —
+    {include_erts, false},   % flip both for an actually portable/shippable release
+    {extended_start_script, true},
+    {overlay, [{copy, "scripts/symbolic", "bin/symbolic"}]}
 ]}.
 ```
 
-Build with `rebar3 escriptize`; the result is a single executable `symbolic` file.
+Build with `ERL_TS_LINKING=dynamic rebar3 release` (see
+`docs/tree-sitter-erlang.md` §6.1 for why that env var, and for the
+one-retry-on-a-fresh-clone submodule race).
 
-## 2. Entry point and subcommands
+**relx's own generated `bin/symbolic_tools` script is not usable as the
+CLI entry point.** It's built for managing a long-running node
+(`start`/`stop`/`console`/`foreground`/`rpc`/`pid`/`ping`), and its two
+subcommands that look like one-shot execution — `eval` and `escript` —
+both call `ping_or_exit` first and then RPC into an **already-running**
+node. There is no built-in "run this and exit" mode for a node that isn't
+started yet, which is exactly what a CLI needs.
 
-`main/1` is a thin dispatcher. There is no subcommand framework in Erlang —
-branch on the first arg and hand off to a per-subcommand module. Each
-subcommand is independently testable and keeps `main/1` trivial.
+The fix: a small wrapper script (`scripts/symbolic`, copied into
+`bin/symbolic` in the release via the `overlay` config above) that runs
+`erl` directly against the release's own `lib/*/ebin` directories:
+
+```sh
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec erl -pa "$DIR"/lib/*/ebin \
+    -noshell \
+    -eval "symbolic_cli:main(init:get_plain_arguments())" \
+    -extra "$@"
+```
+
+This is the same shape the old escript invocation had — `main/1` receives
+argv, `argparse` (§2) dispatches — except it runs against the release's
+real on-disk `ebin`/`priv` directories instead of a zip, so `erl_ts`'s NIF
+loads correctly. `symbolic parse` now works from the built binary
+(`_build/default/rel/symbolic_tools/bin/symbolic`), verified end-to-end
+including composing with `query` (parse → facts file → query).
+
+## 2. Entry point, subcommands, and argument parsing
+
+**Implemented as designed, with one correction.** An earlier version of
+this document assumed a built-in stdlib `getopt` module — that doesn't
+exist (`code:which(getopt)` returns `non_existing` on OTP 29). The real
+answer, found and verified against a real build, is stdlib's
+**[`argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html)**
+(OTP 25+): a declarative command tree — commands are branches, arguments
+are leaves — that owns dispatch, usage/help text, and the
+error-message-then-`halt(1)` path itself. `main/1` becomes a single call:
 
 ```erlang
 -module(symbolic_cli).
 -export([main/1]).
 
--spec main([arg()]) -> no_return() when arg() :: atom() | binary() | string().
 main(Argv) ->
-  {Opts, Rest} = parse_opts(Argv),
-  case Rest of
-    []       -> usage(), halt(2);
-    [Sub|Tail] -> dispatch(Sub, Opts, Tail)
-  end.
+    argparse:run(Argv, cli(), #{progname => "symbolic"}).
 
-dispatch(parse, Opts, Tail)  -> symbolic_parse:run(Opts, Tail),
-dispatch(query, Opts, Tail)  -> symbolic_query:run(Opts, Tail),
-dispatch(_Unknown, _, _)     -> usage(), halt(2).
+cli() ->
+    #{commands => #{"query" => query_cmd(), "parse" => parse_cmd()}}.
+
+query_cmd() ->
+    #{
+        help => "Load a Prolog fact file and prove a goal against it",
+        arguments => [
+            #{name => file, long => "file", required => true,
+              help => "Path to a Prolog fact file (.pl)"},
+            #{name => goal, help => "Goal to prove, e.g. \"foo(X)\""}
+        ],
+        handler => fun(#{file := File, goal := Goal}) ->
+            symbolic_query:run(File, Goal)
+        end
+    }.
 ```
 
-- `parse` — walk a folder, run the tree-sitter extraction
-  ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), emit Prolog facts.
 - `query` — load a facts file and run a Prolog query through
   [`erlog`](https://github.com/rvirding/erlog)
-  ([`erlang-mcp-design.md`](erlang-mcp-design.md)).
-- A future `serve` subcommand would start the MCP server supervisor instead.
+  ([`erlang-mcp-design.md`](erlang-mcp-design.md)). **Implemented.**
+- `parse` — walk a folder, run the tree-sitter extraction
+  ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), emit Prolog facts.
+  **Stubbed** — validates the directory exists, prints "not yet
+  implemented," `halt(1)`; not faked.
+- A future `serve` subcommand would start the MCP server supervisor
+  instead — not yet added.
+
+**Sharp edge, verified by running the built escript**: `argparse`'s
+default prefix is a *single* dash — `long => "file"` produces `-file`, not
+`--file`. This is Erlang's own flag convention (matching `erl -pa`,
+`-name`), not GNU's. There is also no automatic `-help`/`--help` — running
+`symbolic` with no subcommand, or any parse error, prints usage and exits
+non-zero on its own, but an explicit help flag would need to be added as
+its own argument if wanted.
 
 Conventions: exit code `0` on success, non-zero on error; results to
 `stdout`, diagnostics to `stderr`.
 
-## 3. Argument parsing
-
-Start with the **built-in `getopt`** (ships in the OTP `kernel` app — zero
-dependency):
-
-```erlang
-parse_opts(Argv) ->
-  % {Name}        -> boolean flag
-  % {Name, Char}  -> option that requires a value (Char = short form)
-  % {Name, V, Char}-> option with an optional value (V = default)
-  Specs = [{quiet, $q}, {output, $o}, {format, $f}],
-  getopt:parse(Argv, Specs).   % -> {[Opt | {Opt, Value}], Remaining}
-```
-
-If you need GNU-style long options and richer spec handling, use
-**[`jcomellas/getopt`](https://github.com/jcomellas/getopt)** (256★, BSD-3).
-Note the name collision: stdlib `getopt` (built-in) vs. that package — pick one.
-Other community parsers are thin or unmaintained; not recommended.
-
-## 4. Output
+## 3. Output
 
 - **`io:format/1,2`** for the basics. **Keep `stdout` clean** (machine-readable
   results) and send progress/errors to `stderr` (`io:put_chars(stderr, ...)`),
@@ -106,37 +156,42 @@ Other community parsers are thin or unmaintained; not recommended.
   ANSI — a progress bar is `\r` + a redrawn `[####----] n/N` line; tables are
   padded columns. Cheap, and it avoids another dependency.
 
-## 5. Distribution
+## 4. Distribution
 
-The one real gotcha: `escriptize` **embeds a BEAM built for the host
-OS/arch**, so the output binary is **platform-specific**. There is no true
-cross-compile of the VM via `escriptize`. Practical channels:
+The one real gotcha (true of a release the same as it was of `escriptize`):
+with `include_erts` off (current setting, §1.2 — fast for local dev), the
+release runs against the **host's** Erlang install, so it's not portable
+by itself. `include_erts: true` embeds a full ERTS build for the host
+OS/arch instead, making the release self-contained but platform-specific —
+there is no true cross-compile either way. Practical channels once that's
+flipped on for an actual shippable build:
 
 - **Homebrew tap** — `brew install <tap>/symbolic` (or a manual copy to your
   `PATH`) is the natural model. Build one bottle per target (macOS arm64,
   macOS x86_64, Linux).
 - **Nix flake** — reproducible build matrix across platforms.
-- **Install script** — detects OS/arch, downloads the right escript.
+- **Install script** — detects OS/arch, downloads the right release tarball.
 - **Docker** image — for CI and container users.
 
-## 6. Testing
+## 5. Testing
 
 Test the **logic modules directly** (`symbolic_parse`, `symbolic_query`, the extraction
-and resolution code) — `main/1` is a thin wrapper, don't test through it. For
-integration tests of the real binary, invoke the `escriptize` output via
-`os:cmd/1` / `open_port` and assert on stdout, stderr, and the exit code.
-`rebar3 ct` runs the same Common Test suite as the server.
+and resolution code) with EUnit — `main/1` is a thin wrapper, don't test
+through it. For integration tests of the real binary, invoke the release's
+`bin/symbolic` via `os:cmd/1` / `open_port` and assert on stdout, stderr,
+and the exit code. `rebar3 ct` runs the same Common Test suite as the
+server. See [`testing-erlang.md`](testing-erlang.md) for the rebar3
+EUnit/Common Test/PropEr/coverage setup this relies on.
 
-## 7. Recommended stack (summary)
+## 6. Recommended stack (summary)
 
 | Concern | Pick | Source |
 |---|---|---|
-| Build / ship | `rebar3 escriptize` → one binary | rebar3 |
-| Arg parsing | `getopt` (stdlib) → `jcomellas/getopt` | OTP kernel · [github](https://github.com/jcomellas/getopt) |
+| Build / ship | `rebar3 release` + a custom `bin/symbolic` wrapper (§1.2) — **not** `escriptize`, incompatible with NIFs (§1.1) | rebar3 / relx |
+| Arg parsing / subcommands | [`argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html) (stdlib, OTP 25+) | OTP stdlib |
 | ANSI color | `erlang_color` | [github](https://github.com/julianduque/erlang-color) |
-| Subcommands | first-arg dispatch in `main/1` | (idiomatic) |
 | Real CLI to read | `observer_cli` (1.5k★) | [github](https://github.com/zhongwencool/observer_cli) |
-| Distribution | Homebrew tap / Nix flake / install script | per §5 |
+| Distribution | Homebrew tap / Nix flake / install script | per §4 |
 
 ## References
 
@@ -146,6 +201,11 @@ integration tests of the real binary, invoke the `escriptize` output via
   subcommand drives.
 - [`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts) — tree-sitter NIF
   dependency for `parse`.
-- [`getopt`](https://www.erlang.org/doc/man/getopt.html) — stdlib arg parser.
+- [`argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html) —
+  stdlib arg parser and subcommand dispatcher, verified present on OTP 29
+  (`code:which(argparse)`), superseding the nonexistent-`getopt` assumption
+  this document made earlier.
 - [`observer_cli`](https://github.com/zhongwencool/observer_cli) — a real
   Erlang CLI, as a structural reference.
+- [`testing-erlang.md`](testing-erlang.md) — the rebar3 test/coverage
+  tooling §5 uses.

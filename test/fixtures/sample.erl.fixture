@@ -1,0 +1,9 @@
+-module(sample).
+-export([foo/1, other/0]).
+
+foo(X) ->
+    bar(X),
+    baz:qux(X, 1).
+
+other() ->
+    bar(ok).
