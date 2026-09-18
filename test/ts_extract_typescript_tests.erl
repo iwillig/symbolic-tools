@@ -31,15 +31,23 @@ extracts_comment_test() ->
     ?assert(lists:member(
         {comment, Path, 10, 'Capitalizes the first letter of a word.'}, Facts)),
     ?assert(lists:member(
-        {comment, Path, 15, 'standalone comment, not attached to anything'}, Facts)).
+        {comment, Path, 15,
+         'Shouts a word by capitalizing it and adding an exclamation mark.'},
+        Facts)),
+    ?assert(lists:member(
+        {comment, Path, 22, 'standalone comment, not attached to anything'}, Facts)).
 
 extracts_doc_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
     ?assert(lists:member(
-        {doc, capitalize, Path, 11, 'Capitalizes the first letter of a word.'}, Facts)).
+        {doc, capitalize, Path, 11, 'Capitalizes the first letter of a word.'}, Facts)),
+    ?assert(lists:member(
+        {doc, shout, Path, 18,
+         'Shouts a word by capitalizing it and adding an exclamation mark.'},
+        Facts)).
 
 standalone_comment_has_no_doc_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     ?assertEqual(
-        [], [F || {doc, _, _, 15, _} = F <- Facts]).
+        [], [F || {doc, _, _, 22, _} = F <- Facts]).

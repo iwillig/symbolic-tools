@@ -12,4 +12,11 @@ function capitalize(word: string): string {
   return word.toUpperCase();
 }
 
+/**
+ * Shouts a word by capitalizing it and adding an exclamation mark.
+ */
+function shout(word: string): string {
+  return capitalize(word) + "!";
+}
+
 // standalone comment, not attached to anything
