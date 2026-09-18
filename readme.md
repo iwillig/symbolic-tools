@@ -113,6 +113,74 @@ zip archive (a real limitation found while building this, not a bug; see
 own convention, which `symbolic_cli` uses for all argument parsing and
 usage/help text.
 
+## Examples
+
+### Parsing TypeScript
+
+```ts
+// greeter.ts
+function formatName(first: string, last: string): string {
+  return capitalize(first) + " " + capitalize(last);
+}
+
+function greet(name: string): void {
+  const formatted = formatName(name, "user");
+  console.log(formatted);
+  this.logger.info(formatted);
+}
+
+function capitalize(word: string): string {
+  return word.toUpperCase();
+}
+```
+
+```sh
+$ symbolic parse .
+defines(capitalize,'greeter.ts',11).
+defines(formatName,'greeter.ts',1).
+defines(greet,'greeter.ts',5).
+calls(capitalize,member(word,toUpperCase),'greeter.ts',12).
+calls(formatName,local(capitalize),'greeter.ts',2).
+calls(greet,local(formatName),'greeter.ts',6).
+calls(greet,member(console,log),'greeter.ts',7).
+calls(greet,member('this.logger',info),'greeter.ts',8).
+```
+
+A plain call (`bar()`) becomes `local(bar)`; a method call (`obj.method()`)
+becomes `member(obj, method)` — so a query can tell "calls that function
+directly" apart from "calls a method on something."
+
+### Querying the facts
+
+`parse` and `query` are separate steps around an ordinary `.pl` file, so
+save the output and start asking it things:
+
+```sh
+$ symbolic parse . > facts.pl
+
+$ symbolic query -file facts.pl 'calls(X, local(capitalize), _, _)'
+X = formatName                      # the only caller of capitalize
+
+$ symbolic query -file facts.pl 'defines(formatName, File, Line)'
+File = 'greeter.ts'
+Line = 1
+
+$ symbolic query -file facts.pl 'calls(X, member(console, _), _, _)'
+X = greet                           # who calls a method on console
+
+$ symbolic query -file facts.pl 'calls(greet, X, _, Line)'
+Line = 6
+X = local(formatName)               # greet's first call — one solution at a time
+
+$ symbolic query -file facts.pl 'calls(capitalize, member(_, missingMethod), _, _)'
+No.                                 # capitalize never calls a method by that name
+```
+
+Because it's a real fact base, not a grep result, this composes: combine
+facts from multiple `parse` runs into one file, hand-edit it, or ask
+something no text search could answer directly — "what calls a method on
+`console`" is just `calls(X, member(console, _), _, _)`.
+
 ## Install
 
 Symbolic Tools is written in Erlang and built with rebar3.
