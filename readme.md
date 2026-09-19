@@ -431,6 +431,9 @@ release.
 
 ### From source
 
+For development on this repo itself — the Homebrew install above is the
+right choice otherwise, and doesn't need any of this.
+
 Symbolic Tools is written in Erlang and built with rebar3.
 
 ```sh
@@ -442,20 +445,9 @@ One command, one run — the tree-sitter NIF (`symbolic_ts`) is built
 in-tree via the standard rebar3 `pc` plugin (see
 `docs/tree-sitter-erlang.md` §2), not a separately vendored dependency
 with its own build quirks to work around. The built CLI is at
-`_build/default/rel/symbolic_tools/bin/symbolic`.
-
-To run `symbolic` from anywhere on this machine, symlink it onto your
-`PATH` (e.g. `/opt/homebrew/bin` on an Apple Silicon Homebrew install):
-
-```sh
-ln -sf "$(pwd)/_build/default/rel/symbolic_tools/bin/symbolic" /opt/homebrew/bin/symbolic
-```
-
-A plain symlink works because `scripts/symbolic` resolves through
-symlinks itself before locating the release's `lib/` directory — don't
-`cp` the script elsewhere instead, that breaks it. This keeps the actual
-files inside this checkout (don't move or delete the repo afterward) —
-the Homebrew install above doesn't have that limitation.
+`_build/default/rel/symbolic_tools/bin/symbolic` — run it directly from
+there, or from wherever you copy the whole release tree to (`dev_mode`
+is off, so it's relocatable; see `docs/cli-erlang.md` §4).
 
 ## Development
 
