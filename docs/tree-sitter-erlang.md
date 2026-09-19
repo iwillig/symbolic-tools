@@ -162,6 +162,56 @@ per grammar — found empirically the same way every time: parse a tiny
 sample, print `node_string/1`, read the real node names off the tree
 rather than guessing.
 
+### 5.1 Data formats aren't code (done for real: TOML, JSON)
+
+TOML and JSON have no functions or call sites — `defines`/`calls` don't
+apply at all. `src/ts_extract_toml.erl`/`src/ts_extract_json.erl`
+instead emit `config_value(File, Path, Value, Line)` and
+`config_section(File, Path, Line)`, `Path` a dotted key path built by
+real recursive descent (`node_named_child/2`/`node_named_child_count/1`)
+— every prior extractor gets away with flat queries plus a limited
+`node_parent/1` walk; a multi-level dotted path has no query-only
+equivalent. Both formats share these two predicate names on purpose
+("does this key path resolve to a value" is the same question whether
+the file is a `Cargo.toml` or a `package.json`) but share no code —
+TOML's `pair` is positional (no field names at all: first named child
+is the key part, second is the value), JSON's has real `key`/`value`
+fields. Arrays are deliberately captured as one opaque leaf (their own
+raw text), not walked element-by-element, in both — a real, documented
+scope limit, not a missing case; see each module's own header comment
+for what else was confirmed empirically (TOML's `[[array]]`-of-tables
+sharing one `Path` across instances, JSON's `string_content` unwrap
+child, etc.).
+
+One new, real build gotcha found adding TOML specifically: its
+`parser.c`/`scanner.c` `#include <tree_sitter/parser.h>` with **angle
+brackets**, unlike every other vendored grammar's `#include
+"tree_sitter/parser.h"` (quotes). Angle-bracket includes search *only*
+the compiler's `-I` list, in order — with every grammar's directory on
+that same list (needed so each grammar's sources find their own local
+header), TOML's parser.c picked up **Erlang's** `tree_sitter/parser.h`
+instead of its own (whichever `-I` entry happens to come first),
+because a different macro shape between tree-sitter-cli generator
+versions. Quote-includes search the including file's own directory
+first, ignoring `-I` order entirely — the fix was patching TOML's two
+vendored files to use quotes, matching the convention every other
+grammar here already happened to use.
+
+**YAML was investigated and deliberately not added.**
+`ikatyang/tree-sitter-yaml`'s scanner is genuine C++ (`scanner.cc`,
+using `std::vector`/namespaces, itself including a second C++ file,
+`schema.generated.cc`) — not just a `.cc` extension on otherwise-C code.
+Every scanner-using grammar needs its external scanner for correct
+tokenization, so this isn't optional to skip. This project's whole
+build (`c_src/symbolic_ts_nif.c`, `rebar.config`'s `pc`-based
+`port_specs`) is pure C with no C++ toolchain wired in at all — adding
+YAML for real means wiring one in first (real, separate scope), not
+something to force through by fighting the build. Its grammar is also
+structurally the most complex of the three by a wide margin even
+setting that aside: anchors, aliases, and tags are first-class node
+types that can wrap a value in place of a plain scalar, so a "get the
+value" extraction has to handle all three cases, not just leaf scalars.
+
 ## 6. Pitfalls
 
 - **ABI pinning.** The `libtree-sitter` runtime and every grammar must share a
@@ -262,11 +312,16 @@ This is roughly the path actually followed, kept for reference:
 - [`tree-sitter`](https://github.com/tree-sitter/tree-sitter) — runtime + C
   API (`lib/include/tree_sitter/api.h`), vendored at `c_src/tree-sitter/`.
 - [`tree-sitter/tree-sitter-typescript`](https://github.com/tree-sitter/tree-sitter-typescript),
-  [`tree-sitter-grammars/tree-sitter-markdown`](https://github.com/tree-sitter-grammars/tree-sitter-markdown)
-  — the TypeScript and Markdown grammars, vendored at
-  `c_src/grammars/{typescript,markdown}/`. Erlang's own grammar
+  [`tree-sitter-grammars/tree-sitter-markdown`](https://github.com/tree-sitter-grammars/tree-sitter-markdown),
+  [`ikatyang/tree-sitter-toml`](https://github.com/ikatyang/tree-sitter-toml),
+  [`tree-sitter/tree-sitter-json`](https://github.com/tree-sitter/tree-sitter-json)
+  — the TypeScript, Markdown, TOML, and JSON grammars, vendored at
+  `c_src/grammars/{typescript,markdown,toml,json}/`. Erlang's own grammar
   (`c_src/grammars/erlang/`) traces back to
   [`tree-sitter-erlang`](https://github.com/WhatsApp/tree-sitter-erlang).
+  [`ikatyang/tree-sitter-yaml`](https://github.com/ikatyang/tree-sitter-yaml)
+  was investigated but deliberately not vendored — see §5.1's C++
+  blocker.
 - [`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts) — the
   third-party binding this project's own NIF was ported from and now
   replaces; credit for the resource-wrapping shape `symbolic_ts` still

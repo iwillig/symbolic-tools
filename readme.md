@@ -89,7 +89,15 @@ into `example_defines`/`example_calls` facts, so a query can catch a
 doc's code sample showing a function the real codebase doesn't (or no
 longer) have. See `docs/tree-sitter-markdown.md` for what's implemented
 (block structure) versus deferred (`link/4`, which needs a second,
-currently unimplemented grammar pass). More tree-sitter
+currently unimplemented grammar pass). **TOML and JSON** are real too —
+config formats, not code, so instead of `defines`/`calls` they get
+`config_value(File, Path, Value, Line)` and `config_section(File, Path,
+Line)`, `Path` a dotted key path (`'dependencies.serde'`). Both formats
+emit the *same* two predicates, so `config_value(File, name, Value, _)`
+finds a `name` key the same way in a `Cargo.toml` or a `package.json`.
+YAML was investigated and deliberately skipped — its grammar needs a
+real C++ scanner this project's (all-C) build has no toolchain for; see
+`docs/tree-sitter-erlang.md` §5.1. More tree-sitter
 grammars (Python, Go, Rust) can slot in the same way; see
 `docs/tree-sitter-erlang.md` §5 for the actual recipe (not hypothetical —
 what adding TypeScript really took, including two vendored-fork
@@ -334,6 +342,72 @@ the block parse marks as inline content — and the NIF function for that
 tree-sitter NIF (`symbolic_ts`) yet, since nothing has needed it so far.
 See `docs/tree-sitter-markdown.md` §3 for what implementing it for real
 would take.
+
+### Parsing TOML and JSON
+
+```toml
+[package]
+name = "example"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0"
+
+[[bin]]
+name = "cli"
+path = "src/main.rs"
+```
+
+```json
+{
+  "name": "example",
+  "version": "0.1.0",
+  "dependencies": {
+    "left-pad": "^1.3.0"
+  }
+}
+```
+
+```sh
+$ symbolic parse .
+config_section('Cargo.toml',bin,8).
+config_section('Cargo.toml',dependencies,5).
+config_section('Cargo.toml',package,1).
+config_section('package.json',dependencies,4).
+config_value('Cargo.toml','bin.name',cli,9).
+config_value('Cargo.toml','bin.path','src/main.rs',10).
+config_value('Cargo.toml','dependencies.serde','1.0',6).
+config_value('Cargo.toml','package.name',example,2).
+config_value('Cargo.toml','package.version','0.1.0',3).
+config_value('package.json','dependencies.left-pad','^1.3.0',5).
+config_value('package.json',name,example,2).
+config_value('package.json',version,'0.1.0',3).
+```
+
+Both files produce the *same* two predicates — `config_value`/
+`config_section` — so a query doesn't need to know or care which config
+format it's asking about:
+
+```sh
+$ symbolic parse . > facts.pl
+
+$ symbolic query -file facts.pl 'config_value(File, name, Value, _)'
+File = 'package.json'
+Value = example
+
+$ symbolic query -file facts.pl 'config_section(File, dependencies, Line)'
+File = 'Cargo.toml'
+Line = 5
+```
+
+Array *values* (a JSON `["a", "b"]`, a TOML `[1, 2, 3]`) are captured as
+one opaque leaf — the array's whole raw source text becomes its
+`Value`, not walked element-by-element. A real, deliberate scope limit
+for this first pass, not a missing case — see
+`docs/tree-sitter-erlang.md` §5.1. TOML's `[[bin]]` above is a different
+thing entirely (an array-*of-tables* header, not an array value) and is
+walked normally, as the `config_section`/`config_value` facts above
+show.
 
 ### Catching stale doc examples
 
