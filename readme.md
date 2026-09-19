@@ -592,7 +592,10 @@ cross-references. Grouped by concern:
   `tree-sitter-markdown.md` (docs).
 - **Usage** — `agent-examples.md` (worked, verified examples of an LLM
   agent using the fact base over MCP — orientation, impact analysis, a
-  risk audit, a doc-coverage check, and catching documentation drift).
+  risk audit, a doc-coverage check, and catching documentation drift),
+  `lint-queries.md` (a reusable rule library — duplication, fan-in/
+  fan-out, dead-code candidates — verified against this repo's own
+  `src/`, including a real bug it surfaced in fact-printing itself).
 - **Natural language** — `nlp-tooling.md` (survey of what's available on
   the BEAM), `curt-approach.md` (parsing NL into Prolog facts),
   `lorp-approach.md`, `grpo-prolog-tool.md` (the research this project is
