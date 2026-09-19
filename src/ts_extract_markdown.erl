@@ -1,13 +1,12 @@
-%%% Extract Prolog facts from one Markdown file via tree-sitter (erl_ts).
-%%% See docs/tree-sitter-markdown.md.
+%%% Extract Prolog facts from one Markdown file via tree-sitter
+%%% (symbolic_ts). See docs/tree-sitter-markdown.md.
 %%%
 %%% Block grammar only — no `link/4` yet. Markdown links only exist as
 %%% structured nodes in tree-sitter-markdown's separate *inline* grammar,
 %%% which needs a second parse restricted to the byte ranges the block
-%%% parse marks as inline content (`ts_parser_set_included_ranges`).
-%%% Confirmed by reading `_checkouts/erl_ts/c_src/erl_ts_nif.c` directly:
-%%% `parser_set_included_ranges_nif` is an unimplemented stub (`/* TODO:
-%%% */ return atom_undefined;`), so that split isn't available yet. See
+%%% parse marks as inline content (`ts_parser_set_included_ranges`) — a
+%%% real C API function `symbolic_ts` (c_src/symbolic_ts_nif.c) simply
+%%% doesn't expose yet, since nothing has needed it so far. See
 %%% docs/tree-sitter-markdown.md for the deferred plan.
 %%%
 %%%   heading(File, Level, Text, Line)
@@ -78,11 +77,11 @@
 file(Path) ->
     {ok, Bin} = file:read_file(Path),
     Src = binary_to_list(Bin),
-    {ok, Parser} = erl_ts:parser_new(),
-    {ok, Lang} = erl_ts:tree_sitter_markdown(),
-    true = erl_ts:parser_set_language(Parser, Lang),
-    Tree = erl_ts:parser_parse_string(Parser, Src),
-    Root = erl_ts:tree_root_node(Tree),
+    {ok, Parser} = symbolic_ts:parser_new(),
+    {ok, Lang} = symbolic_ts:tree_sitter_markdown(),
+    true = symbolic_ts:parser_set_language(Parser, Lang),
+    Tree = symbolic_ts:parser_parse_string(Parser, Src),
+    Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =
         headings(Lang, Root, Src, PathAtom) ++
@@ -92,16 +91,16 @@ file(Path) ->
     lists:usort(Facts).
 
 headings(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = erl_ts:query_new(Lang, ?HEADING_QUERY),
-    Caps = erl_ts:query_capture(Root, Q),
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?HEADING_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
     Nodes = lists:usort([N || {"h", N} <- Caps]),
     lists:usort([heading_fact(N, Src, PathAtom) || N <- Nodes]).
 
 heading_fact(Node, Src, PathAtom) ->
-    Marker = erl_ts:node_named_child(Node, 0),
-    Level = heading_level(erl_ts:node_type(Marker)),
-    Content = erl_ts:node_child_by_field_name(Node, "heading_content"),
-    Text = to_atom(string:trim(erl_ts:node_text(Content, Src))),
+    Marker = symbolic_ts:node_named_child(Node, 0),
+    Level = heading_level(symbolic_ts:node_type(Marker)),
+    Content = symbolic_ts:node_child_by_field_name(Node, "heading_content"),
+    Text = to_atom(string:trim(symbolic_ts:node_text(Content, Src))),
     {heading, PathAtom, Level, Text, line(Node)}.
 
 heading_level("atx_h1_marker") -> 1;
@@ -112,8 +111,8 @@ heading_level("atx_h5_marker") -> 5;
 heading_level("atx_h6_marker") -> 6.
 
 code_blocks(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = erl_ts:query_new(Lang, ?CODE_BLOCK_QUERY),
-    Caps = erl_ts:query_capture(Root, Q),
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?CODE_BLOCK_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
     Nodes = lists:usort([N || {"c", N} <- Caps]),
     lists:usort([code_block_fact(N, Src, PathAtom) || N <- Nodes]).
 
@@ -127,13 +126,13 @@ code_lang(Node, Src) ->
         InfoString ->
             case find_named_child_by_type(InfoString, "language") of
                 false -> none;
-                LangNode -> to_atom(erl_ts:node_text(LangNode, Src))
+                LangNode -> to_atom(symbolic_ts:node_text(LangNode, Src))
             end
     end.
 
 example_facts(Lang, Root, Src, Path) ->
-    {Q, _, _} = erl_ts:query_new(Lang, ?CODE_BLOCK_QUERY),
-    Caps = erl_ts:query_capture(Root, Q),
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?CODE_BLOCK_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
     Nodes = lists:usort([N || {"c", N} <- Caps]),
     lists:usort(lists:flatmap(fun(N) -> example_facts_for_block(N, Src, Path) end, Nodes)).
 
@@ -146,8 +145,8 @@ example_facts_for_block(Node, Src, Path) ->
                 false ->
                     [];
                 ContentNode ->
-                    Snippet = erl_ts:node_text(ContentNode, Src),
-                    Offset = maps:get(row, erl_ts:node_start_point(ContentNode)),
+                    Snippet = symbolic_ts:node_text(ContentNode, Src),
+                    Offset = maps:get(row, symbolic_ts:node_start_point(ContentNode)),
                     RawFacts = ExtractorFun(Path, Snippet),
                     lists:filtermap(
                         fun(F) -> example_fact(F, Offset) end, RawFacts)
@@ -167,13 +166,13 @@ example_fact(_Other, _Offset) ->
     false.
 
 paragraphs(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = erl_ts:query_new(Lang, ?PARAGRAPH_QUERY),
-    Caps = erl_ts:query_capture(Root, Q),
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?PARAGRAPH_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
     Nodes = lists:usort([N || {"p", N} <- Caps]),
     lists:usort([paragraph_fact(N, Src, PathAtom) || N <- Nodes]).
 
 paragraph_fact(Node, Src, PathAtom) ->
-    Text = to_atom(clean_text(erl_ts:node_text(Node, Src))),
+    Text = to_atom(clean_text(symbolic_ts:node_text(Node, Src))),
     {paragraph, PathAtom, Text, line(Node)}.
 
 %% Collapse a soft-wrapped paragraph's embedded newlines into a single
@@ -186,19 +185,19 @@ clean_text(Text) ->
     lists:flatten(lists:join(" ", NonEmpty)).
 
 find_named_child_by_type(Node, Type) ->
-    find_named_child_by_type(Node, Type, 0, erl_ts:node_named_child_count(Node)).
+    find_named_child_by_type(Node, Type, 0, symbolic_ts:node_named_child_count(Node)).
 
 find_named_child_by_type(_Node, _Type, I, Count) when I >= Count ->
     false;
 find_named_child_by_type(Node, Type, I, Count) ->
-    Child = erl_ts:node_named_child(Node, I),
-    case erl_ts:node_type(Child) of
+    Child = symbolic_ts:node_named_child(Node, I),
+    case symbolic_ts:node_type(Child) of
         Type -> Child;
         _ -> find_named_child_by_type(Node, Type, I + 1, Count)
     end.
 
 line(Node) ->
-    maps:get(row, erl_ts:node_start_point(Node)) + 1.
+    maps:get(row, symbolic_ts:node_start_point(Node)) + 1.
 
 %% Erlang atoms are capped at 255 bytes — confirmed by hitting it for
 %% real: `symbolic parse` on this project's own readme.md crashed with

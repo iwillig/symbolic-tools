@@ -1,5 +1,5 @@
 %%% Extract Prolog facts from one TypeScript source file via tree-sitter
-%%% (erl_ts). See docs/tree-sitter-erlang.md §5.
+%%% (symbolic_ts). See docs/tree-sitter-erlang.md §5.
 %%%
 %%% Same shape and same caveats as ts_extract_erlang: facts only,
 %%% caller attribution via node_parent/1 walk-up rather than a combined
@@ -48,11 +48,11 @@ file(Path) ->
 %% `Path` set to the enclosing Markdown file (not a real .ts file).
 -spec text(file:filename(), string()) -> [tuple()].
 text(Path, Src) ->
-    {ok, Parser} = erl_ts:parser_new(),
-    {ok, Lang} = erl_ts:tree_sitter_typescript(),
-    true = erl_ts:parser_set_language(Parser, Lang),
-    Tree = erl_ts:parser_parse_string(Parser, Src),
-    Root = erl_ts:tree_root_node(Tree),
+    {ok, Parser} = symbolic_ts:parser_new(),
+    {ok, Lang} = symbolic_ts:tree_sitter_typescript(),
+    true = symbolic_ts:parser_set_language(Parser, Lang),
+    Tree = symbolic_ts:parser_parse_string(Parser, Src),
+    Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =
         defines(Lang, Root, Src, PathAtom) ++
@@ -63,18 +63,18 @@ text(Path, Src) ->
     lists:usort(Facts).
 
 defines(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = erl_ts:query_new(Lang, ?DEF_QUERY),
-    Caps = erl_ts:query_capture(Root, Q),
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?DEF_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
     lists:usort([
-        {defines, to_atom(erl_ts:node_text(N, Src)), PathAtom, line(N)}
+        {defines, to_atom(symbolic_ts:node_text(N, Src)), PathAtom, line(N)}
      || {"fun_name", N} <- Caps
     ]).
 
 local_calls(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = erl_ts:query_new(Lang, ?LOCAL_CALL_QUERY),
-    Caps = erl_ts:query_capture(Root, Q),
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?LOCAL_CALL_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
     lists:usort([
-        {calls, caller_name(N, Src), {local, to_atom(erl_ts:node_text(N, Src))},
+        {calls, caller_name(N, Src), {local, to_atom(symbolic_ts:node_text(N, Src))},
          PathAtom, line(N)}
      || {"callee", N} <- Caps
     ]).
@@ -85,23 +85,23 @@ local_calls(Lang, Root, Src, PathAtom) ->
 %% than trying to zip the flat capture list (unreliable given the
 %% per-capture duplication quirk noted above).
 member_calls(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = erl_ts:query_new(Lang, ?MEMBER_CALL_QUERY),
-    Caps = erl_ts:query_capture(Root, Q),
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?MEMBER_CALL_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
     PropNodes = lists:usort([N || {"prop", N} <- Caps]),
     lists:usort([member_call_fact(N, Src, PathAtom) || N <- PropNodes]).
 
 member_call_fact(PropNode, Src, PathAtom) ->
-    MemberNode = erl_ts:node_parent(PropNode),
-    ObjNode = erl_ts:node_child_by_field_name(MemberNode, "object"),
-    CallNode = erl_ts:node_parent(MemberNode),
+    MemberNode = symbolic_ts:node_parent(PropNode),
+    ObjNode = symbolic_ts:node_child_by_field_name(MemberNode, "object"),
+    CallNode = symbolic_ts:node_parent(MemberNode),
     {calls, caller_name(CallNode, Src),
-     {member, to_atom(erl_ts:node_text(ObjNode, Src)),
-      to_atom(erl_ts:node_text(PropNode, Src))},
+     {member, to_atom(symbolic_ts:node_text(ObjNode, Src)),
+      to_atom(symbolic_ts:node_text(PropNode, Src))},
      PathAtom, line(PropNode)}.
 
 comments(Lang, Root, Src, PathAtom) ->
     lists:usort([
-        {comment, PathAtom, line(N), clean_join([erl_ts:node_text(N, Src)])}
+        {comment, PathAtom, line(N), clean_join([symbolic_ts:node_text(N, Src)])}
      || N <- comment_nodes(Lang, Root)
     ]).
 
@@ -110,25 +110,25 @@ docs(Lang, Root, Src, PathAtom) ->
     lists:filtermap(fun(Start) -> doc_fact(Start, Src, PathAtom) end, RunStarts).
 
 comment_nodes(Lang, Root) ->
-    {Q, _, _} = erl_ts:query_new(Lang, ?COMMENT_QUERY),
-    Caps = erl_ts:query_capture(Root, Q),
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?COMMENT_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
     lists:usort([N || {"c", N} <- Caps]).
 
 is_run_start(Node) ->
-    case erl_ts:node_prev_sibling(Node) of
+    case symbolic_ts:node_prev_sibling(Node) of
         undefined -> true;
-        Prev -> erl_ts:node_type(Prev) =/= "comment"
+        Prev -> symbolic_ts:node_type(Prev) =/= "comment"
     end.
 
 %% Walk forward from the first comment in a run, collecting text, until
 %% hitting a non-comment sibling (the run's Target — undefined if the
 %% run is the last thing in the file).
 collect_run(Node, Src, Acc) ->
-    Acc1 = [erl_ts:node_text(Node, Src) | Acc],
-    case erl_ts:node_next_sibling(Node) of
+    Acc1 = [symbolic_ts:node_text(Node, Src) | Acc],
+    case symbolic_ts:node_next_sibling(Node) of
         undefined -> {lists:reverse(Acc1), undefined};
         Next ->
-            case erl_ts:node_type(Next) of
+            case symbolic_ts:node_type(Next) of
                 "comment" -> collect_run(Next, Src, Acc1);
                 _ -> {lists:reverse(Acc1), Next}
             end
@@ -142,10 +142,10 @@ doc_fact(StartNode, Src, PathAtom) ->
     end.
 
 definition_name(Node, Src) ->
-    case erl_ts:node_type(Node) of
+    case symbolic_ts:node_type(Node) of
         "function_declaration" ->
-            NameNode = erl_ts:node_child_by_field_name(Node, "name"),
-            to_atom(erl_ts:node_text(NameNode, Src));
+            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
+            to_atom(symbolic_ts:node_text(NameNode, Src));
         _ ->
             false
     end.
@@ -153,20 +153,20 @@ definition_name(Node, Src) ->
 %% Walk up to the nearest enclosing function_declaration to attribute a
 %% call site to the function it appears in.
 caller_name(Node, Src) ->
-    case erl_ts:node_type(Node) of
+    case symbolic_ts:node_type(Node) of
         "function_declaration" ->
-            NameNode = erl_ts:node_child_by_field_name(Node, "name"),
-            to_atom(erl_ts:node_text(NameNode, Src));
+            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
+            to_atom(symbolic_ts:node_text(NameNode, Src));
         _ ->
-            Parent = erl_ts:node_parent(Node),
-            case erl_ts:node_is_null(Parent) of
+            Parent = symbolic_ts:node_parent(Node),
+            case symbolic_ts:node_is_null(Parent) of
                 true -> undefined;
                 false -> caller_name(Parent, Src)
             end
     end.
 
 line(Node) ->
-    maps:get(row, erl_ts:node_start_point(Node)) + 1.
+    maps:get(row, symbolic_ts:node_start_point(Node)) + 1.
 
 %% Erlang atoms are capped at 255 bytes — confirmed by hitting it for
 %% real: `symbolic parse` crashed with `system_limit` on a long

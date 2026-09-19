@@ -12,7 +12,7 @@ modules with a thin `main/1` entry point, parse args with stdlib `argparse`
 (§2), and ship via **`rebar3 release`**, run through a small custom wrapper
 script (§1.2) — **not `rebar3 escriptize`**, which was the original plan
 here but turned out to be fundamentally incompatible with NIFs (like
-`erl_ts`, [`tree-sitter-erlang.md`](tree-sitter-erlang.md)) once one
+`symbolic_ts`, [`tree-sitter-erlang.md`](tree-sitter-erlang.md)) once one
 entered the dependency tree. See §1.1.
 
 ## 1. Packaging
@@ -22,8 +22,8 @@ Three models exist for running Erlang as a CLI:
 | Model | What it is | Use when |
 |---|---|---|
 | **`escript`** (built-in) | a single `.erl` file run by the `escript` runtime; shebang `#!/usr/bin/env escript` | quick throwaway scripts |
-| **`rebar3 escriptize`** | bundles the OTP app **+ all deps' `.beam`/`.app` files** into one self-contained executable | fine as long as nothing in the dependency tree is a NIF (§1.1) — no longer used here once `erl_ts` was added |
-| **`rebar3 release`** (or `relx`) | full OTP release: `sys.config`, start scripts, `releases/` tree, `priv/` kept as real files on disk | ✅ **what `symbolic` actually ships as**, specifically because `priv/` staying real files is what lets `erl_ts`'s NIF load at all |
+| **`rebar3 escriptize`** | bundles the OTP app **+ all deps' `.beam`/`.app` files** into one self-contained executable | fine as long as nothing in the dependency tree is a NIF (§1.1) — no longer used here once tree-sitter extraction (a NIF) was added |
+| **`rebar3 release`** (or `relx`) | full OTP release: `sys.config`, start scripts, `releases/` tree, `priv/` kept as real files on disk | ✅ **what `symbolic` actually ships as**, specifically because `priv/` staying real files is what lets `symbolic_ts`'s NIF load at all |
 
 Avoid escript **"script mode"** for real logic — it is interpreted (slow) and
 disallows compile-only features.
@@ -34,13 +34,14 @@ Found while implementing `symbolic parse`'s tree-sitter extraction, and the
 reason this project moved off `escriptize`: `escript_incl_apps` only
 bundles a dependency's `.beam`/`.app` files into the escript's zip archive
 — never `priv/` — and `erlang:load_nif/2` cannot `dlopen` a shared library
-from inside a zip archive at all. Embedding `erl_ts` in `escript_incl_apps`
-produced a module that *looks* loaded (`code:which/1` finds it) but
-crashes with `undefined function` the moment any of its NIF functions are
-called — worse than not embedding it, since the failure is silent until
-the crash. `symbolic_parse` still guards this defensively with
-`code:ensure_loaded(erl_ts)`, but the real fix was switching packaging
-entirely, not routing around it — see §1.2.
+from inside a zip archive at all. Embedding the tree-sitter NIF app in
+`escript_incl_apps` produced a module that *looks* loaded
+(`code:which/1` finds it) but crashes with `undefined function` the
+moment any of its NIF functions are called — worse than not embedding
+it, since the failure is silent until the crash. `symbolic_parse` still
+guards this defensively with `code:ensure_loaded(symbolic_ts)`, but the
+real fix was switching packaging entirely, not routing around it — see
+§1.2.
 
 ### 1.2 The release, and why relx's own script doesn't work as the CLI
 
@@ -49,7 +50,7 @@ document used a fictional `{escriptize, [...]}` tuple):
 
 ```erlang
 {relx, [
-    {release, {symbolic_tools, "0.1.0"}, [erlog, erl_ts, symbolic_tools]},
+    {release, {symbolic_tools, "0.1.0"}, [sasl, erlog, erlmcp, symbolic_tools]},
     {dev_mode, true},        % symlinked app dirs, fast local builds —
     {include_erts, false},   % flip both for an actually portable/shippable release
     {extended_start_script, true},
@@ -57,9 +58,11 @@ document used a fictional `{escriptize, [...]}` tuple):
 ]}.
 ```
 
-Build with `ERL_TS_LINKING=dynamic rebar3 release` (see
-`docs/tree-sitter-erlang.md` §6.1 for why that env var, and for the
-one-retry-on-a-fresh-clone submodule race).
+`symbolic_ts` (the tree-sitter NIF) isn't listed separately — it lives
+inside the `symbolic_tools` app itself, not as its own dependency; see
+`docs/tree-sitter-erlang.md` §2. Build with plain `rebar3 release` — no
+special env var needed, since `symbolic_ts` builds through the standard
+rebar3 `pc` plugin rather than a hand-rolled Makefile.
 
 **relx's own generated `bin/symbolic_tools` script is not usable as the
 CLI entry point.** It's built for managing a long-running node
@@ -83,8 +86,8 @@ exec erl -pa "$DIR"/lib/*/ebin \
 
 This is the same shape the old escript invocation had — `main/1` receives
 argv, `argparse` (§2) dispatches — except it runs against the release's
-real on-disk `ebin`/`priv` directories instead of a zip, so `erl_ts`'s NIF
-loads correctly. `symbolic parse` now works from the built binary
+real on-disk `ebin`/`priv` directories instead of a zip, so `symbolic_ts`'s
+NIF loads correctly. `symbolic parse` now works from the built binary
 (`_build/default/rel/symbolic_tools/bin/symbolic`), verified end-to-end
 including composing with `query` (parse → facts file → query).
 
@@ -199,8 +202,8 @@ EUnit/Common Test/PropEr/coverage setup this relies on.
   shares core modules with.
 - [`tree-sitter-erlang.md`](tree-sitter-erlang.md) — the extraction the `parse`
   subcommand drives.
-- [`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts) — tree-sitter NIF
-  dependency for `parse`.
+- [`tree-sitter-erlang.md`](tree-sitter-erlang.md) §2 — `symbolic_ts`, the
+  project's own tree-sitter NIF that `parse` runs on.
 - [`argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html) —
   stdlib arg parser and subcommand dispatcher, verified present on OTP 29
   (`code:which(argparse)`), superseding the nonexistent-`getopt` assumption

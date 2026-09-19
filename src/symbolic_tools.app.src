@@ -6,7 +6,6 @@
         kernel,
         stdlib,
         erlog,
-        erl_ts,
         erlmcp
     ]},
     {env, []},

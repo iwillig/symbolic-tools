@@ -12,13 +12,16 @@ re-extracted from a fenced code block's own contents — see §4) are real
 today via `symbolic parse`, using only the **block** grammar — see
 `src/ts_extract_markdown.erl`. `link/4` (§4) is **not implemented yet**;
 it needs the separate *inline* grammar plus a NIF function
-(`ts_parser_set_included_ranges`) that turned out to be an unimplemented
-stub in the vendored `erl_ts` fork — see §3's "resolved" open question.
+(`ts_parser_set_included_ranges`) that `symbolic_ts` — the project's own
+small NIF, `c_src/symbolic_ts_nif.c`, see
+[`tree-sitter-erlang.md`](tree-sitter-erlang.md) §2 — doesn't expose at
+all yet, since nothing has needed it so far.
 
 **Recommendation up front:** use
 [`tree-sitter-grammars/tree-sitter-markdown`](https://github.com/tree-sitter-grammars/tree-sitter-markdown)
-through the same `erl_ts` NIF as the code grammars ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)
-§2). It is **two grammars, not one** (block + inline) and ships with an
+through the same `symbolic_ts` NIF as the code grammars
+([`tree-sitter-erlang.md`](tree-sitter-erlang.md) §2). It is **two
+grammars, not one** (block + inline) and ships with an
 explicit correctness caveat from its own maintainers — scope extraction to
 structural facts (headings, links, code-block languages), not anything
 requiring exact CommonMark fidelity. The motivating use case is dogfooding:
@@ -63,56 +66,43 @@ pattern as most language grammars). Follows CommonMark plus GFM extensions
   (older, largely superseded), `mattmassicotte/tree-sitter-markdown-2` (a
   newer independent rewrite, less adopted).
 
-## 3. Integration with `erl_ts`
+## 3. Integration with `symbolic_ts`
 
-Same pattern as adding any language to `erl_ts`
+Same pattern as adding any language
 ([`tree-sitter-erlang.md`](tree-sitter-erlang.md) §5) — except this is
 **two grammars for one file**, not one. **The block half is done**;
 the inline half (needed only for `link/4`) is not:
 
 1. ~~Vendor both grammar submodules~~ — done for the **block** grammar
-   only, vendored at
-   `_checkouts/erl_ts/tree-sitter-langs/tree-sitter-markdown/src/`
-   (`parser.c`, `scanner.c`, its own `tree_sitter/{alloc.h,array.h,
-   parser.h}` — same trimmed shape as the erlang/typescript grammars,
-   skipping `grammar.json`/`node-types.json`/bindings/tests). The
-   **inline** grammar (`tree-sitter-markdown-inline`) is not vendored.
-2. `tree_sitter_markdown/0` is added, following the existing
-   `tree_sitter_typescript/0` example exactly (extern declaration, a
-   `tree_sitter_markdown_nif` function, registered in `nif_funcs[]`, plus
-   the three-places `erl_ts.erl` edit — export, `-nifs`, stub function).
-   `tree_sitter_markdown_inline/0` does not exist yet.
+   only, vendored at `c_src/grammars/markdown/` (`parser.c`, `scanner.c`,
+   its own `tree_sitter/{alloc.h,array.h,parser.h}` — same trimmed shape
+   as the erlang/typescript grammars, skipping
+   `grammar.json`/`node-types.json`/bindings/tests). The **inline**
+   grammar (`tree-sitter-markdown-inline`) is not vendored.
+2. `tree_sitter_markdown/0` is added, following
+   [`tree-sitter-erlang.md`](tree-sitter-erlang.md) §5's recipe exactly
+   (extern declaration, a `nif_tree_sitter_markdown` function, registered
+   in `nif_funcs[]`, plus the `src/symbolic_ts.erl` export + stub
+   addition). `tree_sitter_markdown_inline/0` does not exist.
 3. The two-parse-with-included-ranges step is **not implemented** — see
-   the resolved open question below.
+   the open question below.
 
-**Open question — resolved by reading the code, not by guessing.**
-`erl_ts` claims to wrap "essentially the whole tree-sitter C API," but
-`ts_parser_set_included_ranges` does not actually work: reading
-`_checkouts/erl_ts/c_src/erl_ts_nif.c` directly shows
-`parser_set_included_ranges_nif` is an unimplemented stub —
-
-```c
-ERL_TS_FUNCTION(parser_set_included_ranges_nif) {
-  /* TODO: */
-  /* bool ts_parser_set_included_ranges( */
-  /* TSParser *self, */
-  /* const TSRange *ranges, */
-  /* uint32_t count */
-  return atom_undefined;
-}
-```
-
-— it never calls the real C function at all. Implementing it looks
-tractable when this is picked back up: `map_to_tsrange/3` already exists
-in the same file (used by `parser_included_ranges_nif`'s inverse
-direction) and does the per-range Erlang-map-to-`TSRange` conversion, so
-the stub mostly needs a loop building a `TSRange[]` from an Erlang list
-via that existing helper, then the real `ts_parser_set_included_ranges`
-call. That, plus vendoring the inline grammar and its own
-`tree_sitter_markdown_inline/0` NIF entry (steps 1-2 above), is what
-`link/4` needs — deliberately not attempted in this pass, since
-`heading`/`code_block` deliver real value from the block grammar alone
-with none of that risk.
+**Open question, still open.** `ts_parser_set_included_ranges` — the real
+tree-sitter C API function needed to scope a second, inline-grammar parse
+to the byte ranges the block parse marks as inline content — has no NIF
+wrapper in `c_src/symbolic_ts_nif.c` at all yet; `symbolic_ts` was built
+to cover exactly what's called today (see
+[`tree-sitter-erlang.md`](tree-sitter-erlang.md) §2), and nothing has
+called this one so far. Adding it looks tractable when this is picked
+back up: it needs a small helper converting an Erlang list of
+`#{start_point => ..., end_point => ..., start_byte => ...,
+end_byte => ...}` maps into a `TSRange[]` (the reverse of what
+`tspoint_to_map/2` in `symbolic_ts_nif.c` already does for output), then
+one call to the real `ts_parser_set_included_ranges`. That, plus
+vendoring the inline grammar and its own `tree_sitter_markdown_inline/0`
+NIF entry (steps 1-2 above), is what `link/4` needs — deliberately not
+attempted in this pass, since `heading`/`code_block` deliver real value
+from the block grammar alone with none of that risk.
 
 ## 4. What facts to extract
 
@@ -204,8 +194,8 @@ built, per §3/§4.
    `erl_ts` once vendored): `atx_heading`/`fenced_code_block` node shapes
    confirmed empirically, not guessed, before `src/ts_extract_markdown.erl`
    was written.
-2. ~~Bring the grammar into `erl_ts`~~ — done for the block grammar; see
-   §3 for exactly what's vendored and what isn't.
+2. ~~Bring the grammar into `symbolic_ts`~~ — done for the block grammar;
+   see §3 for exactly what's vendored and what isn't.
 3. ~~Wire it into the same fact-emission path the code grammars use~~ —
    done: `src/ts_extract.erl` dispatches `.md` to
    `ts_extract_markdown:file/1`, and `src/symbolic_parse.erl`'s folder
@@ -216,8 +206,8 @@ built, per §3/§4.
 
 ## References
 
-- [`tree-sitter-erlang.md`](tree-sitter-erlang.md) — the `erl_ts` NIF and
-  parser-pool design this plugs into; §5 is the general "adding a language"
+- [`tree-sitter-erlang.md`](tree-sitter-erlang.md) — the `symbolic_ts`
+  NIF design this plugs into; §5 is the general "adding a language"
   recipe this document specializes for Markdown's two-grammar split.
 - [`erlang-mcp-design.md`](erlang-mcp-design.md) §5 — "compute closure in
   Erlang, not Prolog," the same split applied to `resolves/1` in §4.

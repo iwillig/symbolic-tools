@@ -49,7 +49,7 @@ approach extends to parsing natural language itself into facts.
 ## How it works
 
 ```
-source files ──tree-sitter (erl_ts NIF)──> facts (defs, calls, imports)
+source files ──tree-sitter (symbolic_ts NIF)──> facts (defs, calls, imports)
                                                 │
                                           consult into a
                                           Prolog session (erlog)
@@ -64,7 +64,8 @@ source files ──tree-sitter (erl_ts NIF)──> facts (defs, calls, imports)
   pure Erlang, running **in-process on the BEAM**. There's no separate
   Prolog compiler or subprocess; session isolation comes from Erlang
   process isolation, not an OS boundary. See `docs/erlang-mcp-design.md`.
-- **tree-sitter**, via a NIF (`erl_ts`), extracts facts from source files
+- **tree-sitter**, via a NIF (`symbolic_ts`, this project's own — see
+  `docs/tree-sitter-erlang.md` §2), extracts facts from source files
   in-process as well — no subprocess per parse. See
   `docs/tree-sitter-erlang.md`.
 - Extracted facts are cached as a content-hashed, consultable `.pl` file
@@ -112,7 +113,7 @@ symbolic serve                                    # start the MCP server (stdio 
 
 All three work end-to-end, run via a `rebar3 release` (see Install)
 rather than `rebar3 escriptize` — `parse` and `serve` both need real
-files on disk at runtime (`parse` for `erl_ts`'s NIF, `serve` for
+files on disk at runtime (`parse` for `symbolic_ts`'s NIF, `serve` for
 `erlmcp`'s supervision tree), and neither works from inside an escript's
 zip archive (a real limitation found while building this, not a bug; see
 `docs/cli-erlang.md` §1/§1.1). Flags use a single dash (`-file`, not
@@ -326,11 +327,11 @@ fenced blocks have no declared language" without opening an editor. It
 deliberately does not extract links yet: a Markdown link is only a
 structured node in a *second*, separate inline grammar, requiring a
 re-parse scoped to the byte ranges
-the block parse marks as inline content — and the `erl_ts` NIF function
-for that (`ts_parser_set_included_ranges`) turned out, on reading its C
-source, to be an unimplemented stub rather than the working function its
-own name promises. See `docs/tree-sitter-markdown.md` §3 for what
-implementing it for real would take.
+the block parse marks as inline content — and the NIF function for that
+(`ts_parser_set_included_ranges`) isn't wrapped by this project's own
+tree-sitter NIF (`symbolic_ts`) yet, since nothing has needed it so far.
+See `docs/tree-sitter-markdown.md` §3 for what implementing it for real
+would take.
 
 ### Catching stale doc examples
 
@@ -406,15 +407,13 @@ Symbolic Tools is written in Erlang and built with rebar3.
 
 ```sh
 brew bundle
-ERL_TS_LINKING=dynamic rebar3 release
+rebar3 release
 ```
 
-`ERL_TS_LINKING=dynamic` is required on macOS — `erl_ts`'s default static
-link uses linker flags Apple's `ld` rejects (see `docs/tree-sitter-erlang.md`
-§6.1). One command, one run — `erl_ts` is a vendored local fork
-(`_checkouts/erl_ts`, §6.2), not a git dependency re-fetched on every
-clean build, so the submodule-init race that used to require running this
-twice no longer applies. The built CLI is at
+One command, one run — the tree-sitter NIF (`symbolic_ts`) is built
+in-tree via the standard rebar3 `pc` plugin (see
+`docs/tree-sitter-erlang.md` §2), not a separately vendored dependency
+with its own build quirks to work around. The built CLI is at
 `_build/default/rel/symbolic_tools/bin/symbolic`.
 
 To run `symbolic` from anywhere on this machine, symlink it onto your
@@ -438,7 +437,9 @@ Dependencies:
 - [rebar3](https://rebar3.org/) — build tool
 - [erlog](https://github.com/rvirding/erlog) — the Prolog engine (runs in-process on the BEAM)
 - [erlmcp](https://github.com/erlsci/erlmcp) — MCP server framework
-- [erl_ts](https://github.com/cfclavijo/erl_ts) — tree-sitter, via a NIF
+- [pc](https://hex.pm/packages/pc) — rebar3 port-compiler plugin, builds
+  `symbolic_ts` (this project's own tree-sitter NIF — see
+  `docs/tree-sitter-erlang.md`)
 
 ## Documentation
 
@@ -448,7 +449,7 @@ cross-references. Grouped by concern:
 
 - **Architecture** — `erlang-mcp-design.md` (MCP server, Prolog sessions),
   `cli-erlang.md` (the CLI), `prolog-store.md` (fact storage/caching).
-- **Extraction** — `tree-sitter-erlang.md` (code, via `erl_ts`),
+- **Extraction** — `tree-sitter-erlang.md` (code, via `symbolic_ts`),
   `tree-sitter-markdown.md` (docs).
 - **Natural language** — `nlp-tooling.md` (survey of what's available on
   the BEAM), `curt-approach.md` (parsing NL into Prolog facts),

@@ -13,8 +13,8 @@ run(Dir) ->
     end.
 
 run_checked(Dir) ->
-    case code:ensure_loaded(erl_ts) of
-        {module, erl_ts} ->
+    case code:ensure_loaded(symbolic_ts) of
+        {module, symbolic_ts} ->
             Files = filelib:wildcard(filename:join(Dir, "**/*.erl")) ++
                     filelib:wildcard(filename:join(Dir, "**/*.ts")) ++
                     filelib:wildcard(filename:join(Dir, "**/*.md")),
@@ -23,14 +23,15 @@ run_checked(Dir) ->
             halt(0);
         {error, _} ->
             %% Known limitation, not a bug in this code: the escript build
-            %% doesn't (can't) embed erl_ts's NIF .so — see rebar.config's
-            %% escript_incl_apps comment and docs/cli-erlang.md. Run via
-            %% `rebar3 shell` (or a future `rebar3 release`) instead of
-            %% the escript binary until that's resolved.
+            %% doesn't (can't) embed symbolic_ts's NIF .so — see
+            %% rebar.config's escript_incl_apps comment and
+            %% docs/cli-erlang.md. Run via `rebar3 shell` (or a
+            %% `rebar3 release`) instead of the escript binary until
+            %% that's resolved.
             io:put_chars(standard_error,
-                "parse: erl_ts (the tree-sitter NIF) isn't loadable from "
-                "this escript binary — a known packaging limitation, not a "
-                "code bug. Run via `rebar3 shell` for now; see "
+                "parse: symbolic_ts (the tree-sitter NIF) isn't loadable "
+                "from this escript binary — a known packaging limitation, "
+                "not a code bug. Run via `rebar3 shell` for now; see "
                 "docs/cli-erlang.md.\n"),
             halt(1)
     end.

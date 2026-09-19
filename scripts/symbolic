@@ -5,8 +5,8 @@
 # its one-shot-looking subcommands (`eval`, `escript`) actually RPCs into
 # an already-running node rather than running standalone. This wrapper
 # runs the CLI directly against the release's real on-disk ebin/priv
-# directories, the same shape our old escript build used, except NIFs
-# (erl_ts) actually work here since priv/ isn't inside a zip archive.
+# directories, the same shape our old escript build used, except the NIF
+# (symbolic_ts) actually works here since priv/ isn't inside a zip archive.
 # See docs/cli-erlang.md §1/§1.1.
 # Resolve $0 through any symlinks first — a global install typically
 # symlinks this script into e.g. /opt/homebrew/bin, and a naive

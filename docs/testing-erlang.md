@@ -29,7 +29,7 @@ nothing here is implemented.
   against the real (fast, in-process) collaborator, e.g. a real `erlog`
   session, instead of mocking it. Reach for **meck** only at genuine
   boundaries (an external service, `os:cmd`, a rarely-hit error path) — not
-  for `erlog`, and not for anything NIF-backed like `erl_ts`
+  for `erlog`, and not for anything NIF-backed like `symbolic_ts`
   ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), which meck cannot
   safely mock at all.
 
@@ -230,13 +230,13 @@ Core API:
   whole VM or the test runner.
 - A NIF-backed module generally **cannot** be mocked, since the NIF is
   loaded natively rather than through the module's Erlang code — this rules
-  out mocking `erl_ts` itself (see 5.3).
+  out mocking `symbolic_ts` itself (see 5.3).
 
 ### 5.3 Where this applies in `symbolic-tools`
 
 - **Don't mock `erlog`.** Run real sessions in tests (§3.4 above already
   covers this at the property level).
-- **`erl_ts`** ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)) is a NIF,
+- **`symbolic_ts`** ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)) is a NIF,
   so meck can't mock it directly. Put a thin behaviour around "parse source
   → facts" and swap in a fake implementation for unit tests of the
   extraction pipeline; save the real NIF for a dedicated integration suite.
@@ -288,5 +288,5 @@ rebar3 as test coveralls send  # optional: push coverage to coveralls.io
   coverage export.
 - [`eproxus/meck`](https://github.com/eproxus/meck) — the standard Erlang
   mocking library.
-- [`tree-sitter-erlang.md`](tree-sitter-erlang.md) — the NIF (`erl_ts`) that
+- [`tree-sitter-erlang.md`](tree-sitter-erlang.md) — the NIF (`symbolic_ts`) that
   can't be mocked directly (§5.3).

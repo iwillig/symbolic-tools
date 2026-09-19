@@ -6,14 +6,22 @@ sites, positions) fed into the Prolog database. It is the Erlang counterpart
 to the code-graph extraction in `readme.md` and the closure step in
 [`erlang-mcp-design.md`](erlang-mcp-design.md).
 
-**Recommendation up front:** call tree-sitter through a **NIF** that links
-`libtree-sitter` plus the specific language grammars we need, and run it
-**in-process on the BEAM**. There is working prior art —
-[`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts) — that already wraps
-essentially the whole tree-sitter C API as NIFs. Its only gap for us is that
-it bundles just the **Erlang** grammar; we extend it to bundle TS/JS/Python/Go/Rust.
-
-This is a design/research document only — no NIF is implemented here.
+**Status: implemented.** `symbolic_ts` (`c_src/symbolic_ts_nif.c` +
+`src/symbolic_ts.erl`) is a small, purpose-built NIF wrapping exactly the
+~20 tree-sitter C API functions this project actually calls — not a
+general-purpose binding. It replaces an earlier design (and, for a while,
+an earlier real implementation) built on
+[`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts), a third-party
+binding wrapping close to the entire tree-sitter C API. That dependency
+was vendored and hand-patched all session to add TypeScript and Markdown
+grammar support directly in its C source — but keeping that fork
+untracked in git (to keep it out of this repo) turned out to actively
+block packaging: a fresh `git clone` had no fork to build against, so a
+plain `rebar3 release` would try to fetch the *unmodified* upstream and
+silently produce a broken build. Since this project only ever called a
+small fraction of what `erl_ts` exposed, inlining just that fraction —
+owned and tracked here, no external dependency at all — solved that
+outright. See §2 for what got inlined and why.
 
 ## 1. Why a NIF (and not a subprocess)
 
@@ -32,60 +40,58 @@ query engine directly.
 | **Port to `tree-sitter` CLI** (`open_port` / `os:cmd/1`) | subprocess overhead per parse | all languages, zero build | ❌ subprocess boundary | low |
 | **WASM / JS host** | — | — | ❌ wrong runtime for an Erlang app | high, no payoff |
 
-The CLI route is only worth using as a **prototype** (§7) to lock down the
-per-language query strings before we commit to the NIF build.
+## 2. What we inlined, and why
 
-## 2. Prior art: `cfclavijo/erl_ts`
+`symbolic_ts` wraps exactly the functions `src/ts_extract_{erlang,
+typescript,markdown}.erl` call — 18 called directly, plus 2 more
+(`node_start_byte/1`, `node_end_byte/1`) needed to implement `node_text/2`
+(which, like in `erl_ts`, is plain Erlang — slicing a source string by
+byte range — not a NIF itself), plus the 3 `tree_sitter_<lang>/0`
+language loaders. Every function was ported by reading `erl_ts`'s own
+real C implementation directly, not guessed from its header comments.
 
-[Erlang NIF to use tree-sitter](https://github.com/cfclavijo/erl_ts) — an OTP
-library that implements NIFs for tree-sitter. Active (commits through 2026).
+- **Scope, deliberately narrow.** No `tree_cursor_*`, no
+  `lookahead_iterator_*`, no `query_cursor_*` exposed to Erlang at all —
+  `query_capture/2` creates and destroys its own `TSQueryCursor`
+  internally, the same as `erl_ts`'s version did, so Erlang never needs
+  to hold one. Only 5 resource types exist: `TSLanguage`, `TSParser`,
+  `TSTree`, `TSQuery`, `TSNode`.
+- **Build.** Ordinary rebar3 `port_specs` + the standard `pc` (port
+  compiler) hex plugin — the same mechanism many rebar3 NIF packages use
+  (e.g. `jiffy`) — not a hand-rolled Makefile. See `rebar.config`.
+  `c_src/symbolic_ts_nif.c` is the whole NIF; the tree-sitter runtime
+  lives at `c_src/tree-sitter/`, and each grammar at
+  `c_src/grammars/<name>/`.
+- **Handles are opaque Erlang resources**, same as before: parsers,
+  trees, nodes, queries, and languages cross the boundary as
+  `#Ref<...>`-backed resource terms; you call back in to read them.
 
-- **Scope.** Wraps the full C API as NIFs: `parser_*`, `tree_*`, `node_*`,
-  `tree_cursor_*`, `query_*`, `query_cursor_*`, `language_*`,
-  `lookahead_iterator_*`. That is everything the extraction layer needs.
-- **Build.** rebar3; `tree-sitter` and each grammar are git submodules,
-  compiled to C, and **statically linked into `erl_ts.so`**
-  (`ERL_TS_LINKING=dynamic` opts into dynamic linking instead).
-- **Handles are opaque Erlang references.** Parsers, trees, nodes, queries,
-  and languages cross the boundary as `#Ref<...>` values; you call back in to
-  read them.
-
-### Usage shape (from the project's README)
+### Usage shape
 
 ```erlang
-erl_ts:init(),                                   % load the NIF, once per node
-{ok, Parser} = erl_ts:parser_new(),
-{ok, Lang}   = erl_ts:tree_sitter_erlang(),      % a TSLanguage* as a ref
-true = erl_ts:parser_set_language(Parser, Lang),
-Tree = erl_ts:parser_parse_string(Parser, Src),
-Root = erl_ts:tree_root_node(Tree),
+{ok, Parser} = symbolic_ts:parser_new(),
+{ok, Lang}   = symbolic_ts:tree_sitter_erlang(),
+true = symbolic_ts:parser_set_language(Parser, Lang),
+Tree = symbolic_ts:parser_parse_string(Parser, Src),
+Root = symbolic_ts:tree_root_node(Tree),
 
-{ok, Q, _}  = erl_ts:query_new(Lang,
-                  "(function_clause name: (atom) @name)"),
-Caps        = erl_ts:query_capture(Root, Q),     % [{"name", NodeRef}, ...]
-[erl_ts:node_text(N, Src) || {_, N} <- Caps].    % pull only what you need
+{Q, _, _} = symbolic_ts:query_new(Lang,
+                "(function_clause name: (atom) @name)"),
+Caps      = symbolic_ts:query_capture(Root, Q),   % [{"name", NodeRef}, ...]
+[symbolic_ts:node_text(N, Src) || {_, N} <- Caps].
 ```
 
 `node_text/2` needs the source string because nodes are (start_byte,
-end_byte) spans, not owned text — so keep the source around for the life of
-the tree.
-
-### The gap we must fill
-
-Only `tree_sitter_erlang/0` exists. Each tree-sitter grammar exports a single
-C entry point, `const TSLanguage *tree_sitter_<name>(void)`; exposing a new
-language is (a) add the grammar submodule, (b) add a `tree_sitter_<name>/0`
-NIF that returns it, (c) link its compiled lib into the `.so`. See §5.
+end_byte) spans, not owned text — so keep the source around for the life
+of the tree.
 
 ## 3. What tree-sitter gives us — and what it doesn't
 
 Tree-sitter produces a concrete syntax tree per file. From it we extract
-**facts**, per language, via queries:
-
-- function / method / callback **definitions** (name, arity-ish shape, span)
-- **call sites** (callee name/text, span, argument spans)
-- import / export / module statements (for the resolution step)
-- enclosing scope chain (so a call can be attributed to its defining function)
+**facts**, per language, via queries — see `src/ts_extract_erlang.erl`,
+`src/ts_extract_typescript.erl`, `src/ts_extract_markdown.erl` for the
+real query sets, and `src/ts_extract.erl` for the extension-based
+dispatcher that picks between them.
 
 What tree-sitter does **not** give us: which definition a call binds to,
 cross-file resolution, or the transitive call graph. That reasoning stays in
@@ -98,110 +104,75 @@ Erlang            -->  resolution + graph + closure          (cross file)
 erlog / Prolog    -->  relational queries over the graph     (the MCP tools)
 ```
 
-## 4. Recommended design
+## 4. Design notes
 
-1. **Vendor (or fork) `erl_ts`** as the extraction dependency. We inherit the
-   full API surface and the build system; we only add language entry points.
-   If we outgrow it, the code is a single ~85 KB C file plus a rebar app, so
-   forking is cheap.
+- **Extract with queries, not full-tree marshalling.** Per language, a
+  query for definitions and one for call sites, returning only the
+  compact fact tuples each extractor module needs — never the whole tree
+  as Erlang terms. Keeps the NIF boundary cheap and the hot loop (parse
+  → extract → emit facts) tight.
+- **Bundle only the languages we parse.** Each is one grammar directory
+  under `c_src/grammars/<name>/`, one `tree_sitter_<name>/0` NIF entry,
+  and a `port_specs` source-list addition. Keep the count deliberate.
+- **Manage lifetimes — but know what actually holds what.** `TSNode`
+  holds a raw, unretained pointer into the `TSTree` it came from, with no
+  reference counting of its own — the tree-sitter C API's documented
+  contract is that the caller keeps the tree alive as long as any node
+  from it is in use. Erlang's GC has no built-in way to know a `Node`
+  resource term depends on a `Tree` resource term staying alive. See §6
+  for the real bug this caused.
+- **Parser pool, not a shared parser**, for a long-running server (the
+  MCP session work) — a `TSParser` instance isn't safe to drive from
+  multiple NIF threads at once. Not needed yet for the one-shot CLI
+  (`parse`/`query`), which never shares a parser across concurrent
+  callers.
 
-2. **Bundle only the languages we parse** (the `chiasmus_map`/`graph` set:
-   TypeScript, JavaScript, Python, Go, Rust, …). Each is one grammar
-   submodule + one 3-line NIF + a link flag. Keep the count deliberate —
-   statically linking many grammars into one `.so` bloats build time and the
-   artifact.
+## 5. Adding a language
 
-3. **Extract with queries, not full-tree marshalling.** Per language, define
-   a query for definitions and one for call sites. Return compact
-   `{name, start, end, [arg_spans]}` lists across the NIF boundary — do **not**
-   ship the whole tree as Erlang terms. This keeps the boundary cheap and the
-   hot loop (parse → extract → emit facts) tight.
-
-4. **Parser pool, not a shared parser.** A `TSParser` instance is not safe to
-   drive from multiple NIF threads at once. Mirror the `prolog_session_sup`
-   pattern from `erlang-mcp-design.md`: a small supervised pool of `parser`
-   gen_servers (one per language); a worker checks a parser out, parses a
-   file, returns it. 4–8 parsers is plenty for a "walk a folder" batch.
-
-5. **Manage lifetimes.** Call `tree_delete/1`, `parser_delete/1`,
-   `query_delete/1` when done. Reuse one parser across a directory; delete
-   each tree once its facts are extracted. Leaking trees is the main
-   correctness hazard in a long-running server.
-
-## 5. Adding a language (done for real: TypeScript)
-
-The recipe below replaces an earlier, hypothetical version of this section
-— this is what actually adding TypeScript to `erl_ts` took, verified by
-doing it. Two corrections to what was originally guessed here: there is
-no `tree_sitter/typescript.h` to `#include` (the grammar just needs its
-own `extern const TSLanguage *tree_sitter_typescript(void);` declaration,
-same as the existing `tree_sitter_erlang` one), and this required editing
-**two Makefiles**, not one — `tree-sitter-langs/Makefile` hard-codes
-"erlang" throughout with no parametrization to hook into.
-
-**0. Fork first — this can't be done as a git dependency.** `erl_ts` is
-vendored at `_checkouts/erl_ts` (rebar3's real local-override mechanism —
-see `docs/cli-erlang.md` §1.2's build notes and the note below on why a
-plain git dependency doesn't work for this). Editing a dependency's own C
-source isn't something a `{git, ...}`/`{pkg, ...}` dep spec can accommodate
-at all.
-
-1. Vendor the grammar: fetch
-   [`tree-sitter/tree-sitter-typescript`](https://github.com/tree-sitter/tree-sitter-typescript)
-   into `_checkouts/erl_ts/tree-sitter-langs/tree-sitter-typescript`
-   (confirmed: MIT, plain C — `typescript/src/{parser.c,scanner.c}`, no
-   C++; the repo actually holds two grammars, `typescript` and `tsx` —
-   only `typescript` was used).
-2. `c_src/erl_ts_nif.c` — add the `extern` declaration, a
-   `tree_sitter_typescript_nif` function identical in shape to the
-   existing `tree_sitter_erlang_nif`, and register it in the `nif_funcs[]`
-   table (~10 lines total, exactly as small as this doc originally
-   predicted).
-3. `src/erl_ts.erl` — the Erlang side needs its own three additions,
-   easy to miss: add `tree_sitter_typescript/0` to **both** the `-export`
-   and `-nifs` attribute lists, and add the stub function
-   (`tree_sitter_typescript() -> erlang:nif_error(nif_library_not_loaded).`)
-   — the C change alone isn't enough; skipping this produces "Function
-   not found erl_ts:tree_sitter_typescript/0" at load time.
-4. `tree-sitter-langs/Makefile` — add a **parallel, separate** set of
-   targets (`libtree-sitter-typescript.a`/`.$(SOEXT)`, own `SRC_DIR_TS`,
-   own `LINKSHARED_TS` install name) alongside the existing erlang ones,
-   rather than generalizing them — lower risk, doesn't touch what's
-   already proven working. Add both new targets to `build:`'s dependency
-   list.
-5. `c_src/Makefile` — add `-l:libtree-sitter-typescript.a` /
-   `-ltree-sitter-typescript` to `LDLIBS_TS_STATIC`/`LDLIBS_TS_DYNAMIC`
-   alongside the existing erlang entries. No new `-I` include path was
-   actually needed here — `erl_ts_nif.c` never `#include`s anything from
-   a grammar's own directory, it only forward-declares the `extern`
-   function, so the existing `TS_INCLUDE_DIR` (core `tree_sitter/api.h`)
-   is enough.
-6. Repoint the two/three `.dylib` install-name fixes (§6.1) to also cover
-   `libtree-sitter-typescript.dylib` — same `@loader_path`-relative
-   pattern, one more `-change` flag, one more file in the `cp`.
+1. Vendor the grammar's plain-C source only — `src/{parser.c,scanner.c}`
+   and its own `src/tree_sitter/*.h` — into
+   `c_src/grammars/<name>/{parser.c,scanner.c,tree_sitter/*.h}`. Skip
+   `grammar.json`/`node-types.json`/bindings/tests; none of that is
+   needed to compile. Confirm the grammar's license (MIT for all three
+   in use today) and that it's plain C, not C++, before vendoring.
+2. `c_src/symbolic_ts_nif.c` — add the `extern const TSLanguage
+   *tree_sitter_<name>(void);` declaration, a `nif_tree_sitter_<name>`
+   function identical in shape to the existing ones (named with a
+   `nif_` prefix specifically to avoid colliding with the grammar's own
+   real C symbol of the same base name — a real link error hit while
+   inlining Markdown support this way), and register it in
+   `nif_funcs[]` via `NIF_ENTRY_AS("tree_sitter_<name>", 0,
+   nif_tree_sitter_<name>)`.
+3. `src/symbolic_ts.erl` — add `tree_sitter_<name>/0` to both `-export`
+   and the stub-function list (`erlang:nif_error(nif_not_loaded)`) —
+   the C change alone isn't enough; skipping this produces "function not
+   found" at load time.
+4. `rebar.config`'s `port_specs` — add
+   `"c_src/grammars/<name>/parser.c"` and `.../scanner.c"` to the
+   source list. If the grammar's `scanner.c` needs a shared header from
+   its own upstream repo (TypeScript's does — `common/scanner.h`,
+   shared between its `typescript` and `tsx` grammars), vendor that too
+   and add its directory to `port_env`'s `CFLAGS` `-I` list.
 
 Once loaded, the language's own public query names
 (`function_declaration`, `call_expression`, `member_expression` for
-TypeScript vs. `function_clause`, `call`, `remote` for Erlang) are
-completely different per grammar — found empirically the same way both
-times: parse a tiny sample, print `node_string/1`, read the real node
-names off the tree rather than guessing. See `src/ts_extract_typescript.erl`
-and `src/ts_extract_erlang.erl` for the two query sets this produced, and
-`src/ts_extract.erl` for the extension-based dispatcher that picks between
-them.
+TypeScript vs. `function_clause`, `call`, `remote` for Erlang, vs.
+`atx_heading`, `fenced_code_block` for Markdown) are completely different
+per grammar — found empirically the same way every time: parse a tiny
+sample, print `node_string/1`, read the real node names off the tree
+rather than guessing.
 
 ## 6. Pitfalls
 
 - **ABI pinning.** The `libtree-sitter` runtime and every grammar must share a
-  compatible ABI version. Pin all submodules to known-good commits and bump
-  the runtime + grammars together; a mismatch is a hard link/runtime failure,
+  compatible ABI version. Pin all vendored sources to known-good versions and
+  bump the runtime + grammars together; a mismatch is a hard link/runtime failure,
   not a graceful error.
-- **Don't call `erl_ts:init/0` yourself.** Confirmed by running it: `init/0`
-  is invoked automatically as the module's `-on_load` hook the first time
-  `erl_ts` is referenced. Calling it again explicitly (as the README's own
-  usage example shows!) crashes the runtime with a boot-time `undef` for
-  `erl_ts:init/0` that's confusing to debug — the module fails to reload
-  cleanly. Just call `erl_ts:parser_new/0` etc. directly.
+- **Don't call `symbolic_ts:init/0` yourself.** It's the module's
+  `-on_load` hook, invoked automatically the first time `symbolic_ts` is
+  referenced. Calling it again crashes the runtime with a boot-time
+  `undef` that's confusing to debug. Just call `symbolic_ts:parser_new/0`
+  etc. directly.
 - **`query_capture/2` duplicates captures per pattern.** Confirmed
   empirically: a query with *N* named captures returns every match
   duplicated *N* times (a 2-capture query returns each match twice, a
@@ -212,8 +183,24 @@ them.
   capture independently (one query per node type you actually want), then
   attribute scope by walking `node_parent/1` up to the nearest enclosing
   node of the type you need, rather than relying on multi-capture
-  correlation. Also dedupe by node byte-range (`node_start_byte/1` +
-  `node_end_byte/1`) before rendering facts, regardless.
+  correlation. Also dedupe (`lists:usort/1` over the whole fact list)
+  before rendering facts, regardless.
+- **A `TSTree` cannot be safely freed once any `TSNode` from it might
+  still be alive — even from Erlang's own GC's point of view.**
+  Confirmed the hard way: giving the NIF's `TSTree` resource a real
+  `free` callback (`ts_tree_delete`, replacing `erl_ts`'s original
+  no-op) reproduced as a consistent SIGSEGV in
+  `ts_extract_markdown:file/1` — its `Tree` variable is only used once,
+  to compute `Root`, so the BEAM compiler's liveness analysis lets the
+  GC collect the `Tree` resource term well before the function finishes
+  using nodes derived from it. `erl_ts`'s original no-op `free_TSTree`
+  wasn't an oversight — it's the safe (if leaky) choice absent real
+  reference-counting between resource types. `symbolic_ts` intentionally
+  leaks every parsed tree for the life of the process, matching that
+  behavior; harmless for the one-shot CLI, but something to actually fix
+  (e.g. each `Node` resource keeping its owning `Tree` resource term
+  alive via `enif_keep_resource`) before a long-running MCP session
+  parses many files without restarting.
 - **Scheduler threads.** A NIF holds its calling thread for the parse
   duration. Single-file parses are fast (tree-sitter is ~100s of MB/s), so
   this is usually a non-issue; for very large files consider `enif_thread_fork`
@@ -221,129 +208,61 @@ them.
 - **Nodes need the source.** `node_text/2` slices the source string by byte
   range, so the source must live as long as the tree.
 - **Sibling navigation returns `undefined`, not a null resource.**
-  `node_parent/1` returns a null *resource* when there's no parent —
-  checked via `node_is_null/1`. `node_next_sibling/1` and
+  `node_parent/1` returns a real node resource even when there's no
+  parent — checked via `node_is_null/1`. `node_next_sibling/1` and
   `node_prev_sibling/1` are inconsistent with that: when there's no such
   sibling, they return the plain atom `undefined` instead. Calling
-  `node_is_null/1` on `undefined` raises `badarg`. Confirmed by testing,
-  not documented anywhere upstream — check `=:= undefined` (or pattern
-  match the atom directly) when walking siblings, e.g. the comment/doc-run
-  walk in `ts_extract_typescript.erl`/`ts_extract_erlang.erl`.
-
-### 6.1 macOS-specific build issues (confirmed on Apple Silicon, OTP 29)
-
-`cfclavijo/erl_ts` is small (2 stars, 19 commits at the time of writing) and
-has not been exercised on macOS. Three real, reproducible problems, found
-while actually building it:
-
-- **Static linking (the default) does not work on macOS.** `c_src/Makefile`
-  links the final `.so` with raw `ld --exclude-libs ALL --start-group ...
-  --end-group` and `-l:libtree-sitter.a` — all GNU-`ld`-only syntax. Apple's
-  linker rejects it outright ("unknown options"). **Use
-  `ERL_TS_LINKING=dynamic`** — it links through `cc` with ordinary `-l`
-  flags, which does work. This is the opposite of the Makefile's own
-  guidance (§6's old "static-link bloat" framing assumed static was viable
-  everywhere; on macOS it currently isn't at all).
-- **The dynamic build's install-name paths are wrong.** Even with
-  `ERL_TS_LINKING=dynamic`, the built `.so` records `/usr/local/lib/libtree-sitter.0.25.dylib`
-  (never installed there) and `/libtree-sitter-erlang.dylib` (a
-  filesystem-root path — a build bug) as load-time dependencies, so
-  `erlang:load_nif/2` fails with `on_load_failure` even though the build
-  itself reports success. `DYLD_LIBRARY_PATH` does **not** rescue this —
-  dyld doesn't fall back to it for a dependency recorded as an absolute
-  path. The fix, added as our own project's `post_hooks` (not a fork of
-  `erl_ts`): `install_name_tool` with **both** `-change` flags in a
-  **single invocation**, repointing each to a short `@loader_path`-relative
-  path. Two separate `install_name_tool` invocations (or a `;`-chained pair
-  inside one rebar3 hook string) risk failing on the second change with
-  "larger updated load commands do not fit" — Mach-O's header has limited
-  padding to grow into, one combined invocation needs less of it than two
-  sequential ones. See `rebar.config` in the project root for the exact
-  hook.
-- **The submodule-init pre_hook had a race condition** — `erl_ts`'s own
-  `rebar.config` ran `git submodule update --init & make`, backgrounded
-  (`&`) rather than sequenced (`&&`), so on a truly fresh git-clone of the
-  dependency, `make` started before the submodule checkout finished and
-  failed. **Superseded, not just worked around**: since §6.2 below, `erl_ts`
-  is a permanent local fork at `_checkouts/erl_ts` rather than a git
-  dependency re-fetched on every `rm -rf _build`, so its submodules (now
-  plain vendored files, not live submodules at all) are simply always
-  already present. This bullet is kept for the history — an `overrides`
-  entry to fix the race in-place was tried first and made things worse
-  (rebar3 stopped running the dependency's hooks at all), before vendoring
-  turned out to sidestep the problem entirely.
-- **NIFs cannot be shipped inside a `rebar3 escriptize` binary — this is
-  why the project switched to `rebar3 release`.** `escript_incl_apps` only
-  bundles `.beam`/`.app` files into the escript's zip archive, never
-  `priv/`, and `erlang:load_nif/2` cannot `dlopen` a shared library from
-  inside a zip at all. Embedding `erl_ts`'s `.beam` without its `.so`
-  produces a module that looks loaded but crashes with `undefined
-  function` the moment a NIF function is called — worse than not embedding
-  it. A `rebar3 release` keeps `priv/` as real files on disk, which fixes
-  this — see `docs/cli-erlang.md` §1.1/§1.2, including why relx's own
-  generated start script isn't usable as the CLI entry point either (its
+  `node_is_null/1` on `undefined` raises `badarg` — check `=:=
+  undefined` (or pattern match the atom directly) when walking siblings,
+  e.g. the comment/doc-run walk in
+  `ts_extract_typescript.erl`/`ts_extract_erlang.erl`.
+- **NIFs cannot be shipped inside a `rebar3 escriptize` binary.**
+  `escript_incl_apps` only bundles `.beam`/`.app` files into the
+  escript's zip archive, never `priv/`, and `erlang:load_nif/2` cannot
+  `dlopen` a shared library from inside a zip at all. A `rebar3 release`
+  keeps `priv/` as real files on disk, which fixes this — see
+  `docs/cli-erlang.md` §1.1/§1.2, including why relx's own generated
+  start script isn't usable as the CLI entry point either (its
   `eval`/`escript` subcommands both require a node already running) and
-  the small wrapper script that is.
-- **A release doesn't preserve `erl_ts`'s vendored `tree-sitter`/
-  `tree-sitter-langs` submodule checkouts** — only each app's
-  `ebin`/`priv`/`include`. The install-name fix in `rebar.config` therefore
-  copies both `.dylib` files into `erl_ts`'s own `priv/` (as siblings of
-  `erl_ts.so`, referenced via `@loader_path`, not
-  `@loader_path/../tree-sitter/...`) specifically so they travel with
-  `priv/` wherever it's copied — plain `compile` or a full `release`.
+  the small wrapper script (`scripts/symbolic`) that is.
 
-### 6.2 `_checkouts` gotchas (all platforms, not macOS-specific)
+## 7. Suggested path (historical)
 
-Vendoring `erl_ts` (§5, step 0) as a real local fork uses rebar3's
-`_checkouts/` mechanism. Three non-obvious things about it, all confirmed
-by hitting them directly:
+This is roughly the path actually followed, kept for reference:
 
-- **The directory must be named `_checkouts`, with a leading underscore**
-  — not `checkouts`. Using the wrong name doesn't error; rebar3 silently
-  compiles whatever's there (Erlang doesn't check remote-module calls at
-  compile time, so this looks like success) but never puts it on any
-  runtime code path, so every call into the vendored module fails
-  `undef` at runtime, in every command (`compile`, `eunit`, a release) —
-  a confusing, late, and misleading failure mode for an early naming typo.
-- **`{path, Dir}` is not a real rebar3 dependency source** — it looks
-  like it should be (git/hex deps are `{Name, {git, ...}}`/`{Name, "vsn"}`
-  tuples, so `{Name, {path, Dir}}` reads as though it fits the pattern),
-  but rebar3 has no such resource type; it fails with "Failed to fetch
-  and copy dep" and no further detail. `_checkouts/` is the actual native
-  mechanism for "use my local copy instead of fetching."
-- **`_checkouts` *overrides* a `deps` entry — it does not replace needing
-  one.** With `erl_ts` removed from `deps` entirely and only present under
-  `_checkouts/erl_ts`, it compiled (again, no compile-time error) but
-  `code:which(erl_ts)` returned `non_existing` in every context — `rebar3
-  path`, `rebar3 eunit`, everything. Keeping a normal
-  `{erl_ts, {git, "https://github.com/cfclavijo/erl_ts.git", ...}}` entry
-  in `deps` fixed it immediately, even though that git source is never
-  actually fetched from once `_checkouts/erl_ts` is present — the `deps`
-  entry is what tells rebar3 "this is a real dependency, put it on the
-  path"; `_checkouts` only decides *where the content comes from*.
-
-## 7. Suggested path
-
-1. **Prototype against the `tree-sitter` CLI** (fast, no build): run
-   `tree-sitter parse` on samples per language and write the exact
-   definition/call-site query strings. This de-risks the per-language queries
-   — the fiddliest part — before any C is involved.
-2. **Bring in `erl_ts`**, add the target grammars, and run the same queries
-   through `query_new/2` + `query_capture/2`.
-3. **Wrap it in a parser-pool module** that emits the Prolog facts, feeding
-   the extraction half of the pipeline in §3.
+1. **Prototype against the `tree-sitter` CLI or a third-party binding**
+   (fast, no C build of your own) to lock down the per-language query
+   strings before committing to owning a NIF.
+2. **Start from a full-featured binding if one exists** (this project
+   used `erl_ts`) to get the extraction logic and query sets right
+   first, extending it for whatever grammars are needed.
+3. **Inline only what you actually end up calling**, once the real
+   call surface is known — a small, purpose-built NIF is easier to
+   reason about, easier to package (no external fork to keep in sync or
+   track in git), and easier to fix bugs in (§6's tree-freeing pitfall
+   was found and fixed here, not upstream).
 
 ## References
 
-- [`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts) — Erlang NIF for
-  tree-sitter (prior art / base).
 - [`tree-sitter`](https://github.com/tree-sitter/tree-sitter) — runtime + C
-  API (`lib/include/tree_sitter/api.h`).
+  API (`lib/include/tree_sitter/api.h`), vendored at `c_src/tree-sitter/`.
+- [`tree-sitter/tree-sitter-typescript`](https://github.com/tree-sitter/tree-sitter-typescript),
+  [`tree-sitter-grammars/tree-sitter-markdown`](https://github.com/tree-sitter-grammars/tree-sitter-markdown)
+  — the TypeScript and Markdown grammars, vendored at
+  `c_src/grammars/{typescript,markdown}/`. Erlang's own grammar
+  (`c_src/grammars/erlang/`) traces back to
+  [`tree-sitter-erlang`](https://github.com/WhatsApp/tree-sitter-erlang).
+- [`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts) — the
+  third-party binding this project's own NIF was ported from and now
+  replaces; credit for the resource-wrapping shape `symbolic_ts` still
+  follows.
+- [`blt/port_compiler`](https://hex.pm/packages/pc) — the rebar3 plugin
+  `symbolic_ts` builds through.
 - [`erlang-mcp-design.md`](erlang-mcp-design.md) — the in-process BEAM design
   this plugs into.
 - [`readme.md`](../readme.md) — the four-tool contract.
-- [`tree-sitter-markdown.md`](tree-sitter-markdown.md) — extending this same
-  `erl_ts` approach to Markdown docs (a two-grammar case, §5's recipe
-  specialized).
+- [`tree-sitter-markdown.md`](tree-sitter-markdown.md) — the Markdown
+  extraction design (block grammar, plus the deferred inline-grammar/
+  `link/4` work).
 - [`nlp-tooling.md`](nlp-tooling.md) — the same NIF-over-a-C-library pattern
   applied to NLP libraries (`libstemmer_c`, CRFsuite, `llama.cpp`).
