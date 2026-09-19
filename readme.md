@@ -583,9 +583,13 @@ Dependencies:
 ## Documentation
 
 `docs/` holds the full design for this project — start with
-`erlang-mcp-design.md` for the overall architecture, then follow its
-cross-references. Grouped by concern:
+`erlang-mcp-design.md` for the overall architecture, or
+`prolog-schema.md` if you just want to know what a query can ask about,
+then follow either's cross-references. Grouped by concern:
 
+- **Reference** — `prolog-schema.md` (the complete data dictionary —
+  every fact predicate `symbolic parse` produces, across every
+  language, in one place).
 - **Architecture** — `erlang-mcp-design.md` (MCP server, Prolog sessions),
   `cli-erlang.md` (the CLI), `prolog-store.md` (fact storage/caching).
 - **Extraction** — `tree-sitter-erlang.md` (code, via `symbolic_ts`),
