@@ -38,7 +38,7 @@
 %%% unlike node_parent/1. Calling node_is_null/1 on `undefined` raises
 %%% badarg. See docs/tree-sitter-erlang.md §6.
 -module(ts_extract_erlang).
--export([file/1]).
+-export([file/1, text/2]).
 
 -define(DEF_QUERY, "(function_clause name: (atom) @fun_name)").
 -define(LOCAL_CALL_QUERY, "(call expr: (atom) @callee)").
@@ -48,7 +48,14 @@
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
     {ok, Bin} = file:read_file(Path),
-    Src = binary_to_list(Bin),
+    text(Path, binary_to_list(Bin)).
+
+%% Same extraction as file/1, but against an already-in-memory source
+%% string rather than a file on disk — used by ts_extract_markdown to
+%% run this extractor against a fenced code block's contents, with
+%% `Path` set to the enclosing Markdown file (not a real .erl file).
+-spec text(file:filename(), string()) -> [tuple()].
+text(Path, Src) ->
     {ok, Parser} = erl_ts:parser_new(),
     {ok, Lang} = erl_ts:tree_sitter_erlang(),
     true = erl_ts:parser_set_language(Parser, Lang),
@@ -169,8 +176,21 @@ caller_name(Node, Src) ->
 line(Node) ->
     maps:get(row, erl_ts:node_start_point(Node)) + 1.
 
-to_atom(Text) when is_list(Text) -> list_to_atom(Text);
-to_atom(Text) when is_binary(Text) -> binary_to_atom(Text, utf8).
+%% Erlang atoms are capped at 255 bytes — confirmed by hitting it for
+%% real: `symbolic parse` crashed with `system_limit` on a real
+%% dependency's long doc-comment run. Comment/doc text isn't an
+%% identifier, so truncating past a generous length is a safe, simple
+%% fix rather than switching every text fact to a binary just to
+%% accommodate the rare long one.
+-define(MAX_ATOM_TEXT, 200).
+
+to_atom(Text) when is_binary(Text) -> to_atom(binary_to_list(Text));
+to_atom(Text) when is_list(Text) -> list_to_atom(truncate(Text)).
+
+truncate(Text) when length(Text) > ?MAX_ATOM_TEXT ->
+    lists:sublist(Text, ?MAX_ATOM_TEXT) ++ "...";
+truncate(Text) ->
+    Text.
 
 %% Comment text cleaning: strip leading `%`/`%%` and join a run into
 %% one line — keeps the .pl output one-fact-per-line (a quoted atom may

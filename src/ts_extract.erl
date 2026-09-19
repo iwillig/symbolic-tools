@@ -7,5 +7,6 @@
 file(Path) ->
     case filename:extension(Path) of
         ".erl" -> ts_extract_erlang:file(Path);
-        ".ts" -> ts_extract_typescript:file(Path)
+        ".ts" -> ts_extract_typescript:file(Path);
+        ".md" -> ts_extract_markdown:file(Path)
     end.

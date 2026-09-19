@@ -16,7 +16,8 @@ run_checked(Dir) ->
     case code:ensure_loaded(erl_ts) of
         {module, erl_ts} ->
             Files = filelib:wildcard(filename:join(Dir, "**/*.erl")) ++
-                    filelib:wildcard(filename:join(Dir, "**/*.ts")),
+                    filelib:wildcard(filename:join(Dir, "**/*.ts")) ++
+                    filelib:wildcard(filename:join(Dir, "**/*.md")),
             Facts = lists:usort(lists:flatmap(fun ts_extract:file/1, Files)),
             lists:foreach(fun print_fact/1, Facts),
             halt(0);

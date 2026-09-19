@@ -79,13 +79,18 @@ Inspired by the [Chiasmus MCP Server](https://github.com/yogthos/chiasmus).
 TypeScript, and local from remote calls in Erlang), `comment`, and `doc`
 facts (every comment, plus which ones document a specific function),
 dogfooded against this repo's own source and a real-world-style `.ts`
-file. More tree-sitter
+file. **Markdown** is real too, for `.md` files — `heading`, `code_block`,
+and `paragraph` facts, so `readme.md`/`docs/*.md` become queryable the
+same way; a fenced `erlang`/`ts`/`typescript` block also gets re-parsed
+into `example_defines`/`example_calls` facts, so a query can catch a
+doc's code sample showing a function the real codebase doesn't (or no
+longer) have. See `docs/tree-sitter-markdown.md` for what's implemented
+(block structure) versus deferred (`link/4`, which needs a second,
+currently unimplemented grammar pass). More tree-sitter
 grammars (Python, Go, Rust) can slot in the same way; see
 `docs/tree-sitter-erlang.md` §5 for the actual recipe (not hypothetical —
 what adding TypeScript really took, including two vendored-fork
-Makefiles). Parsing Markdown itself (so the project's own docs become
-queryable facts too) is designed separately in
-`docs/tree-sitter-markdown.md`.
+Makefiles).
 
 ## Tools
 
@@ -263,6 +268,137 @@ internal variables never become free in the top-level query — only
 `Fun`/`File`/`Line`/`Text` show up in the answer. This is the same
 substring search a "find the doc-comment that mentions X" tool call would
 run, just issued by hand here.
+
+### Parsing Markdown
+
+````md
+# Getting Started
+
+A short intro paragraph
+that wraps onto a second line.
+
+## Installation
+
+```sh
+brew bundle
+rebar3 release
+```
+
+## Configuration
+
+No config needed yet.
+````
+
+```sh
+$ symbolic parse .
+code_block('notes.md',sh,8).
+paragraph('notes.md','A short intro paragraph that wraps onto a second line.',3).
+paragraph('notes.md','No config needed yet.',15).
+heading('notes.md',1,'Getting Started',1).
+heading('notes.md',2,'Configuration',13).
+heading('notes.md',2,'Installation',6).
+
+$ symbolic parse . > facts.pl
+
+$ symbolic query -file facts.pl 'heading(File, 2, Text, Line)'
+File = 'notes.md'
+Line = 13
+Text = 'Configuration'              # one solution — ask again for the next
+
+$ symbolic query -file facts.pl 'code_block(File, Lang, Line)'
+File = 'notes.md'
+Lang = sh
+Line = 8
+
+$ symbolic query -file facts.pl 'paragraph(File, Text, Line)'
+File = 'notes.md'
+Line = 3
+Text = 'A short intro paragraph that wraps onto a second line.'
+```
+
+A paragraph that wraps onto a second source line with no blank line in
+between is still one fact, not two — `paragraph/3` collapses the embedded
+newline into a single space the same way multi-line doc comments already
+do for code. This only uses tree-sitter-markdown's **block** grammar —
+headings, paragraph text, and fenced-code-block languages are enough to
+check things like "does every doc have a heading structure" or "which
+fenced blocks have no declared language" without opening an editor. It
+deliberately does not extract links yet: a Markdown link is only a
+structured node in a *second*, separate inline grammar, requiring a
+re-parse scoped to the byte ranges
+the block parse marks as inline content — and the `erl_ts` NIF function
+for that (`ts_parser_set_included_ranges`) turned out, on reading its C
+source, to be an unimplemented stub rather than the working function its
+own name promises. See `docs/tree-sitter-markdown.md` §3 for what
+implementing it for real would take.
+
+### Catching stale doc examples
+
+A fenced code block tagged `erlang`, `ts`, or `typescript` gets re-parsed
+by the same real extractors that parse actual source — the code a doc
+*shows* becomes `example_defines`/`example_calls` facts, a deliberately
+different predicate than `defines`/`calls` so a query can ask "does the
+codebase still actually have this" without conflating the two. Parse a
+doc alongside the real source it documents:
+
+```ts
+// greeter.ts
+function formatName(first: string, last: string): string {
+  return capitalize(first) + " " + capitalize(last);
+}
+
+function capitalize(word: string): string {
+  return word.toUpperCase();
+}
+```
+
+````md
+<!-- guide.md -->
+# Formatting Names
+
+Use `capitalize` to fix casing, and `shout` for emphasis:
+
+```ts
+function shout(word: string): string {
+  return capitalize(word) + "!";
+}
+```
+````
+
+```sh
+$ symbolic parse .
+code_block('guide.md',ts,5).
+defines(capitalize,'greeter.ts',5).
+defines(formatName,'greeter.ts',1).
+example_defines(shout,'guide.md',6).
+paragraph('guide.md','Use `capitalize` to fix casing, and `shout` for emphasis:',3).
+calls(capitalize,member(word,toUpperCase),'greeter.ts',6).
+calls(formatName,local(capitalize),'greeter.ts',2).
+example_calls(shout,local(capitalize),'guide.md',7).
+heading('guide.md',1,'Formatting Names',1).
+```
+
+`guide.md`'s sample defines `shout` — a function that was never actually
+added to `greeter.ts`. Append the check once, hand-editing the fact file
+the same way the `contains/2` example above does:
+
+```sh
+$ cat >> facts.pl << 'EOF'
+
+stale_doc_example(Fun, DocFile, Line) :-
+    example_defines(Fun, DocFile, Line),
+    \+ defines(Fun, _, _).
+EOF
+
+$ symbolic query -file facts.pl 'stale_doc_example(Fun, DocFile, Line)'
+DocFile = 'guide.md'
+Fun = shout
+Line = 6
+```
+
+`capitalize` — shown in the same doc and *does* exist in `greeter.ts` —
+correctly does not show up: `stale_doc_example/3` only surfaces the one
+function the doc claims exists but doesn't.
 
 ## Install
 
