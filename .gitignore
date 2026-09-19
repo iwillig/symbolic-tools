@@ -9,4 +9,5 @@ erl_crash.dump
 *.a
 *.so
 *.dylib
+*.d
 tree-sitter.pc

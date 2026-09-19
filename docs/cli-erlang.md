@@ -161,17 +161,33 @@ Conventions: exit code `0` on success, non-zero on error; results to
 
 ## 4. Distribution
 
-The one real gotcha (true of a release the same as it was of `escriptize`):
-with `include_erts` off (current setting, §1.2 — fast for local dev), the
-release runs against the **host's** Erlang install, so it's not portable
-by itself. `include_erts: true` embeds a full ERTS build for the host
-OS/arch instead, making the release self-contained but platform-specific —
-there is no true cross-compile either way. Practical channels once that's
-flipped on for an actual shippable build:
+**Status: a Homebrew tap exists and is verified** (`Formula/symbolic-
+tools.rb`, `readme.md`'s Install section) — via a real local `brew
+install --build-from-source` test, not just written and assumed to
+work.
 
-- **Homebrew tap** — `brew install <tap>/symbolic` (or a manual copy to your
-  `PATH`) is the natural model. Build one bottle per target (macOS arm64,
-  macOS x86_64, Linux).
+Two separate settings matter here, and confirmed by testing they're
+genuinely independent concerns:
+
+- **`include_erts`** stays **off**. It would embed a full ERTS build for
+  the host OS/arch, making the release self-contained but
+  platform-specific (no true cross-compile either way) — not needed,
+  since a Homebrew formula declares `depends_on "erlang"` and the
+  release is happy calling out to that.
+- **`dev_mode`** is what actually had to change, and is now **off**
+  (`rebar.config`'s `relx` section) — confirmed directly: with it on,
+  every app directory under the release's `lib/` (`erlog-*`,
+  `symbolic_tools-*`, ...) is a **symlink back into this exact
+  checkout's `_build/` tree**, not a real copy. Harmless for local
+  development, but it means the release cannot survive being copied
+  anywhere else — exactly what a Homebrew install does (build in a
+  throwaway sandbox, then the result lives permanently in the Cellar).
+  With `dev_mode` off, relx copies real files, and the release is fully
+  relocatable — verified by copying a built release to an unrelated
+  path and running `symbolic parse` from there successfully.
+
+Other channels, not yet built, for reference:
+
 - **Nix flake** — reproducible build matrix across platforms.
 - **Install script** — detects OS/arch, downloads the right release tarball.
 - **Docker** image — for CI and container users.
@@ -194,7 +210,7 @@ EUnit/Common Test/PropEr/coverage setup this relies on.
 | Arg parsing / subcommands | [`argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html) (stdlib, OTP 25+) | OTP stdlib |
 | ANSI color | `erlang_color` | [github](https://github.com/julianduque/erlang-color) |
 | Real CLI to read | `observer_cli` (1.5k★) | [github](https://github.com/zhongwencool/observer_cli) |
-| Distribution | Homebrew tap / Nix flake / install script | per §4 |
+| Distribution | Homebrew tap (done) / Nix flake / install script | per §4 |
 
 ## References
 

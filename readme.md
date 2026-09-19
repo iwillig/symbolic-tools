@@ -403,6 +403,24 @@ function the doc claims exists but doesn't.
 
 ## Install
 
+### Via Homebrew
+
+```sh
+brew tap iwillig/symbolic-tools https://github.com/iwillig/symbolic-tools
+brew install symbolic-tools
+```
+
+This builds a real, relocatable release — `dev_mode` is off specifically
+so the release doesn't depend on this repo's checkout still existing
+afterward (confirmed by testing: with `dev_mode` on, the release's `lib/`
+entries are symlinks back into the build tree, which breaks the moment
+Homebrew's own temporary build sandbox is cleaned up). `Formula/symbolic-
+tools.rb` is the actual formula, verified end-to-end with a real local
+`brew install --build-from-source`. There's no tagged release yet, so
+the tap builds from `main` directly.
+
+### From source
+
 Symbolic Tools is written in Erlang and built with rebar3.
 
 ```sh
@@ -426,9 +444,8 @@ ln -sf "$(pwd)/_build/default/rel/symbolic_tools/bin/symbolic" /opt/homebrew/bin
 A plain symlink works because `scripts/symbolic` resolves through
 symlinks itself before locating the release's `lib/` directory — don't
 `cp` the script elsewhere instead, that breaks it. This keeps the actual
-files inside this checkout (don't move or delete the repo afterward); for
-a build that's relocatable on its own, see `docs/cli-erlang.md` §4
-(`dev_mode`/`include_erts`).
+files inside this checkout (don't move or delete the repo afterward) —
+the Homebrew install above doesn't have that limitation.
 
 ## Development
 
