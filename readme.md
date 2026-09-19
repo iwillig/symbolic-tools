@@ -407,8 +407,18 @@ function the doc claims exists but doesn't.
 
 ```sh
 brew tap iwillig/symbolic-tools https://github.com/iwillig/symbolic-tools
+brew trust iwillig/symbolic-tools
 brew install symbolic-tools
 ```
+
+The explicit URL on `brew tap` matters — `brew tap iwillig/symbolic-tools`
+on its own guesses a repo named `homebrew-symbolic-tools`, which doesn't
+exist, and fails with a confusing `could not read Username` error rather
+than a clear "not found" (git's response to a nonexistent repo and a
+private one it can't see look identical over HTTPS). `brew trust` is
+required too — Homebrew doesn't run formulae from a third-party tap
+until it's explicitly trusted, and skipping this step will fail (or
+silently no-op) the install.
 
 This builds a real, relocatable release — `dev_mode` is off specifically
 so the release doesn't depend on this repo's checkout still existing
@@ -416,8 +426,8 @@ afterward (confirmed by testing: with `dev_mode` on, the release's `lib/`
 entries are symlinks back into the build tree, which breaks the moment
 Homebrew's own temporary build sandbox is cleaned up). `Formula/symbolic-
 tools.rb` is the actual formula, verified end-to-end with a real local
-`brew install --build-from-source`. There's no tagged release yet, so
-the tap builds from `main` directly.
+`brew install --build-from-source`, and builds from the tagged `v0.1.0`
+release.
 
 ### From source
 
