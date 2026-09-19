@@ -472,6 +472,9 @@ cross-references. Grouped by concern:
   `cli-erlang.md` (the CLI), `prolog-store.md` (fact storage/caching).
 - **Extraction** — `tree-sitter-erlang.md` (code, via `symbolic_ts`),
   `tree-sitter-markdown.md` (docs).
+- **Usage** — `agent-examples.md` (worked, verified examples of an LLM
+  agent using the fact base over MCP — orientation, impact analysis, a
+  risk audit, a doc-coverage check, and catching documentation drift).
 - **Natural language** — `nlp-tooling.md` (survey of what's available on
   the BEAM), `curt-approach.md` (parsing NL into Prolog facts),
   `lorp-approach.md`, `grpo-prolog-tool.md` (the research this project is
