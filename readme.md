@@ -1,5 +1,7 @@
 # Symbolic Tools
 
+[![CI](https://github.com/iwillig/symbolic-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/iwillig/symbolic-tools/actions/workflows/ci.yml)
+
 A command-line tool (and MCP server) that gives LLM agents — and humans —
 a **Prolog database and query interpreter for a software codebase**,
 instead of a chat log full of grep results and re-read files.
