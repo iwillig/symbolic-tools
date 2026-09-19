@@ -77,16 +77,18 @@ Inspired by the [Chiasmus MCP Server](https://github.com/yogthos/chiasmus).
 
 ## Supported languages
 
-**TypeScript and Erlang**, both real today via `symbolic parse` — `defines`,
-`calls` (including distinguishing plain calls from method calls in
-TypeScript, and local from remote calls in Erlang), `comment`, and `doc`
-facts (every comment, plus which ones document a specific function),
-dogfooded against this repo's own source and a real-world-style `.ts`
-file. **Markdown** is real too, for `.md` files — `heading`, `code_block`,
-and `paragraph` facts, so `readme.md`/`docs/*.md` become queryable the
-same way; a fenced `erlang`/`ts`/`typescript` block also gets re-parsed
-into `example_defines`/`example_calls` facts, so a query can catch a
-doc's code sample showing a function the real codebase doesn't (or no
+**TypeScript, Erlang, and Bash**, all real today via `symbolic parse` —
+`defines`, `calls` (distinguishing plain calls from method calls in
+TypeScript, local from remote calls in Erlang, and just `local` calls
+in Bash, which has no qualified-call syntax to tell apart from a bare
+one), `comment`, and `doc` facts (every comment, plus which ones
+document a specific function), dogfooded against this repo's own
+source and a real-world-style `.ts` file. **Markdown** is real too, for
+`.md` files — `heading`, `code_block`, and `paragraph` facts, so
+`readme.md`/`docs/*.md` become queryable the same way; a fenced
+`erlang`/`ts`/`typescript`/`sh`/`bash` block also gets re-parsed into
+`example_defines`/`example_calls` facts, so a query can catch a doc's
+code sample showing a function the real codebase doesn't (or no
 longer) have. See `docs/tree-sitter-markdown.md` for what's implemented
 (block structure) versus deferred (`link/4`, which needs a second,
 currently unimplemented grammar pass). **TOML and JSON** are real too —
@@ -409,10 +411,52 @@ thing entirely (an array-*of-tables* header, not an array value) and is
 walked normally, as the `config_section`/`config_value` facts above
 show.
 
+### Parsing Bash
+
+```sh
+# Deploys the app to the given environment.
+deploy() {
+  build
+  rsync -avz dist/ "$1":/srv/app
+}
+
+# Builds the release artifact.
+build() {
+  npm run build
+}
+```
+
+```sh
+$ symbolic parse .
+comment('deploy.sh',1,'Deploys the app to the given environment.').
+comment('deploy.sh',7,'Builds the release artifact.').
+defines(build,'deploy.sh',8).
+defines(deploy,'deploy.sh',2).
+calls(build,local(npm),'deploy.sh',9).
+calls(deploy,local(build),'deploy.sh',3).
+calls(deploy,local(rsync),'deploy.sh',4).
+doc(build,'deploy.sh',8,'Builds the release artifact.').
+doc(deploy,'deploy.sh',2,'Deploys the app to the given environment.').
+
+$ symbolic query -file facts.pl 'calls(deploy, X, _, Line)'
+Line = 3
+X = local(build)
+```
+
+Every `calls/4` fact is `local(...)` — Bash has no qualified-call
+syntax (nothing like Erlang's `mod:fun()` or TypeScript's `obj.method()`)
+to tell a call to a function defined in this same script apart from a
+call to an external program or a builtin, so this project doesn't
+pretend to know the difference either; `local(build)` and
+`local(rsync)` look exactly alike, on purpose. A fenced `sh`/`bash`
+block in a Markdown doc gets the same `example_defines`/`example_calls`
+re-extraction TypeScript/Erlang blocks already get — see "Catching
+stale doc examples" below, which works identically for a shell snippet.
+
 ### Catching stale doc examples
 
-A fenced code block tagged `erlang`, `ts`, or `typescript` gets re-parsed
-by the same real extractors that parse actual source — the code a doc
+A fenced code block tagged `erlang`, `ts`, `typescript`, `sh`, or `bash`
+gets re-parsed by the same real extractors that parse actual source — the code a doc
 *shows* becomes `example_defines`/`example_calls` facts, a deliberately
 different predicate than `defines`/`calls` so a query can ask "does the
 codebase still actually have this" without conflating the two. Parse a

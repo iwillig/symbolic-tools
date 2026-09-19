@@ -19,7 +19,9 @@ run_checked(Dir) ->
                     filelib:wildcard(filename:join(Dir, "**/*.ts")) ++
                     filelib:wildcard(filename:join(Dir, "**/*.md")) ++
                     filelib:wildcard(filename:join(Dir, "**/*.toml")) ++
-                    filelib:wildcard(filename:join(Dir, "**/*.json")),
+                    filelib:wildcard(filename:join(Dir, "**/*.json")) ++
+                    filelib:wildcard(filename:join(Dir, "**/*.sh")) ++
+                    filelib:wildcard(filename:join(Dir, "**/*.bash")),
             Facts = lists:usort(lists:flatmap(fun ts_extract:file/1, Files)),
             lists:foreach(fun print_fact/1, Facts),
             halt(0);

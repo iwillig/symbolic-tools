@@ -212,6 +212,29 @@ setting that aside: anchors, aliases, and tags are first-class node
 types that can wrap a value in place of a plain scalar, so a "get the
 value" extraction has to handle all three cases, not just leaf scalars.
 
+### 5.2 Back to code (done for real: Bash)
+
+Unlike TOML/JSON, Bash has real functions and call sites, so it reuses
+the exact `defines`/`calls`/`comment`/`doc` shape §5.1 contrasted itself
+against — `src/ts_extract_bash.erl` is close to a line-for-line mirror
+of `ts_extract_erlang.erl`. One real difference: `calls/4` only ever
+produces `local(Command)`, never `remote`/`member` the way
+Erlang/TypeScript can — Bash has no qualified-call syntax
+(`mod:fun()`, `obj.method()`) to distinguish a call to a function
+defined in the same script from a call to an external program or a
+builtin, so this project doesn't invent a distinction the language
+itself doesn't make. Confirmed empirically, not assumed: a `command`
+node's own callee name is a `command_name` field (queryable directly,
+no unwrapping needed), and `function_definition`/`comment` nodes are
+siblings of each other and of top-level `command`s the same way
+Erlang's `function_clause`/`comment` are — the same `node_parent/1`
+caller-attribution walk and `node_next_sibling/1`/`node_prev_sibling/1`
+doc-comment-run walk already built for Erlang/TypeScript apply
+unchanged. Also wired into `ts_extract_markdown.erl`'s
+`example_defines`/`example_calls` re-extraction (§4/`readme.md`'s
+"Catching stale doc examples") for `sh`/`bash`-tagged fenced blocks,
+alongside the languages already there.
+
 ## 6. Pitfalls
 
 - **ABI pinning.** The `libtree-sitter` runtime and every grammar must share a
@@ -314,10 +337,11 @@ This is roughly the path actually followed, kept for reference:
 - [`tree-sitter/tree-sitter-typescript`](https://github.com/tree-sitter/tree-sitter-typescript),
   [`tree-sitter-grammars/tree-sitter-markdown`](https://github.com/tree-sitter-grammars/tree-sitter-markdown),
   [`ikatyang/tree-sitter-toml`](https://github.com/ikatyang/tree-sitter-toml),
-  [`tree-sitter/tree-sitter-json`](https://github.com/tree-sitter/tree-sitter-json)
-  — the TypeScript, Markdown, TOML, and JSON grammars, vendored at
-  `c_src/grammars/{typescript,markdown,toml,json}/`. Erlang's own grammar
-  (`c_src/grammars/erlang/`) traces back to
+  [`tree-sitter/tree-sitter-json`](https://github.com/tree-sitter/tree-sitter-json),
+  [`tree-sitter/tree-sitter-bash`](https://github.com/tree-sitter/tree-sitter-bash)
+  — the TypeScript, Markdown, TOML, JSON, and Bash grammars, vendored at
+  `c_src/grammars/{typescript,markdown,toml,json,bash}/`. Erlang's own
+  grammar (`c_src/grammars/erlang/`) traces back to
   [`tree-sitter-erlang`](https://github.com/WhatsApp/tree-sitter-erlang).
   [`ikatyang/tree-sitter-yaml`](https://github.com/ikatyang/tree-sitter-yaml)
   was investigated but deliberately not vendored — see §5.1's C++

@@ -32,3 +32,9 @@ function shout(word: string): string {
   return word.toUpperCase();
 }
 ```
+
+```sh
+deploy() {
+  build
+}
+```

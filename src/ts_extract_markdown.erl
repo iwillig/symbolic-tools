@@ -17,9 +17,10 @@
 %%%   example_calls(Caller, CallSpec, File, Line)
 %%%
 %%% `example_defines`/`example_calls` re-run the real
-%%% ts_extract_erlang/ts_extract_typescript extractors against a fenced
-%%% code block's own text (only for `erlang`/`ts`/`typescript`-tagged
-%%% fences), with `File` set to *this* Markdown file rather than a
+%%% ts_extract_erlang/ts_extract_typescript/ts_extract_bash extractors
+%%% against a fenced code block's own text (only for
+%%% `erlang`/`ts`/`typescript`/`sh`/`bash`-tagged fences), with `File`
+%%% set to *this* Markdown file rather than a
 %%% synthetic path, and `Line` offset to this file's real line numbers.
 %%% Deliberately a **different predicate name** than `defines/3`/
 %%% `calls/4`, not the same predicate reused with an .md `File` — this
@@ -156,6 +157,8 @@ example_facts_for_block(Node, Src, Path) ->
 extractor_for_lang(erlang) -> fun ts_extract_erlang:text/2;
 extractor_for_lang(ts) -> fun ts_extract_typescript:text/2;
 extractor_for_lang(typescript) -> fun ts_extract_typescript:text/2;
+extractor_for_lang(sh) -> fun ts_extract_bash:text/2;
+extractor_for_lang(bash) -> fun ts_extract_bash:text/2;
 extractor_for_lang(_) -> undefined.
 
 example_fact({defines, Name, File, Line}, Offset) ->

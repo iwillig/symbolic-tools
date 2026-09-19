@@ -33,7 +33,8 @@ extracts_example_defines_test() ->
     Path = list_to_atom(?FIXTURE),
     ?assert(lists:member({example_defines, greet, Path, 23}, Facts)),
     ?assert(lists:member({example_defines, hello, Path, 26}, Facts)),
-    ?assert(lists:member({example_defines, shout, Path, 31}, Facts)).
+    ?assert(lists:member({example_defines, shout, Path, 31}, Facts)),
+    ?assert(lists:member({example_defines, deploy, Path, 37}, Facts)).
 
 extracts_example_calls_test() ->
     Facts = ts_extract_markdown:file(?FIXTURE),
@@ -41,7 +42,9 @@ extracts_example_calls_test() ->
     ?assert(lists:member({example_calls, greet, {local, hello}, Path, 24}, Facts)),
     ?assert(lists:member({example_calls, hello, {remote, io, format}, Path, 27}, Facts)),
     ?assert(lists:member(
-        {example_calls, shout, {member, word, toUpperCase}, Path, 32}, Facts)).
+        {example_calls, shout, {member, word, toUpperCase}, Path, 32}, Facts)),
+    ?assert(lists:member(
+        {example_calls, deploy, {local, build}, Path, 38}, Facts)).
 
 unsupported_lang_has_no_example_facts_test() ->
     Facts = ts_extract_markdown:file(?FIXTURE),
