@@ -168,6 +168,21 @@ rather than guessing.
   compatible ABI version. Pin all vendored sources to known-good versions and
   bump the runtime + grammars together; a mismatch is a hard link/runtime failure,
   not a graceful error.
+- **Linux needs `_DEFAULT_SOURCE`/`_POSIX_C_SOURCE`, or the NIF builds
+  fine and fails to *load*.** Confirmed by a real CI failure on
+  `ubuntu-latest`, not caught locally (this project is developed on
+  macOS): the vendored `c_src/tree-sitter/src/unicode.h` always
+  includes its own `portable/endian.h`, which on Linux just falls
+  through to glibc's real `<endian.h>` — but glibc only *declares*
+  `le16toh`/`be16toh`/etc. under one of those feature-test macros.
+  Without them, the compiler accepts an implicit external declaration
+  (a warning, not a build error, since a NIF `.so` resolves symbols
+  lazily), and no such symbol exists anywhere at runtime to satisfy it
+  — so it fails at `erlang:load_nif/2` with "undefined symbol:
+  le16toh", not at compile time. `rebar.config`'s `port_env` `CFLAGS`
+  now sets both flags, matching what upstream tree-sitter's own
+  Makefile always did (lost when this project's build moved onto the
+  `pc` plugin instead of that Makefile).
 - **Don't call `symbolic_ts:init/0` yourself.** It's the module's
   `-on_load` hook, invoked automatically the first time `symbolic_ts` is
   referenced. Calling it again crashes the runtime with a boot-time
