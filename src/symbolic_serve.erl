@@ -11,10 +11,12 @@
 %%%
 %%% Four tools, one session per prolog_start_session call
 %%% (prolog_session_registry maps an opaque session id to its
-%%% prolog_session pid). Results are plain text (erlog terms rendered via
-%%% erlog_io:writeq1/1, the same as symbolic_query.erl already does) —
-%%% full structured erlog<->JSON marshalling (docs/erlang-mcp-design.md
-%%% §4) is deliberately deferred.
+%%% prolog_session pid). Results are plain text, with each bound value
+%%% rendered as JSON via symbolic_term_json.erl (the same fix applied to
+%%% symbolic_query.erl's CLI output — erlog_io:writeq1/1 doesn't escape
+%%% an atom's embedded single quotes at all) — full structured
+%%% erlog<->JSON marshalling (docs/erlang-mcp-design.md §4) is
+%%% deliberately deferred.
 %%%
 %%% Confirmed by reading erlmcp_stdio_server.erl: it already wraps every
 %%% handler call in try/catch and turns a crash into a proper JSON-RPC
@@ -118,8 +120,12 @@ with_session(SessionId, Fun) ->
 render_bindings([]) ->
     <<"Yes.">>;
 render_bindings(Bindings) ->
+    %% ~ts, not ~s, for the JSON value — see symbolic_parse.erl's
+    %% print_fact/1 for why (a plain ~s mangles a binary's non-ASCII
+    %% UTF-8 bytes).
     Lines = [
-        io_lib:format("~s = ~s", [name_to_list(Name), erlog_io:writeq1(Value)])
+        io_lib:format("~s = ~ts",
+            [name_to_list(Name), jsx:encode(symbolic_term_json:encode_term(Value))])
      || {Name, Value} <- Bindings
     ],
     iolist_to_binary(lists:join("\n", Lines)).

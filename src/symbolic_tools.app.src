@@ -6,7 +6,8 @@
         kernel,
         stdlib,
         erlog,
-        erlmcp
+        erlmcp,
+        jsx
     ]},
     {env, []},
     {modules, []},

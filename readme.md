@@ -70,8 +70,9 @@ source files ──tree-sitter (symbolic_ts NIF)──> facts (defs, calls, impo
   `docs/tree-sitter-erlang.md` §2), extracts facts from source files
   in-process as well — no subprocess per parse. See
   `docs/tree-sitter-erlang.md`.
-- Extracted facts are cached as a content-hashed, consultable `.pl` file
-  between runs. See `docs/prolog-store.md`.
+- Extracted facts are written into a DETS database (Erlang's own
+  on-disk term store) between runs — no Prolog text parsing involved in
+  either direction. See `docs/prolog-store.md` §7.
 
 Inspired by the [Chiasmus MCP Server](https://github.com/yogthos/chiasmus).
 
@@ -107,8 +108,10 @@ Makefiles).
 
 ## Tools
 
-- **CLI** — `symbolic parse` walks a folder and emits Prolog facts;
-  `symbolic query` loads a fact file and runs a query against it. See
+- **CLI** — `symbolic parse` walks a folder, prints facts as JSON, and
+  optionally writes them into a fact database (`-db`); `symbolic query`
+  loads that database and runs a query against it, with an optional
+  hand-written rule file (`-rules`) consulted alongside the facts. See
   `docs/cli-erlang.md`.
 - **MCP server** — `symbolic serve` exposes the same Prolog session and
   fact base over the Model Context Protocol, so an LLM agent can consult
@@ -117,10 +120,10 @@ Makefiles).
 ## Usage
 
 ```sh
-symbolic                                          # prints usage
-symbolic parse ./src                              # extract Prolog facts from a folder
-symbolic query -file facts.pl 'depends_on(X, Y)'  # ask a question about the codebase
-symbolic serve                                    # start the MCP server (stdio transport)
+symbolic                                              # prints usage
+symbolic parse ./src -db facts.dets                   # extract facts, print JSON, write a fact database
+symbolic query -db facts.dets 'depends_on(X, Y)'      # ask a question about the codebase
+symbolic serve                                        # start the MCP server (stdio transport)
 ```
 
 All three work end-to-end, run via a `rebar3 release` (see Install)
@@ -128,8 +131,8 @@ rather than `rebar3 escriptize` — `parse` and `serve` both need real
 files on disk at runtime (`parse` for `symbolic_ts`'s NIF, `serve` for
 `erlmcp`'s supervision tree), and neither works from inside an escript's
 zip archive (a real limitation found while building this, not a bug; see
-`docs/cli-erlang.md` §1/§1.1). Flags use a single dash (`-file`, not
-`--file`) — that's [stdlib `argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html)'s
+`docs/cli-erlang.md` §1/§1.1). Flags use a single dash (`-db`, `-rules`,
+not `--db`/`--rules`) — that's [stdlib `argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html)'s
 own convention, which `symbolic_cli` uses for all argument parsing and
 usage/help text.
 
@@ -160,20 +163,26 @@ function capitalize(word: string): string {
 
 ```sh
 $ symbolic parse .
-comment('greeter.ts',1,'Formats a full name from its parts.').
-comment('greeter.ts',12,'Capitalizes the first letter of a word.').
-comment('greeter.ts',17,'TODO: handle names with a middle name too').
-defines(capitalize,'greeter.ts',13).
-defines(formatName,'greeter.ts',2).
-defines(greet,'greeter.ts',6).
-calls(capitalize,member(word,toUpperCase),'greeter.ts',14).
-calls(formatName,local(capitalize),'greeter.ts',3).
-calls(greet,local(formatName),'greeter.ts',7).
-calls(greet,member(console,log),'greeter.ts',8).
-calls(greet,member('this.logger',info),'greeter.ts',9).
-doc(capitalize,'greeter.ts',13,'Capitalizes the first letter of a word.').
-doc(formatName,'greeter.ts',2,'Formats a full name from its parts.').
+["comment","greeter.ts",1,"Formats a full name from its parts."]
+["comment","greeter.ts",12,"Capitalizes the first letter of a word."]
+["comment","greeter.ts",17,"TODO: handle names with a middle name too"]
+["defines","capitalize","greeter.ts",13]
+["defines","formatName","greeter.ts",2]
+["defines","greet","greeter.ts",6]
+["calls","capitalize",["member","word","toUpperCase"],"greeter.ts",14]
+["calls","formatName",["local","capitalize"],"greeter.ts",3]
+["calls","greet",["local","formatName"],"greeter.ts",7]
+["calls","greet",["member","console","log"],"greeter.ts",8]
+["calls","greet",["member","this.logger","info"],"greeter.ts",9]
+["doc","capitalize","greeter.ts",13,"Capitalizes the first letter of a word."]
+["doc","formatName","greeter.ts",2,"Formats a full name from its parts."]
 ```
+
+Facts print as JSON Lines — one JSON array per fact, `[Functor, Arg1,
+Arg2, ...]` — instead of Prolog text, fixing a real bug the old
+Prolog-text printer had: it didn't escape an atom's embedded single
+quote at all, corrupting ordinary prose ("it's", "doesn't") in
+`comment`/`doc` text. See `docs/prolog-store.md` §7.
 
 A plain call (`bar()`) becomes `local(bar)`; a method call (`obj.method()`)
 becomes `member(obj, method)` — so a query can tell "calls that function
@@ -194,93 +203,89 @@ missing sibling the way it does to a missing parent).
 
 ### Querying the facts
 
-`parse` and `query` are separate steps around an ordinary `.pl` file, so
-save the output and start asking it things:
+`parse -db` writes a fact database; `query -db` reads it back and asserts
+the facts directly (no text parsing either way — see
+`docs/prolog-store.md` §7):
 
 ```sh
-$ symbolic parse . > facts.pl
+$ symbolic parse . -db facts.dets
 
-$ symbolic query -file facts.pl 'calls(X, local(capitalize), _, _)'
-X = formatName                      # the only caller of capitalize
+$ symbolic query -db facts.dets 'calls(X, local(capitalize), _, _)'
+X = "formatName"                    # the only caller of capitalize
 
-$ symbolic query -file facts.pl 'defines(formatName, File, Line)'
-File = 'greeter.ts'
+$ symbolic query -db facts.dets 'defines(formatName, File, Line)'
+File = "greeter.ts"
 Line = 2
 
-$ symbolic query -file facts.pl 'calls(X, member(console, _), _, _)'
-X = greet                           # who calls a method on console
+$ symbolic query -db facts.dets 'calls(X, member(console, _), _, _)'
+X = "greet"                         # who calls a method on console
 
-$ symbolic query -file facts.pl 'calls(greet, X, _, Line)'
+$ symbolic query -db facts.dets 'calls(greet, X, _, Line)'
 Line = 7
-X = local(formatName)               # greet's first call — one solution at a time
+X = ["local","formatName"]          # greet's first call — one solution at a time
 
-$ symbolic query -file facts.pl 'calls(capitalize, member(_, missingMethod), _, _)'
+$ symbolic query -db facts.dets 'calls(capitalize, member(_, missingMethod), _, _)'
 No.                                 # capitalize never calls a method by that name
 
-$ symbolic query -file facts.pl 'doc(formatName, File, Line, Text)'
-File = 'greeter.ts'
+$ symbolic query -db facts.dets 'doc(formatName, File, Line, Text)'
+File = "greeter.ts"
 Line = 2
-Text = 'Formats a full name from its parts.'
+Text = "Formats a full name from its parts."
 
-$ symbolic query -file facts.pl 'defines(F, _, _), \+ doc(F, _, _, _)'
-F = greet                           # which functions have no doc comment
+$ symbolic query -db facts.dets 'defines(F, _, _), \+ doc(F, _, _, _)'
+F = "greet"                         # which functions have no doc comment
 
-$ symbolic query -file facts.pl 'comment(File, Line, Text), \+ doc(_, _, _, Text)'
-File = 'greeter.ts'
+$ symbolic query -db facts.dets 'comment(File, Line, Text), \+ doc(_, _, _, Text)'
+File = "greeter.ts"
 Line = 17
-Text = 'TODO: handle names with a middle name too'   # comments not attached to any definition
+Text = "TODO: handle names with a middle name too"   # comments not attached to any definition
 ```
 
-Because it's a real fact base, not a grep result, this composes: combine
-facts from multiple `parse` runs into one file, hand-edit it, or ask
+A bound value prints as JSON (`docs/prolog-store.md` §7) — a plain atom
+or binary prints the same way (`"formatName"`), so the type distinction
+between an identifier and free text (`docs/prolog-schema.md`) only
+matters when *writing* a rule, not when reading a query's answer.
+Because it's a real fact base, not a grep result, this composes: point
+`-rules` at a file of hand-written derived predicates (below), or ask
 something no text search could answer directly — "what calls a method on
 `console`" is just `calls(X, member(console, _), _, _)`, and "which
 functions are undocumented" is just `defines(F, _, _), \+ doc(F, _, _, _)`.
 
-### Searching doc strings
+### Deriving your own rules with `-rules`
 
-`Text` is an ordinary atom, so a query can match it exactly (as above) or
-search *inside* it — erlog ships `atom_codes/2` and `append/3` but no
-`sub_atom/5`, so a substring test is one line of Prolog, written using
-those two: split the text's code list at every position (`append(_,
-Suffix, Codes)`) and check whether the word's own codes are a prefix of
-that suffix (`append(Sub, _, Suffix)`). Rather than repeat that inline —
-which works, but leaks its own scratch variables (`Codes`, `Sub`,
-`Suffix`) into the printed bindings since they're free in the query term
-— define it once as a rule and append it to the fact file, the same
-"hand-edit the `.pl` file" workflow as above:
+Any hand-written Prolog belongs in its own `.pl` file, consulted
+alongside the fact database — the facts and the rules are two different
+kinds of thing (extracted data vs. logic you wrote), and only the rules
+are ever real Prolog *text* on disk:
 
 ```sh
-$ cat >> facts.pl << 'EOF'
-
-contains(Text, Word) :-
-    atom_codes(Text, Codes),
-    atom_codes(Word, Sub),
-    append(_, Suffix, Codes),
-    append(Sub, _, Suffix).
+$ cat > rules.pl << 'EOF'
+undocumented(Fun, File, Line) :-
+    defines(Fun, File, Line),
+    \+ doc(Fun, _, _, _).
 EOF
 
-$ symbolic query -file facts.pl 'doc(Fun, File, Line, Text), contains(Text, first)'
-File = 'greeter.ts'
-Fun = capitalize
-Line = 13
-Text = 'Capitalizes the first letter of a word.'
-
-$ symbolic query -file facts.pl 'doc(Fun, File, Line, Text), contains(Text, name)'
-File = 'greeter.ts'
-Fun = formatName
-Line = 2
-Text = 'Formats a full name from its parts.'
-
-$ symbolic query -file facts.pl 'doc(Fun, File, Line, Text), contains(Text, xyz)'
-No.                                 # no doc string mentions "xyz"
+$ symbolic query -db facts.dets -rules rules.pl 'findall(F, undocumented(F, _, _), Fs)'
+F = [0]
+Fs = ["greet"]
 ```
 
-Because `Word` is bound by the caller before `contains/2` runs, its
-internal variables never become free in the top-level query — only
-`Fun`/`File`/`Line`/`Text` show up in the answer. This is the same
-substring search a "find the doc-comment that mentions X" tool call would
-run, just issued by hand here.
+`F = [0]` is `findall/3`'s own template variable, unbound outside the
+call (standard Prolog semantics, not a bug) — erlog represents an
+unbound variable as a 1-tuple internally, which prints as a 1-element
+JSON array rather than the `_0` a Prolog-text printer would show; `Fs`
+is the answer that matters. See `docs/lint-queries.md` for a much larger
+rule library built the same way.
+
+**A real limitation, not glossed over:** free-text fields like `Text`
+above are Erlang binaries, not atoms (`docs/prolog-schema.md`) — the fix
+for the old printer's quote-escaping bug and its 200-character
+truncation. erlog's only text-inspection builtin, `atom_codes/2`,
+requires an actual atom and raises `type_error(atom, ...)` on a binary,
+so a substring-search rule over `Text` (e.g. "find the doc comment that
+mentions X") can't currently be written in pure Prolog against this
+fact base. A real fix needs a binary-aware string builtin in erlog, or
+an Erlang-side helper exposed to it — not yet done.
 
 ### Parsing Markdown
 
@@ -303,31 +308,36 @@ No config needed yet.
 ````
 
 ```sh
-$ symbolic parse .
-code_block('notes.md',sh,8).
-paragraph('notes.md','A short intro paragraph that wraps onto a second line.',3).
-paragraph('notes.md','No config needed yet.',15).
-heading('notes.md',1,'Getting Started',1).
-heading('notes.md',2,'Configuration',13).
-heading('notes.md',2,'Installation',6).
+$ symbolic parse . -db facts.dets
+["code_block","notes.md","sh",8]
+["paragraph","notes.md","A short intro paragraph that wraps onto a second line.",3]
+["paragraph","notes.md","No config needed yet.",15]
+["example_calls","undefined",["local","brew"],"notes.md",9]
+["example_calls","undefined",["local","rebar3"],"notes.md",10]
+["heading","notes.md",1,"Getting Started",1]
+["heading","notes.md",2,"Configuration",13]
+["heading","notes.md",2,"Installation",6]
 
-$ symbolic parse . > facts.pl
-
-$ symbolic query -file facts.pl 'heading(File, 2, Text, Line)'
-File = 'notes.md'
+$ symbolic query -db facts.dets 'heading(File, 2, Text, Line)'
+File = "notes.md"
 Line = 13
-Text = 'Configuration'              # one solution — ask again for the next
+Text = "Configuration"              # one solution — ask again for the next
 
-$ symbolic query -file facts.pl 'code_block(File, Lang, Line)'
-File = 'notes.md'
-Lang = sh
+$ symbolic query -db facts.dets 'code_block(File, Lang, Line)'
+File = "notes.md"
+Lang = "sh"
 Line = 8
 
-$ symbolic query -file facts.pl 'paragraph(File, Text, Line)'
-File = 'notes.md'
+$ symbolic query -db facts.dets 'paragraph(File, Text, Line)'
+File = "notes.md"
 Line = 3
-Text = 'A short intro paragraph that wraps onto a second line.'
+Text = "A short intro paragraph that wraps onto a second line."
 ```
+
+The `example_calls` facts come from the `sh`-tagged fence being
+re-parsed as Bash (`Caller = "undefined"` since `brew bundle`/`rebar3
+release` are bare top-level commands, not inside any function) — see
+"Parsing Bash" below.
 
 A paragraph that wraps onto a second source line with no blank line in
 between is still one fact, not two — `paragraph/3` collapses the embedded
@@ -372,18 +382,18 @@ path = "src/main.rs"
 
 ```sh
 $ symbolic parse .
-config_section('Cargo.toml',bin,8).
-config_section('Cargo.toml',dependencies,5).
-config_section('Cargo.toml',package,1).
-config_section('package.json',dependencies,4).
-config_value('Cargo.toml','bin.name',cli,9).
-config_value('Cargo.toml','bin.path','src/main.rs',10).
-config_value('Cargo.toml','dependencies.serde','1.0',6).
-config_value('Cargo.toml','package.name',example,2).
-config_value('Cargo.toml','package.version','0.1.0',3).
-config_value('package.json','dependencies.left-pad','^1.3.0',5).
-config_value('package.json',name,example,2).
-config_value('package.json',version,'0.1.0',3).
+["config_section","Cargo.toml","bin",8]
+["config_section","Cargo.toml","dependencies",5]
+["config_section","Cargo.toml","package",1]
+["config_section","package.json","dependencies",4]
+["config_value","Cargo.toml","bin.name","cli",9]
+["config_value","Cargo.toml","bin.path","src/main.rs",10]
+["config_value","Cargo.toml","dependencies.serde","1.0",6]
+["config_value","Cargo.toml","package.name","example",2]
+["config_value","Cargo.toml","package.version","0.1.0",3]
+["config_value","package.json","dependencies.left-pad","^1.3.0",5]
+["config_value","package.json","name","example",2]
+["config_value","package.json","version","0.1.0",3]
 ```
 
 Both files produce the *same* two predicates — `config_value`/
@@ -391,14 +401,14 @@ Both files produce the *same* two predicates — `config_value`/
 format it's asking about:
 
 ```sh
-$ symbolic parse . > facts.pl
+$ symbolic parse . -db facts.dets
 
-$ symbolic query -file facts.pl 'config_value(File, name, Value, _)'
-File = 'package.json'
-Value = example
+$ symbolic query -db facts.dets 'config_value(File, name, Value, _)'
+File = "package.json"
+Value = "example"
 
-$ symbolic query -file facts.pl 'config_section(File, dependencies, Line)'
-File = 'Cargo.toml'
+$ symbolic query -db facts.dets 'config_section(File, dependencies, Line)'
+File = "Cargo.toml"
 Line = 5
 ```
 
@@ -427,20 +437,20 @@ build() {
 ```
 
 ```sh
-$ symbolic parse .
-comment('deploy.sh',1,'Deploys the app to the given environment.').
-comment('deploy.sh',7,'Builds the release artifact.').
-defines(build,'deploy.sh',8).
-defines(deploy,'deploy.sh',2).
-calls(build,local(npm),'deploy.sh',9).
-calls(deploy,local(build),'deploy.sh',3).
-calls(deploy,local(rsync),'deploy.sh',4).
-doc(build,'deploy.sh',8,'Builds the release artifact.').
-doc(deploy,'deploy.sh',2,'Deploys the app to the given environment.').
+$ symbolic parse . -db facts.dets
+["comment","deploy.sh",1,"Deploys the app to the given environment."]
+["comment","deploy.sh",7,"Builds the release artifact."]
+["defines","build","deploy.sh",8]
+["defines","deploy","deploy.sh",2]
+["calls","build",["local","npm"],"deploy.sh",9]
+["calls","deploy",["local","build"],"deploy.sh",3]
+["calls","deploy",["local","rsync"],"deploy.sh",4]
+["doc","build","deploy.sh",8,"Builds the release artifact."]
+["doc","deploy","deploy.sh",2,"Deploys the app to the given environment."]
 
-$ symbolic query -file facts.pl 'calls(deploy, X, _, Line)'
+$ symbolic query -db facts.dets 'calls(deploy, X, _, Line)'
 Line = 3
-X = local(build)
+X = ["local","build"]
 ```
 
 Every `calls/4` fact is `local(...)` — Bash has no qualified-call
@@ -487,33 +497,32 @@ function shout(word: string): string {
 ````
 
 ```sh
-$ symbolic parse .
-code_block('guide.md',ts,5).
-defines(capitalize,'greeter.ts',5).
-defines(formatName,'greeter.ts',1).
-example_defines(shout,'guide.md',6).
-paragraph('guide.md','Use `capitalize` to fix casing, and `shout` for emphasis:',3).
-calls(capitalize,member(word,toUpperCase),'greeter.ts',6).
-calls(formatName,local(capitalize),'greeter.ts',2).
-example_calls(shout,local(capitalize),'guide.md',7).
-heading('guide.md',1,'Formatting Names',1).
+$ symbolic parse . -db facts.dets
+["code_block","guide.md","ts",5]
+["defines","capitalize","greeter.ts",5]
+["defines","formatName","greeter.ts",1]
+["example_defines","shout","guide.md",6]
+["paragraph","guide.md","Use `capitalize` to fix casing, and `shout` for emphasis:",3]
+["calls","capitalize",["member","word","toUpperCase"],"greeter.ts",6]
+["calls","formatName",["local","capitalize"],"greeter.ts",2]
+["example_calls","shout",["local","capitalize"],"guide.md",7]
+["heading","guide.md",1,"Formatting Names",1]
 ```
 
 `guide.md`'s sample defines `shout` — a function that was never actually
-added to `greeter.ts`. Append the check once, hand-editing the fact file
-the same way the `contains/2` example above does:
+added to `greeter.ts`. Write the check to its own rules file and load
+it alongside the facts:
 
 ```sh
-$ cat >> facts.pl << 'EOF'
-
+$ cat > rules.pl << 'EOF'
 stale_doc_example(Fun, DocFile, Line) :-
     example_defines(Fun, DocFile, Line),
     \+ defines(Fun, _, _).
 EOF
 
-$ symbolic query -file facts.pl 'stale_doc_example(Fun, DocFile, Line)'
-DocFile = 'guide.md'
-Fun = shout
+$ symbolic query -db facts.dets -rules rules.pl 'stale_doc_example(Fun, DocFile, Line)'
+DocFile = "guide.md"
+Fun = "shout"
 Line = 6
 ```
 

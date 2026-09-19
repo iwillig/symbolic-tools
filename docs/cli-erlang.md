@@ -89,7 +89,8 @@ argv, `argparse` (§2) dispatches — except it runs against the release's
 real on-disk `ebin`/`priv` directories instead of a zip, so `symbolic_ts`'s
 NIF loads correctly. `symbolic parse` now works from the built binary
 (`_build/default/rel/symbolic_tools/bin/symbolic`), verified end-to-end
-including composing with `query` (parse → facts file → query).
+including composing with `query` (parse -db facts.dets → query -db
+facts.dets).
 
 ## 2. Entry point, subcommands, and argument parsing
 
@@ -114,27 +115,32 @@ cli() ->
 
 query_cmd() ->
     #{
-        help => "Load a Prolog fact file and prove a goal against it",
+        help => "Load a fact database and prove a goal against it",
         arguments => [
-            #{name => file, long => "file", required => true,
-              help => "Path to a Prolog fact file (.pl)"},
+            #{name => db, long => "db", required => true,
+              help => "Path to a fact database (.dets)"},
+            #{name => rules, long => "rules", required => false,
+              help => "Optional hand-written Prolog rule file (.pl)"},
             #{name => goal, help => "Goal to prove, e.g. \"foo(X)\""}
         ],
-        handler => fun(#{file := File, goal := Goal}) ->
-            symbolic_query:run(File, Goal)
+        handler => fun(Args) ->
+            #{db := Db, goal := Goal} = Args,
+            symbolic_query:run(Db, maps:get(rules, Args, undefined), Goal)
         end
     }.
 ```
 
-- `query` — load a facts file and run a Prolog query through
+- `query` — load a DETS-backed fact database
+  ([`prolog-store.md`](prolog-store.md)) and run a Prolog query through
   [`erlog`](https://github.com/rvirding/erlog)
-  ([`erlang-mcp-design.md`](erlang-mcp-design.md)). **Implemented.**
+  ([`erlang-mcp-design.md`](erlang-mcp-design.md)), with an optional
+  hand-written `-rules` file consulted alongside the facts (for derived
+  rules like [`lint-queries.md`](lint-queries.md)'s). **Implemented.**
 - `parse` — walk a folder, run the tree-sitter extraction
-  ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), emit Prolog facts.
-  **Stubbed** — validates the directory exists, prints "not yet
-  implemented," `halt(1)`; not faked.
-- A future `serve` subcommand would start the MCP server supervisor
-  instead — not yet added.
+  ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), print facts as JSON,
+  and optionally write them into a fact database via `-db`. **Implemented.**
+- `serve` starts the MCP server supervisor
+  ([`erlang-mcp-design.md`](erlang-mcp-design.md)). **Implemented.**
 
 **Sharp edge, verified by running the built escript**: `argparse`'s
 default prefix is a *single* dash — `long => "file"` produces `-file`, not

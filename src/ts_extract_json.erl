@@ -30,8 +30,7 @@
 %%% no such child at all, handled as the empty string, not a crash.
 -module(ts_extract_json).
 -export([file/1]).
-
--define(MAX_ATOM_TEXT, 200).
+-import(ts_extract_text, [to_atom/1, to_text/1]).
 
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
@@ -76,7 +75,7 @@ walk_pair(PairNode, PathPrefix, Src, PathAtom) ->
                     [{config_section, PathAtom, to_atom(Path), Line}
                      | walk_object(ValueNode, Path, Src, PathAtom)];
                 _ ->
-                    [{config_value, PathAtom, to_atom(Path), to_atom(leaf_value(ValueNode, Src)), Line}]
+                    [{config_value, PathAtom, to_atom(Path), to_text(leaf_value(ValueNode, Src)), Line}]
             end;
         _ ->
             []
@@ -111,13 +110,3 @@ find_named_child_by_type(Node, Type, I, Count) ->
 
 line(Node) ->
     maps:get(row, symbolic_ts:node_start_point(Node)) + 1.
-
-%% Erlang atoms are capped at 255 bytes — truncate rather than crash on
-%% a long value, same fix already applied in the other extractors.
-to_atom(Text) when is_binary(Text) -> to_atom(binary_to_list(Text));
-to_atom(Text) when is_list(Text) -> list_to_atom(truncate(Text)).
-
-truncate(Text) when length(Text) > ?MAX_ATOM_TEXT ->
-    lists:sublist(Text, ?MAX_ATOM_TEXT) ++ "...";
-truncate(Text) ->
-    Text.

@@ -20,25 +20,31 @@ cli() ->
 
 query_cmd() ->
     #{
-        help => "Load a Prolog fact file and prove a goal against it",
+        help => "Load a fact database and prove a goal against it",
         arguments => [
-            #{name => file, long => "file", required => true,
-              help => "Path to a Prolog fact file (.pl)"},
+            #{name => db, long => "db", required => true,
+              help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
+            #{name => rules, long => "rules", required => false,
+              help => "Optional hand-written Prolog rule file (.pl) to consult alongside the facts"},
             #{name => goal, help => "Goal to prove, e.g. \"foo(X)\""}
         ],
-        handler => fun(#{file := File, goal := Goal}) ->
-            symbolic_query:run(File, Goal)
+        handler => fun(Args) ->
+            #{db := Db, goal := Goal} = Args,
+            symbolic_query:run(Db, maps:get(rules, Args, undefined), Goal)
         end
     }.
 
 parse_cmd() ->
     #{
-        help => "Walk a folder and extract Prolog facts from .erl files",
+        help => "Walk a folder, extract Prolog facts, and print them as JSON",
         arguments => [
-            #{name => dir, help => "Directory to walk"}
+            #{name => dir, help => "Directory to walk"},
+            #{name => db, long => "db", required => false,
+              help => "Also write facts to this fact database (.dets), for `symbolic query --db`"}
         ],
-        handler => fun(#{dir := Dir}) ->
-            symbolic_parse:run(Dir)
+        handler => fun(Args) ->
+            #{dir := Dir} = Args,
+            symbolic_parse:run(Dir, maps:get(db, Args, undefined))
         end
     }.
 

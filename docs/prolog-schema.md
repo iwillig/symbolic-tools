@@ -35,6 +35,14 @@ and **config facts** (a key path resolving to a value) — see
 `docs/tree-sitter-erlang.md` §5.1 for why config data needed a
 different shape than code, and why Markdown needed a third one again.
 
+There's also a cross-cutting **type** split, orthogonal to the three
+shapes above: every predicate's short, query-literal-matched arguments
+(function/module/callee names, file paths, config key paths, language
+tags) are Erlang **atoms**; every predicate's free-text argument
+(`comment/3`/`doc/4`/`heading/4`/`paragraph/3`'s `Text`,
+`config_value/4`'s `Value`) is an Erlang **binary** instead — called out
+at each predicate below, with the reasoning under `doc/4`.
+
 ## Code facts: `defines/3`, `calls/4`, `comment/3`, `doc/4`
 
 Produced by `src/ts_extract_erlang.erl`, `src/ts_extract_typescript.erl`,
@@ -93,9 +101,12 @@ anything. `Text` is the comment's content with its language's own
 comment-marker syntax stripped (`%`/`%%` for Erlang, `//`/`/** */` for
 TypeScript, `#` for Bash) and, for a multi-line run (consecutive `//`
 lines, or a multi-line `/** ... */` block), joined into a single space-
-separated line — a quoted Prolog atom *can* legally contain a raw
-newline, but nothing else this project emits does, and there's no
-benefit to being the exception.
+separated line — legally a JSON string (and a quoted Prolog atom) *can*
+contain a raw newline, but nothing else this project emits does, and
+there's no benefit to being the exception.
+
+`Text` is an Erlang **binary**, not an atom — see the shared caveat
+below.
 
 ### `doc(Function, File, Line, Text)`
 
@@ -108,6 +119,7 @@ line (so it joins cleanly with that function's own `defines/3` fact),
 not the comment's own line. A comment with nothing recognizable
 following it (the last thing in a file, or followed by something that
 isn't a function) gets a `comment/3` fact and no `doc/4` fact at all.
+`Text` is a binary, same as `comment/3`.
 
 **Shared caveat across all three languages, worth knowing before
 walking siblings yourself:** `node_next_sibling/1`/`node_prev_sibling/1`
@@ -116,11 +128,19 @@ null resource checked via `node_is_null/1`, unlike `node_parent/1`.
 Calling `node_is_null/1` on `undefined` raises `badarg`. See
 `docs/tree-sitter-erlang.md` §6.
 
-**Shared caveat on text length:** any text-bearing argument above
-(`comment/3`'s `Text`, `doc/4`'s `Text`) is truncated at 200 characters
-before becoming an atom — Erlang atoms are capped at 255 bytes, hit for
-real during dogfooding on a long doc-comment run. A truncated value
-ends with `...`.
+**Shared caveat on `Text`'s type: binary, not atom, and unbounded.**
+`comment/3` and `doc/4`'s `Text` — and `heading/4`/`paragraph/3`'s
+`Text` and `config_value/4`'s `Value` below — are Erlang **binaries**
+(`ts_extract_text:to_text/1`), not atoms. Free text like this is never
+unified against a literal a person types in a query, unlike an
+identifier atom (a function name, a file path), so there's no reason to
+force it through `list_to_atom/1` at all. That used to truncate at 200
+characters (Erlang atoms are capped at 255 bytes, hit for real during
+dogfooding on a long doc-comment run) — as a binary it no longer needs
+to. **Identifier-like atoms elsewhere in this schema are still
+truncated at 200 characters** the same way (`ts_extract_text:to_atom/1`)
+— that's a genuinely different helper, kept separate for exactly this
+reason.
 
 ## Markdown structural facts
 
@@ -131,7 +151,8 @@ still-open inline-grammar/`link/4` work this doesn't cover).
 ### `heading(File, Level, Text, Line)`
 
 - **`Level`** — 1–6, from the number of `#` characters.
-- **`Text`** — the heading's own text, trimmed.
+- **`Text`** — the heading's own text, trimmed. A binary, not an atom —
+  see the shared caveat under `doc/4` above.
 
 **ATX (`#`) headings only** — the underline (setext) style isn't
 handled. A real, not hypothetical, scope limit: this repo's own docs
@@ -145,7 +166,8 @@ never use setext headings.
 
 ### `paragraph(File, Text, Line)`
 
-- **`Text`** — the paragraph's text. A soft-wrapped paragraph (multiple
+- **`Text`** — the paragraph's text (a binary, not an atom — see the
+  shared caveat under `doc/4` above). A soft-wrapped paragraph (multiple
   source lines, no blank line between them) is still *one* fact, its
   embedded newline collapsed into a single space, the same cleaning
   `comment/3`'s multi-line runs get.
@@ -201,10 +223,11 @@ of whether the file is a `Cargo.toml` or a `package.json`.
   nested tables/objects — there's no flat tree-sitter query that could
   produce a multi-level path directly, unlike every code-fact predicate
   above.
-- **`Value`** — the leaf's raw text (quotes stripped for strings) as an
-  atom. **Array values are captured whole, as one opaque leaf** — the
-  array's own raw source text, not walked element-by-element. A real,
-  deliberate scope limit for both formats, not a missing case.
+- **`Value`** — the leaf's raw text (quotes stripped for strings) as a
+  binary, not an atom — see the shared caveat under `doc/4` above.
+  **Array values are captured whole, as one opaque leaf** — the array's
+  own raw source text, not walked element-by-element. A real, deliberate
+  scope limit for both formats, not a missing case.
 
 ### `config_section(File, Path, Line)`
 

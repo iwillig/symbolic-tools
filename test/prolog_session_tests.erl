@@ -39,3 +39,19 @@ undefined_predicate_test() ->
     ok = prolog_session:consult(Pid, ?FIXTURE),
     ?assertMatch({error, _}, prolog_session:query(Pid, "nonexistent_predicate(X)")),
     prolog_session:stop(Pid).
+
+%% load_facts/2 asserts pre-built Erlang terms directly — no text
+%% parsing, so a binary value with an embedded quote (the exact shape
+%% that broke erlog_io:writeq1/1-based round trips) needs no escaping
+%% at all to load and query correctly.
+load_facts_and_query_test() ->
+    {ok, Pid} = prolog_session:start_link(),
+    ok = prolog_session:load_facts(Pid, [
+        {defines, foo, 'file.erl', 3},
+        {comment, 'file.erl', 1, <<"it's a test">>}
+    ]),
+    {ok, Bindings} = prolog_session:query(Pid, "defines(foo, File, Line)"),
+    ?assertEqual([{'File', 'file.erl'}, {'Line', 3}], Bindings),
+    {ok, TextBindings} = prolog_session:query(Pid, "comment(_, _, Text)"),
+    ?assertEqual([{'Text', <<"it's a test">>}], TextBindings),
+    prolog_session:stop(Pid).

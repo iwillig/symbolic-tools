@@ -69,6 +69,7 @@
 %%% things, not a hand-picked notion of "real" paragraphs.
 -module(ts_extract_markdown).
 -export([file/1]).
+-import(ts_extract_text, [to_atom/1, to_text/1]).
 
 -define(HEADING_QUERY, "(atx_heading) @h").
 -define(CODE_BLOCK_QUERY, "(fenced_code_block) @c").
@@ -101,7 +102,7 @@ heading_fact(Node, Src, PathAtom) ->
     Marker = symbolic_ts:node_named_child(Node, 0),
     Level = heading_level(symbolic_ts:node_type(Marker)),
     Content = symbolic_ts:node_child_by_field_name(Node, "heading_content"),
-    Text = to_atom(string:trim(symbolic_ts:node_text(Content, Src))),
+    Text = to_text(string:trim(symbolic_ts:node_text(Content, Src))),
     {heading, PathAtom, Level, Text, line(Node)}.
 
 heading_level("atx_h1_marker") -> 1;
@@ -175,7 +176,7 @@ paragraphs(Lang, Root, Src, PathAtom) ->
     lists:usort([paragraph_fact(N, Src, PathAtom) || N <- Nodes]).
 
 paragraph_fact(Node, Src, PathAtom) ->
-    Text = to_atom(clean_text(symbolic_ts:node_text(Node, Src))),
+    Text = to_text(clean_text(symbolic_ts:node_text(Node, Src))),
     {paragraph, PathAtom, Text, line(Node)}.
 
 %% Collapse a soft-wrapped paragraph's embedded newlines into a single
@@ -201,19 +202,3 @@ find_named_child_by_type(Node, Type, I, Count) ->
 
 line(Node) ->
     maps:get(row, symbolic_ts:node_start_point(Node)) + 1.
-
-%% Erlang atoms are capped at 255 bytes — confirmed by hitting it for
-%% real: `symbolic parse` on this project's own readme.md crashed with
-%% `system_limit` on a long paragraph's `list_to_atom/1`. Text fields
-%% (heading/paragraph text) aren't identifiers, so truncating past a
-%% generous length is a safe, simple fix rather than switching every text
-%% fact to a binary just to accommodate the rare long one.
--define(MAX_ATOM_TEXT, 200).
-
-to_atom(Text) when is_binary(Text) -> to_atom(binary_to_list(Text));
-to_atom(Text) when is_list(Text) -> list_to_atom(truncate(Text)).
-
-truncate(Text) when length(Text) > ?MAX_ATOM_TEXT ->
-    lists:sublist(Text, ?MAX_ATOM_TEXT) ++ "...";
-truncate(Text) ->
-    Text.

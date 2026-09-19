@@ -6,9 +6,9 @@
 extracts_heading_test() ->
     Facts = ts_extract_markdown:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
-    ?assert(lists:member({heading, Path, 1, 'Title', 1}, Facts)),
-    ?assert(lists:member({heading, Path, 2, 'Subheading', 8}, Facts)),
-    ?assert(lists:member({heading, Path, 3, 'Sub-subheading', 14}, Facts)).
+    ?assert(lists:member({heading, Path, 1, <<"Title">>, 1}, Facts)),
+    ?assert(lists:member({heading, Path, 2, <<"Subheading">>, 8}, Facts)),
+    ?assert(lists:member({heading, Path, 3, <<"Sub-subheading">>, 14}, Facts)).
 
 extracts_code_block_test() ->
     Facts = ts_extract_markdown:file(?FIXTURE),
@@ -19,9 +19,9 @@ extracts_code_block_test() ->
 extracts_paragraph_test() ->
     Facts = ts_extract_markdown:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
-    ?assert(lists:member({paragraph, Path, 'Some intro text.', 3}, Facts)),
+    ?assert(lists:member({paragraph, Path, <<"Some intro text.">>, 3}, Facts)),
     ?assert(lists:member(
-        {paragraph, Path, 'A paragraph that wraps onto a second line.', 5},
+        {paragraph, Path, <<"A paragraph that wraps onto a second line.">>, 5},
         Facts)).
 
 no_duplicate_facts_test() ->

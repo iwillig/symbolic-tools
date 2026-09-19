@@ -20,15 +20,15 @@ extracts_comment_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
     ?assert(lists:member(
-        {comment, Path, 1, 'Deploys the app to the given environment.'}, Facts)),
+        {comment, Path, 1, <<"Deploys the app to the given environment.">>}, Facts)),
     ?assert(lists:member(
-        {comment, Path, 11, 'standalone comment, not attached to anything'}, Facts)).
+        {comment, Path, 11, <<"standalone comment, not attached to anything">>}, Facts)).
 
 extracts_doc_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
     ?assert(lists:member(
-        {doc, deploy, Path, 2, 'Deploys the app to the given environment.'}, Facts)).
+        {doc, deploy, Path, 2, <<"Deploys the app to the given environment.">>}, Facts)).
 
 standalone_comment_has_no_doc_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),

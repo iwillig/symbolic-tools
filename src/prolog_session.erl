@@ -5,7 +5,7 @@
 -module(prolog_session).
 -behaviour(gen_server).
 
--export([start_link/0, consult/2, consult_string/2, query/2, query/3, stop/1]).
+-export([start_link/0, consult/2, consult_string/2, load_facts/2, query/2, query/3, stop/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
 
 -define(QUERY_TIMEOUT_MS, 5000).
@@ -22,6 +22,20 @@ consult(Pid, File) ->
 -spec consult_string(pid(), string() | binary()) -> ok | {error, term()}.
 consult_string(Pid, ProgramText) ->
     gen_server:call(Pid, {consult_string, ProgramText}).
+
+%% Assert a pre-built list of fact tuples directly into the session's
+%% database — no text parsing, unlike consult/2 or consult_string/2 (see
+%% symbolic_fact_store.erl, which is where such a list normally comes
+%% from: a DETS-backed fact database written by `symbolic parse --db`).
+%% Uses `asserta`, not `assertz`: order is irrelevant for pure facts (it
+%% only affects backtracking order, never correctness), and
+%% erlog_db_dict's assertz_clause/4 appends via `Cs ++ [_]` — O(N) per
+%% call, so assertz-ing thousands of facts sharing one predicate would
+%% be O(N^2). asserta prepends in O(1) (confirmed by reading
+%% erlog_int.erl/erlog_db_dict.erl directly, not assumed).
+-spec load_facts(pid(), [tuple()]) -> ok.
+load_facts(Pid, Facts) ->
+    gen_server:call(Pid, {load_facts, Facts}, infinity).
 
 -spec query(pid(), string()) ->
     {ok, [{atom(), term()}]} | no_solution | {error, term()}.
@@ -70,6 +84,13 @@ handle_call({consult_string, ProgramText}, _From, Erl) ->
     after
         file:delete(TmpFile)
     end;
+handle_call({load_facts, Facts}, _From, Erl) ->
+    Erl1 = lists:foldl(
+        fun(Fact, ErlAcc) ->
+            {{succeed, _}, ErlAcc1} = erlog:prove({asserta, Fact}, ErlAcc),
+            ErlAcc1
+        end, Erl, Facts),
+    {reply, ok, Erl1};
 handle_call({query, GoalString, TimeoutMs}, _From, Erl) ->
     case parse_goal(GoalString) of
         {ok, Goal} ->

@@ -60,31 +60,33 @@ reading either file in isolation; it only shows up once both are facts
 in the same base.
 
 ```sh
-$ symbolic parse . > facts.pl
-$ cat facts.pl
-code_block('guide.md',ts,5).
-code_block('guide.md',ts,14).
-comment('payments.ts',1,'Charges a card for the given amount, delegating to the Stripe API.').
-comment('payments.ts',7,'Refunds a previous charge by its Stripe charge id.').
-defines(charge,'payments.ts',2).
-defines(refund,'payments.ts',8).
-defines(validateCard,'payments.ts',12).
-example_defines(authorize,'guide.md',15).
-example_defines(charge,'guide.md',6).
-paragraph('guide.md','Call `authorize` first if you need a separate authorization step before charging the card:',11).
-paragraph('guide.md','`charge` takes a card token and an amount in cents:',3).
-calls(charge,local(validateCard),'payments.ts',3).
-calls(charge,member(stripeClient,createCharge),'payments.ts',4).
-calls(refund,member(stripeClient,createRefund),'payments.ts',9).
-doc(charge,'payments.ts',2,'Charges a card for the given amount, delegating to the Stripe API.').
-doc(refund,'payments.ts',8,'Refunds a previous charge by its Stripe charge id.').
-example_calls(authorize,member(stripeClient,createAuthorization),'guide.md',16).
-example_calls(charge,member(stripeClient,createCharge),'guide.md',7).
-heading('guide.md',1,'Payments Module',1).
+$ symbolic parse . -db facts.dets
+["code_block","guide.md","ts",5]
+["code_block","guide.md","ts",14]
+["comment","payments.ts",1,"Charges a card for the given amount, delegating to the Stripe API."]
+["comment","payments.ts",7,"Refunds a previous charge by its Stripe charge id."]
+["defines","charge","payments.ts",2]
+["defines","refund","payments.ts",8]
+["defines","validateCard","payments.ts",12]
+["example_defines","authorize","guide.md",15]
+["example_defines","charge","guide.md",6]
+["paragraph","guide.md","Call `authorize` first if you need a separate authorization step before charging the card:",11]
+["paragraph","guide.md","`charge` takes a card token and an amount in cents:",3]
+["calls","charge",["local","validateCard"],"payments.ts",3]
+["calls","charge",["member","stripeClient","createCharge"],"payments.ts",4]
+["calls","refund",["member","stripeClient","createRefund"],"payments.ts",9]
+["doc","charge","payments.ts",2,"Charges a card for the given amount, delegating to the Stripe API."]
+["doc","refund","payments.ts",8,"Refunds a previous charge by its Stripe charge id."]
+["example_calls","authorize",["member","stripeClient","createAuthorization"],"guide.md",16]
+["example_calls","charge",["member","stripeClient","createCharge"],"guide.md",7]
+["heading","guide.md",1,"Payments Module",1]
 ```
 
-Same "hand-edit the fact file" workflow the readme already establishes:
-a few small helper rules, appended once, unlock every scenario below —
+Facts print as JSON Lines, not raw Prolog text (`docs/prolog-store.md`
+§7) — one JSON array per fact. `parse -db` also writes the same facts
+into a DETS database (`facts.dets`); write a few small helper rules to
+their own file and load it alongside that database to unlock every
+scenario below —
 
 ```prolog
 callees(Fun, Callees) :-
@@ -121,13 +123,13 @@ An agent dropped into an unfamiliar codebase and asked to change
 what it *does* underneath. Both are one query each, no file open needed:
 
 ```sh
-$ symbolic query -file facts.pl 'doc(charge, File, Line, Text)'
-File = 'payments.ts'
+$ symbolic query -db facts.dets -rules rules.pl 'doc(charge, File, Line, Text)'
+File = "payments.ts"
 Line = 2
-Text = 'Charges a card for the given amount, delegating to the Stripe API.'
+Text = "Charges a card for the given amount, delegating to the Stripe API."
 
-$ symbolic query -file facts.pl 'callees(charge, Callees)'
-Callees = [local(validateCard),member(stripeClient,createCharge)]
+$ symbolic query -db facts.dets -rules rules.pl 'callees(charge, Callees)'
+Callees = [["local","validateCard"],["member","stripeClient","createCharge"]]
 ```
 
 `callees/2` (defined above) uses `findall/3` to collect every call site
@@ -142,8 +144,8 @@ the kind of thing a text search gets wrong the moment there's a second
 function with a similar name, or the call is qualified differently.
 
 ```sh
-$ symbolic query -file facts.pl 'callers(validateCard, Callers)'
-Callers = [charge]
+$ symbolic query -db facts.dets -rules rules.pl 'callers(validateCard, Callers)'
+Callers = ["charge"]
 ```
 
 One caller, so a rename is a two-file — well, two-*call-site* — change,
@@ -159,15 +161,20 @@ text pattern — `member(stripeClient, _)` call sites, not any line
 containing the word "stripe":
 
 ```sh
-$ symbolic query -file facts.pl 'findall(F, calls_object(F, stripeClient), Fs)'
-F = _0
-Fs = [charge,refund]
+$ symbolic query -db facts.dets -rules rules.pl 'findall(F, calls_object(F, stripeClient), Fs)'
+F = [0]
+Fs = ["charge","refund"]
 ```
 
-`F = _0` here is an honest artifact worth understanding rather than
+`F = [0]` here is an honest artifact worth understanding rather than
 hiding: `F` is only bound *inside* each solution `findall/3` collects
 into `Fs`, not in the surrounding query itself — standard Prolog
-semantics, not a bug in this project. `Fs` is the answer that matters.
+semantics, not a bug in this project. erlog represents an unbound
+variable internally as a 1-tuple (its own `erlog.erl` header: "Variables
+- {Name} where Name is an atom or integer"), which prints as the
+1-element JSON array `[0]` rather than the `_0` a Prolog-text printer
+would show (`docs/prolog-store.md` §7) — `Fs` is the answer that
+matters either way.
 
 ### 4. Coverage check: "Which functions have no doc comment?"
 
@@ -175,9 +182,9 @@ Useful both for an agent auditing its own generated code before a PR,
 and for a human deciding where to spend documentation effort:
 
 ```sh
-$ symbolic query -file facts.pl 'findall(F, undocumented(F, _, _), Fs)'
-F = _0
-Fs = [validateCard]
+$ symbolic query -db facts.dets -rules rules.pl 'findall(F, undocumented(F, _, _), Fs)'
+F = [0]
+Fs = ["validateCard"]
 ```
 
 `charge` and `refund` both have doc comments (see `doc/4` in the fact
@@ -192,9 +199,9 @@ The motivating example for `example_defines/3` (see
 sample was never actually added to `payments.ts`:
 
 ```sh
-$ symbolic query -file facts.pl 'stale_doc_example(Fun, DocFile, Line)'
-DocFile = 'guide.md'
-Fun = authorize
+$ symbolic query -db facts.dets -rules rules.pl 'stale_doc_example(Fun, DocFile, Line)'
+DocFile = "guide.md"
+Fun = "authorize"
 Line = 15
 ```
 
@@ -204,14 +211,18 @@ answer instead of a wish to "please read both files carefully."
 
 ## Wiring this into an actual agent session, over MCP
 
-Everything above used the CLI (`symbolic query -file facts.pl ...`) for
-readability, but an LLM agent talks to a **live, persistent session**
-over MCP (`symbolic serve`), not a fresh CLI process per question — see
-`docs/erlang-mcp-design.md`. Same facts, same rules, same answers; the
-difference is the transport. This is a real, captured JSON-RPC exchange
-against a running `symbolic serve` process — driven by a small script
-issuing exactly the four tool calls `symbolic_serve.erl` exposes
-(`docs/erlang-mcp-design.md` §3), not hand-typed:
+Everything above used the CLI (`symbolic query -db facts.dets -rules
+rules.pl ...`) for readability, but an LLM agent talks to a **live,
+persistent session** over MCP (`symbolic serve`), not a fresh CLI
+process per question — see `docs/erlang-mcp-design.md`. Same facts,
+same rules, same answers; the difference is the transport. This is a
+real, captured JSON-RPC exchange against a running `symbolic serve`
+process — driven by a small script issuing exactly the four tool calls
+`symbolic_serve.erl` exposes (`docs/erlang-mcp-design.md` §3), not
+hand-typed. `prolog_query`'s bound results print as JSON now too
+(`DocFile = "guide.md"`, not `DocFile = 'guide.md'`) — the same
+`symbolic_term_json.erl` fix `symbolic query`'s CLI output got (see
+`docs/prolog-store.md` §7).
 
 **1. Handshake** (`initialize`) — once per connection:
 
@@ -241,17 +252,27 @@ session id the agent threads through every later call:
 {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "prolog_start_session", "arguments": {}}}
 ```
 ```json
-{"id": 2, "jsonrpc": "2.0", "result": {"content": [{"text": "2uSBxIe92Gq6lwog92bL3bWQ", "type": "text"}]}}
+{"id": 2, "jsonrpc": "2.0", "result": {"content": [{"text": "et91vScnjmg7DOSL6uCqUasy", "type": "text"}]}}
 ```
 
-**3. Load the facts** (`prolog_consult`) — the agent sends the whole
-`facts.pl` content (parsed facts plus the five helper rules above) as
-one string; a real `symbolic parse` run would produce this text, an
-agent would just pass it straight through instead of round-tripping it
-through a file:
+**3. Load the facts** (`prolog_consult`) — `prolog_consult` takes real
+Prolog **text**, consulted via the ordinary, unchanged
+`prolog_session:consult_string/2` path, so this demonstrates that raw
+MCP capability directly: the agent sends a hand-written Prolog program
+(the facts above, written out as literal Prolog syntax, plus the five
+helper rules) as one string. This is **not** how the CLI's `symbolic
+parse -db` pipeline loads facts anymore, though — that writes/reads a
+DETS database and asserts terms directly, with no Prolog text involved
+at all (`docs/prolog-store.md` §7). An agent driving `symbolic serve`
+today would more naturally send just the five rules this way (real,
+short, hand-written Prolog) and get the extracted facts into the same
+session some other way — a `prolog_consult` call per fact, or a future
+tool that loads a DETS file directly — rather than reconstructing a
+`.pl`-text version of a fact base that isn't produced anywhere in this
+form any more:
 
 ```json
-{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "prolog_consult", "arguments": {"session_id": "2uSBxIe92Gq6lwog92bL3bWQ", "program": "<facts.pl text>"}}}
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "prolog_consult", "arguments": {"session_id": "et91vScnjmg7DOSL6uCqUasy", "program": "<the facts + rules, as literal Prolog text>"}}}
 ```
 ```json
 {"id": 3, "jsonrpc": "2.0", "result": {"content": [{"text": "ok", "type": "text"}]}}
@@ -261,14 +282,14 @@ through a file:
 scenario from above, asked the same way an agent would:
 
 ```json
-{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "prolog_query", "arguments": {"session_id": "2uSBxIe92Gq6lwog92bL3bWQ", "goal": "stale_doc_example(Fun, DocFile, Line)"}}}
+{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "prolog_query", "arguments": {"session_id": "et91vScnjmg7DOSL6uCqUasy", "goal": "stale_doc_example(Fun, DocFile, Line)"}}}
 ```
 ```json
 {
   "id": 4,
   "jsonrpc": "2.0",
   "result": {
-    "content": [{"text": "DocFile = 'guide.md'\nFun = authorize\nLine = 15", "type": "text"}]
+    "content": [{"text": "DocFile = \"guide.md\"\nFun = \"authorize\"\nLine = 15", "type": "text"}]
   }
 }
 ```

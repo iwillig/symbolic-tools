@@ -33,12 +33,11 @@
 %%% directly, no unwrapping needed.
 -module(ts_extract_bash).
 -export([file/1, text/2]).
+-import(ts_extract_text, [to_atom/1, to_text/1]).
 
 -define(DEF_QUERY, "(function_definition name: (word) @fun_name)").
 -define(CALL_QUERY, "(command name: (command_name) @callee)").
 -define(COMMENT_QUERY, "(comment) @c").
-
--define(MAX_ATOM_TEXT, 200).
 
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
@@ -152,25 +151,17 @@ line(Node) ->
     maps:get(row, symbolic_ts:node_start_point(Node)) + 1.
 
 %% Comment text cleaning: strip leading `#` and join a run into one
-%% line — same reasoning as ts_extract_erlang.erl's equivalent.
+%% line — same reasoning as ts_extract_erlang.erl's equivalent. Rendered
+%% as a binary (ts_extract_text:to_text/1), not an atom — see that
+%% module's identical clean_join/1 for why.
 clean_join(Texts) ->
     Lines = lists:flatmap(fun to_lines/1, Texts),
     Cleaned = [clean_line(L) || L <- Lines],
     NonEmpty = [L || L <- Cleaned, L =/= ""],
-    to_atom(lists:flatten(lists:join(" ", NonEmpty))).
+    to_text(lists:flatten(lists:join(" ", NonEmpty))).
 
 to_lines(Text) when is_binary(Text) -> to_lines(binary_to_list(Text));
 to_lines(Text) when is_list(Text) -> string:split(Text, "\n", all).
 
 clean_line(Line) ->
     string:trim(string:trim(Line, leading, "#")).
-
-%% Erlang atoms are capped at 255 bytes — truncate rather than crash on
-%% a long value, same fix already applied in the other extractors.
-to_atom(Text) when is_binary(Text) -> to_atom(binary_to_list(Text));
-to_atom(Text) when is_list(Text) -> list_to_atom(truncate(Text)).
-
-truncate(Text) when length(Text) > ?MAX_ATOM_TEXT ->
-    lists:sublist(Text, ?MAX_ATOM_TEXT) ++ "...";
-truncate(Text) ->
-    Text.
