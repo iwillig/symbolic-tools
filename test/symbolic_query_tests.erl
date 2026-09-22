@@ -817,6 +817,147 @@ restricted_export_is_clean_with_zero_export_facts_test() ->
             symbolic_query:run_result(?DB, real_rules(), "restricted_export(_, _, _, _)"))
     end).
 
+%% --- Statement/block structure: no_empty_block/5, unreachable_stmt/4,
+%% no_fallthrough_case/5, curly_violation/5, inconsistent_return/3 ---
+%%
+%% Facts hand-built here rather than via a live parse, same reasoning
+%% as the scope-facts section above — extraction-layer coverage
+%% (including the switch-case-value exclusion and else-clause
+%% unwrapping bugs found while building this) lives in
+%% ts_extract_typescript_tests.erl.
+
+no_empty_block_flags_a_block_with_no_statements_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {stmt_block, b1, f, 0, block, 'p.ts', 1}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 1}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_empty_block(_, f, 0, File, Line)"))
+    end).
+
+no_empty_block_does_not_flag_a_block_with_a_statement_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {stmt_block, b1, f, 0, block, 'p.ts', 1},
+             {stmt, s1, b1, 0, expression_statement, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_empty_block(_, f, 0, _, _)"))
+    end).
+
+no_empty_block_is_clean_with_zero_block_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_empty_block(_, _, _, _, _)"))
+    end).
+
+%% A return_statement at index 0, then a later statement at index 1 in
+%% the same block — the later one is unreachable.
+unreachable_stmt_flags_a_statement_after_a_terminator_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {stmt_block, b1, f, 0, block, 'p.ts', 1},
+             {stmt, s1, b1, 0, return_statement, 'p.ts', 2},
+             {stmt, s2, b1, 1, expression_statement, 'p.ts', 3}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 3}]},
+            symbolic_query:run_result(?DB, real_rules(), "unreachable_stmt(_, b1, File, Line)"))
+    end).
+
+%% A lone terminator with nothing after it in the block must not flag
+%% anything — there's no later statement to be unreachable.
+unreachable_stmt_does_not_flag_a_terminator_with_nothing_after_it_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {stmt_block, b1, f, 0, block, 'p.ts', 1},
+             {stmt, s1, b1, 0, return_statement, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "unreachable_stmt(_, b1, _, _)"))
+    end).
+
+unreachable_stmt_is_clean_with_zero_stmt_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "unreachable_stmt(_, _, _, _)"))
+    end).
+
+%% A switch_case with statements whose LAST one isn't a terminator, and
+%% no last_switch_case/1 fact (so a case/default follows it) — falls
+%% through.
+no_fallthrough_case_flags_a_non_terminated_non_last_case_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {stmt_block, b1, f, 1, switch_case, 'p.ts', 2},
+             {stmt, s1, b1, 1, expression_statement, 'p.ts', 3}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_fallthrough_case(_, f, 1, File, Line)"))
+    end).
+
+%% An empty case (no stmt facts at all) immediately stacking into the
+%% next one is idiomatic (`case 1: case 2: ...`), not a bug — the
+%% Stmts \= [] exemption in no_fallthrough_case/5 must hold.
+no_fallthrough_case_does_not_flag_an_empty_stacked_case_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {stmt_block, b1, f, 1, switch_case, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_fallthrough_case(_, f, 1, _, _)"))
+    end).
+
+%% A last_switch_case/1 fact present means nothing follows — must not
+%% flag even though its last statement isn't a terminator.
+no_fallthrough_case_does_not_flag_the_last_case_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {stmt_block, b1, f, 1, switch_case, 'p.ts', 2},
+             {stmt, s1, b1, 1, expression_statement, 'p.ts', 3},
+             {last_switch_case, b1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_fallthrough_case(_, f, 1, _, _)"))
+    end).
+
+no_fallthrough_case_is_clean_with_zero_block_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_fallthrough_case(_, _, _, _, _)"))
+    end).
+
+curly_violation_flags_a_braceless_body_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {braceless_body, f, 0, 'if', 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(), "curly_violation(f, 0, 'if', File, Line)"))
+    end).
+
+%% A braceless_body fact for a different function must not leak into a
+%% query for one with none at all.
+curly_violation_does_not_flag_an_unrelated_function_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {defines, g, 0, <<"()">>, 'p.ts', 3},
+             {braceless_body, f, 0, 'if', 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "curly_violation(g, 0, _, _, _)"))
+    end).
+
+curly_violation_is_clean_with_zero_braceless_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "curly_violation(_, _, _, _, _)"))
+    end).
+
+inconsistent_return_flags_a_function_with_mixed_returns_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {return_stmt, f, 0, true, 'p.ts', 2},
+             {return_stmt, f, 0, false, 'p.ts', 3}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "inconsistent_return(f, 0, File)"))
+    end).
+
+%% Two returns that both specify a value are consistent — must not flag.
+inconsistent_return_does_not_flag_consistent_returns_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {return_stmt, f, 0, true, 'p.ts', 2},
+             {return_stmt, f, 0, true, 'p.ts', 3}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "inconsistent_return(f, 0, _)"))
+    end).
+
+inconsistent_return_is_clean_with_zero_return_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "inconsistent_return(_, _, _)"))
+    end).
+
 %% A scratch project under _build/: <root>/.symbolic/rules.pl, plus a
 %% data/ subdirectory to hang a fact database in and an other/ subtree
 %% with its own library, for the ordering tests. Fun gets the absolute

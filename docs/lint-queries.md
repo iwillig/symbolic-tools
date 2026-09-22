@@ -888,6 +888,100 @@ ran (see `docs/prolog-schema.md`), so `Foo(1)` after `import Foo from
 from a genuinely undeclared `Foo` — everywhere in the file, not just
 in one spot. Fixed by computing import bindings first.
 
+### Statement/block structure, on top of `stmt_block/6` + `stmt/6` + `last_switch_case/1` + `braceless_body/5` + `return_stmt/5`
+
+Five rules, all TypeScript only, on the new fact family documented in
+`docs/prolog-schema.md`: `no-unreachable`, `no-fallthrough`, `no-empty`
+(blocks only), `curly`, and `consistent-return`.
+
+```sh
+$ symbolic query -db facts.dets 'all_no_empty_blocks(X)'
+X = [["-",["-",["-","f",1],"sample.ts"],2]]
+
+$ symbolic query -db facts.dets 'all_unreachable_stmts(X)'
+X = [["-","sample.ts",7]]
+
+$ symbolic query -db facts.dets 'all_no_fallthrough_cases(X)'
+X = [["-",["-",["-","f",1],"sample.ts"],11]]
+
+$ symbolic query -db facts.dets 'all_curly_violations(X)'
+X = [["-",["-",["-",["-","f",1],"else"],"sample.ts"],21],["-",["-",["-",["-","f",1],"for"],"sample.ts"],23],["-",["-",["-",["-","f",1],"if"],"sample.ts"],20]]
+
+$ symbolic query -db facts.dets 'all_inconsistent_returns(X)'
+X = [["-",["-","f",1],"sample.ts"]]
+```
+
+All five against
+
+```ts
+function f(a: number): number {
+  if (a > 0) {
+  }
+
+  if (a > 1) {
+    return 1;
+    console.log("dead"); // unreachable
+  }
+
+  switch (a) {
+    case 1:
+      console.log("one");
+    case 2:
+      console.log("two");
+      break;
+    default:
+      console.log("other");
+  }
+
+  if (a) foo();
+  else bar();
+
+  for (let i = 0; i < a; i++) baz();
+
+  if (a === 2) {
+    return;
+  }
+  return a;
+}
+```
+
+`all_no_empty_blocks/1` flags only line 2's `if` body — the empty
+switch/case bodies further down aren't `block`-kind `stmt_block/6`
+facts at all, and a function's own empty body (a separate,
+much-noisier judgment call) is deliberately not this rule's concern.
+`all_unreachable_stmts/1` flags line 7's `console.log`, the statement
+sitting after `return 1;` in the same block — the *trailing comment*
+that would follow it in a trickier version of this file correctly
+produces nothing, since a comment is never itself a `stmt/6` fact.
+`all_no_fallthrough_cases/1` flags `case 1:` (reported at its own line,
+11) — it has a statement, and its last one (`console.log("one")`)
+isn't a terminator, and something case-shaped follows it; `case 2:`
+does **not** get flagged even though it's not `default`-shaped after
+it, because its own last statement (`break;`) *is* a terminator, and
+`default:` isn't flagged since nothing follows it at all
+(`last_switch_case/1`). `all_curly_violations/1` flags all three real
+brace-optional bodies — the braceless `if`/`else` pair and the
+braceless `for` — but never the `switch`'s own arms, which have no
+brace concept to violate. `all_inconsistent_returns/1` flags `f/1`
+once: it has a `return 1;` (has a value) and a bare `return;` (line 26,
+inside the last `if`) that don't agree — the final `return a;` on line
+28 doesn't change that, and doesn't need its own separate report.
+
+**Two real extraction bugs found by actually running this against a
+deliberately tricky file, not guessed at in advance**: a
+`switch_case`'s own case-value expression (the `1` in `case 1:`) was
+briefly counted as a statement itself, which would have permanently
+defeated the `case 1: case 2: ...` empty-case-stacking exemption above
+— fixed by excluding that specific child, matched by byte-span
+identity, not position. And `if_statement`'s `alternative` field
+turned out to always be wrapped in its own `else_clause` node (unlike
+`consequence`, which holds the statement directly) — checking that
+wrapper's own node type against `statement_block` always failed, so
+every braced `else { ... }` in the codebase was misreported as a curly
+violation; fixed by unwrapping `else_clause` first, and treating an
+`else if` chain (the wrapper's child is itself an `if_statement`) as
+never a violation for the `else` branch itself.
+
 ## References
 
 - [`agent-examples.md`](agent-examples.md) — the narrative version of

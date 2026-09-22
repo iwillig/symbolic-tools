@@ -703,3 +703,91 @@ restricted_export(Name, Kind, File, Line) :-
 all_restricted_exports(Triples) :-
     findall(Name-Kind-File-Line, restricted_export(Name, Kind, File, Line), Raw),
     sort(Raw, Triples).
+
+%% --- Statement/block structure, on top of stmt_block/6 + stmt/6 + last_switch_case/1 + braceless_body/5 + return_stmt/5 ---
+%%
+%% The last unbuilt bucket from the ESLint review, and less uniform
+%% than it looked: curly/consistent_return needed nothing beyond a flat
+%% per-node fact each (braceless_body/5, return_stmt/5); no_empty_block,
+%% unreachable_stmt, no_fallthrough_case needed the one genuinely new
+%% capability nothing before this had — a statement's *position* within
+%% its block, not just that it exists. TypeScript only (Erlang has no
+%% brace-optional if/for/while and no separate `return` statement at
+%% all — every rule here is a JS/TS-specific concept).
+stmt_block(none, none, 0, none, none, 0) :- fail.
+stmt(none, none, 0, none, none, 0) :- fail.
+last_switch_case(none) :- fail.
+braceless_body(none, 0, none, none, 0) :- fail.
+return_stmt(none, 0, none, none, 0) :- fail.
+
+terminator_kind('return_statement').
+terminator_kind('throw_statement').
+terminator_kind('break_statement').
+terminator_kind('continue_statement').
+
+%% A real {} block with zero statements — switch_case/switch_default
+%% deliberately excluded: an empty case immediately followed by another
+%% (`case 1: case 2: ...`) is idiomatic stacking, not this rule's
+%% concern (no_fallthrough_case/5 below is the one that cares, and
+%% explicitly allows it).
+no_empty_block(BlockId, Fun, Arity, File, Line) :-
+    stmt_block(BlockId, Fun, Arity, block, File, Line),
+    \+ stmt(_, BlockId, _, _, _, _).
+
+all_no_empty_blocks(Triples) :-
+    findall(Fun-Arity-File-Line, no_empty_block(_BlockId, Fun, Arity, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% Any statement whose Index comes after some terminator statement's
+%% Index in the SAME block — stmt/6's Index can have gaps (a filtered-
+%% out comment leaves its own slot empty), which is harmless here since
+%% this only ever compares Index values with `>`, never assumes they're
+%% contiguous.
+unreachable_stmt(Id, BlockId, File, Line) :-
+    stmt(_TermId, BlockId, TermIndex, TermKind, _, _),
+    terminator_kind(TermKind),
+    stmt(Id, BlockId, Index, _Kind, File, Line),
+    Index > TermIndex.
+
+all_unreachable_stmts(Triples) :-
+    findall(File-Line, unreachable_stmt(_Id, _BlockId, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% A switch_case/switch_default that (a) isn't the last one in its
+%% switch, (b) has at least one statement (an empty case is allowed to
+%% stack into the next — the ONLY exemption this rule has), and (c)
+%% whose last statement isn't a terminator.
+no_fallthrough_case(BlockId, Fun, Arity, File, Line) :-
+    stmt_block(BlockId, Fun, Arity, Kind, File, Line),
+    member(Kind, [switch_case, switch_default]),
+    \+ last_switch_case(BlockId),
+    findall(Idx-K, stmt(_, BlockId, Idx, K, _, _), Stmts),
+    Stmts \= [],
+    sort(Stmts, Sorted),
+    reverse(Sorted, [_-LastKind | _]),
+    \+ terminator_kind(LastKind).
+
+all_no_fallthrough_cases(Triples) :-
+    findall(Fun-Arity-File-Line, no_fallthrough_case(_BlockId, Fun, Arity, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% An if/else/for/while whose body is a single bare statement, not a
+%% real {} block.
+curly_violation(Fun, Arity, Kind, File, Line) :-
+    braceless_body(Fun, Arity, Kind, File, Line).
+
+all_curly_violations(Triples) :-
+    findall(Fun-Arity-Kind-File-Line, curly_violation(Fun, Arity, Kind, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% A function with at least one `return` that specifies a value AND at
+%% least one that doesn't — no control-flow-path analysis needed at
+%% all, real ESLint semantics just check the whole function's returns
+%% for consistency.
+inconsistent_return(Fun, Arity, File) :-
+    return_stmt(Fun, Arity, true, File, _),
+    return_stmt(Fun, Arity, false, File, _).
+
+all_inconsistent_returns(Triples) :-
+    findall(Fun-Arity-File, inconsistent_return(Fun, Arity, File), Raw),
+    sort(Raw, Triples).

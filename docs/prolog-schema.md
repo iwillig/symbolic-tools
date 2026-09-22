@@ -34,6 +34,11 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `bare_new/5` | TypeScript | A `new X()` whose constructed value is discarded outright |
 | `import_decl/4` | TypeScript | An `import` statement's raw module path |
 | `export_decl/4` | TypeScript | A name a file makes public, and how |
+| `stmt_block/6` | TypeScript | A `{}` block, `switch_case`, or `switch_default` exists |
+| `stmt/6` | TypeScript | One direct statement inside a `stmt_block/6`, with its position |
+| `last_switch_case/1` | TypeScript | That `switch_case`/`switch_default` has no case/default after it |
+| `braceless_body/5` | TypeScript | An `if`/`else`/`for`/`while` whose body is a single bare statement |
+| `return_stmt/5` | TypeScript | A `return`, and whether it specifies a value |
 | `heading/4` | Markdown | An ATX (`#`) heading |
 | `code_block/3` | Markdown | A fenced code block and its declared language |
 | `paragraph/3` | Markdown | A paragraph (or list-item) of body text |
@@ -444,6 +449,75 @@ each binding tied back to *which import statement* introduced it, a
 per-statement grouping key `var_decl/6` alone doesn't give cheaply, and
 it's the most purely stylistic rule in this group. A reasoned skip, not
 an oversight.
+
+### `stmt_block/6`, `stmt/6`, `last_switch_case/1`, `braceless_body/5`, `return_stmt/5`
+
+Statement/block *structure*, as opposed to expression content
+(`expr/6`, above) — **TypeScript only**, same reasoning as `scope/4`:
+Erlang has no brace-optional `if`/`for`/`while`, and no separate
+`return` statement at all.
+
+- **`stmt_block(BlockId, Fun, Arity, Kind, File, Line)`** — `Kind` is
+  `block` (a real `{}` `statement_block`), `switch_case`, or
+  `switch_default` — the latter two have no wrapping block node at all;
+  their own children *are* their statement list directly, confirmed
+  empirically. A flat query matches every block at every nesting depth
+  independently, same as `branch/5`'s `if_statement` matching both an
+  outer and a nested `else if` on its own.
+- **`stmt(Id, BlockId, Index, Kind, File, Line)`** — one fact per direct
+  statement inside a `stmt_block/6`, in source order. `Index` is the
+  statement's raw position among *all* the block's named children,
+  **not renumbered** after any exclusion below — a `switch_case` whose
+  own case-value expression sits at index 0 has its first real
+  statement at index 1, not 0. `Kind` is the statement's raw node type
+  as an atom (`return_statement`, `expression_statement`, ...) — no
+  curated allow-list, since the rules built on this only ever check
+  whether a `Kind` is one of the four *terminator* kinds
+  (`return_statement`/`throw_statement`/`break_statement`/
+  `continue_statement`, `terminator_kind/1` in `.symbolic/rules.pl`).
+  Two exclusions, both found as real bugs while building this rather
+  than guessed in advance: a **comment** is an ordinary named child of
+  its enclosing block (same fact this module's doc-comment code already
+  relies on), so a trailing comment after a `return` would otherwise
+  look like unreachable code; a `switch_case`'s own **case-value**
+  expression (the `1` in `case 1:`, its own addressable `"value"`
+  field, matched by byte-span identity rather than position) would
+  otherwise count as a "statement," permanently defeating the
+  empty-case-stacking exemption below.
+- **`last_switch_case(BlockId)`** — present only when nothing
+  case/default-shaped follows this `switch_case`/`switch_default` —
+  checked via its own next sibling, not by assuming only the literal
+  last clause in source needs it: a real `switch` can have `default`
+  anywhere, not just last.
+- **`braceless_body(Fun, Arity, Kind, File, Line)`** — `Kind` is `if`,
+  `else`, `for`, or `while`. One fact per construct whose body is a
+  single bare statement rather than a real `{}` block.
+  `if_statement`'s `consequence` field holds its statement directly,
+  but its `alternative` field is always wrapped in an `else_clause`
+  node first (confirmed empirically, unlike `consequence`) — unwrapped
+  before the same brace check applies. An `else if` chain (the
+  `else_clause`'s own child is itself an `if_statement`) is never
+  reported for the `else` branch itself — that's ordinary chaining, and
+  the nested `if` is checked independently for its own
+  `consequence`/`alternative`.
+- **`return_stmt(Fun, Arity, HasValue, File, Line)`** — `HasValue` is
+  `true` for `return x;`, `false` for a bare `return;` (zero named
+  children, confirmed empirically). Deliberately flat, no
+  control-flow-path analysis: real `consistent-return` semantics just
+  check whether every `return` in *one function* agrees on whether it
+  specifies a value, not whether every code path returns one.
+
+Same `existence_error`-on-zero-clauses guard as every other fact family
+above — one sentinel clause per predicate in `.symbolic/rules.pl`.
+
+An empty `case`/`default` (no `stmt/6` facts at all) immediately
+stacking into the next one (`case 1: case 2: foo(); break;`) is
+idiomatic, not a bug — `no_fallthrough_case/5` in `.symbolic/rules.pl`
+only flags a clause that *has* statements whose last one isn't a
+terminator, never a genuinely empty one. An empty function **body**
+specifically is deliberately not flagged by anything here either —
+`no-empty-function` needs the function's own emptiness, a different
+judgment call than a `{}` block being empty, and isn't built.
 
 ## Markdown structural facts
 

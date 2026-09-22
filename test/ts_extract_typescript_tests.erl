@@ -310,3 +310,104 @@ imported_names_resolve_to_their_import_binding_test() ->
     FooDecl = only_id([Id || {var_decl, Id, 'Foo', 'import', _, P, 1} <- Facts, P =:= Path]),
     FooRef = only_id([Id || {var_ref, Id, 'Foo', _, read, P, 3} <- Facts, P =:= Path]),
     ?assertEqual(FooDecl, only_id([D || {resolves_to, R, D} <- Facts, R =:= FooRef])).
+
+%% Exercises stmt_block/6 + stmt/6 + last_switch_case/1 together: a
+%% switch whose `default` clause comes FIRST (not last, so
+%% last_switch_case/1 must not fire for it) and whose `case 1` clause
+%% comes last (so it must fire); a function body block whose own
+%% direct children include a trailing comment after `return`, which
+%% must NOT show up as a stmt/6 fact (comments are ordinary named
+%% children of their enclosing block, same as everywhere else this
+%% extractor deals with them).
+extracts_stmt_block_facts_test() ->
+    Src =
+        "function f(a: number) {\n" %% 1
+        "  switch (a) {\n"          %% 2
+        "    default:\n"            %% 3
+        "      foo();\n"            %% 4
+        "    case 1:\n"             %% 5
+        "      bar();\n"            %% 6
+        "      break;\n"            %% 7
+        "  }\n"                     %% 8
+        "  return 1;\n"             %% 9
+        "  // trailing comment\n"   %% 10
+        "}\n",                      %% 11
+    Facts = ts_extract_typescript:text("scratch_stmt.ts", Src),
+    Path = 'scratch_stmt.ts',
+    OuterBody = only_id([Id || {stmt_block, Id, f, 1, block, P, _} <- Facts, P =:= Path]),
+    DefaultBlock = only_id([Id || {stmt_block, Id, f, 1, switch_default, P, _} <- Facts, P =:= Path]),
+    Case1Block = only_id([Id || {stmt_block, Id, f, 1, switch_case, P, _} <- Facts, P =:= Path]),
+
+    ?assertEqual(
+        lists:sort([{0, switch_statement}, {1, return_statement}]),
+        lists:sort([{Idx, K} || {stmt, _, B, Idx, K, _, _} <- Facts, B =:= OuterBody])),
+
+    ?assertEqual(
+        [{0, expression_statement}],
+        [{Idx, K} || {stmt, _, B, Idx, K, _, _} <- Facts, B =:= DefaultBlock]),
+
+    %% Indices 1/2, not 0/1 — Index is the child's raw position among
+    %% ALL named children (including the skipped case-value at index
+    %% 0), not renumbered after exclusion.
+    ?assertEqual(
+        lists:sort([{1, expression_statement}, {2, break_statement}]),
+        lists:sort([{Idx, K} || {stmt, _, B, Idx, K, _, _} <- Facts, B =:= Case1Block])),
+
+    ?assertEqual([], [B || {last_switch_case, B} <- Facts, B =:= DefaultBlock]),
+    ?assertEqual([Case1Block], [B || {last_switch_case, B} <- Facts, B =:= Case1Block]).
+
+%% A switch_case's own case-value expression (the `1` in `case 1:`)
+%% must never itself appear as a stmt/6 fact — a real bug found while
+%% building this: it would have permanently defeated
+%% no_fallthrough_case's empty-case exemption, since an empty case
+%% would then never look truly empty.
+extracts_switch_case_value_is_not_a_stmt_test() ->
+    Src =
+        "function f(a: number) {\n" %% 1
+        "  switch (a) {\n"          %% 2
+        "    case 1:\n"             %% 3
+        "    case 2:\n"             %% 4
+        "      foo();\n"            %% 5
+        "      break;\n"            %% 6
+        "  }\n"                     %% 7
+        "}\n",                      %% 8
+    Facts = ts_extract_typescript:text("scratch_case_value.ts", Src),
+    Path = 'scratch_case_value.ts',
+    Case1 = only_id([Id || {stmt_block, Id, f, 1, switch_case, P, L} <- Facts, P =:= Path, L =:= 3]),
+    Case2 = only_id([Id || {stmt_block, Id, f, 1, switch_case, P, L} <- Facts, P =:= Path, L =:= 4]),
+    ?assertEqual([], [S || {stmt, _, B, _, _, _, _} = S <- Facts, B =:= Case1]),
+    ?assertEqual(
+        lists:sort([{1, expression_statement}, {2, break_statement}]),
+        lists:sort([{Idx, K} || {stmt, _, B, Idx, K, _, _} <- Facts, B =:= Case2])).
+
+%% braceless_body/5: an `if`, `for`, `while` each with and without a
+%% brace body — only the braceless ones should produce a fact.
+extracts_braceless_body_facts_test() ->
+    Src =
+        "function f(a: number) {\n"              %% 1
+        "  if (a) foo();\n"                       %% 2 -- if, braceless
+        "  else { bar(); }\n"                     %% 3 -- else, braced
+        "  for (let i = 0; i < a; i++) baz();\n"  %% 4 -- for, braceless
+        "  while (a) { qux(); }\n"                %% 5 -- while, braced
+        "}\n",                                    %% 6
+    Facts = ts_extract_typescript:text("scratch_braceless.ts", Src),
+    Path = 'scratch_braceless.ts',
+    ?assertEqual(
+        lists:sort([{'if', Path, 2}, {'for', Path, 4}]),
+        lists:sort([{K, P, L} || {braceless_body, f, 1, K, P, L} <- Facts, P =:= Path])).
+
+%% return_stmt/5: a `return <value>` and a bare `return;` in the same
+%% function, the basis for consistent_return's positive case.
+extracts_return_stmt_facts_test() ->
+    Src =
+        "function f(a: number) {\n" %% 1
+        "  if (a) {\n"              %% 2
+        "    return 1;\n"           %% 3
+        "  }\n"                     %% 4
+        "  return;\n"               %% 5
+        "}\n",                      %% 6
+    Facts = ts_extract_typescript:text("scratch_return.ts", Src),
+    Path = 'scratch_return.ts',
+    ?assertEqual(
+        lists:sort([{true, 3}, {false, 5}]),
+        lists:sort([{HasValue, L} || {return_stmt, f, 1, HasValue, P, L} <- Facts, P =:= Path])).

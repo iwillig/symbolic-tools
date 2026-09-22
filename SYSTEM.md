@@ -65,7 +65,15 @@ var_decl(Id, Name, Kind, ScopeId, File, Line)/var_ref(Id, Name, ScopeId,
 RefKind, File, Line)/resolves_to(RefId, DeclId) — variables and scope
 (TypeScript only; var_decl's Kind is var/let/const/param/import),
 import_decl(Module, File, Line)/export_decl(Name, Kind, File, Line) —
-imports/exports (TypeScript only) — comment/3, heading/4, paragraph/3,
+imports/exports (TypeScript only), stmt_block(BlockId, Function, Arity,
+Kind, File, Line)/stmt(Id, BlockId, Index, Kind, File, Line)/
+last_switch_case(BlockId)/braceless_body(Function, Arity, Kind, File,
+Line)/return_stmt(Function, Arity, HasValue, File, Line) — statement/
+block structure (TypeScript only; stmt_block's Kind is
+block/switch_case/switch_default, stmt's Index is the child's raw
+position among ALL a block's named children, not renumbered after
+excluding comments/a switch_case's own value — see
+docs/prolog-schema.md) — comment/3, heading/4, paragraph/3,
 code_block/3, config_value/4, config_section/3.
 Names, modules and file paths in facts are atoms, so local(caller_name, 1)
 matches and local("caller_name", 1) does not.
@@ -125,7 +133,20 @@ duplicate_import/4 (+all_duplicate_imports/1), restricted_import/3
 default exists), and restricted_export/4 (+all_restricted_exports/1 —
 edit restricted_export_name/1). sort-imports is deliberately not
 built — no per-import-statement grouping key exists cheaply, and it's
-the most purely stylistic rule in this group.
+the most purely stylistic rule in this group. On top of stmt_block/6 +
+stmt/6 + last_switch_case/1 + braceless_body/5 + return_stmt/5
+(TypeScript only, same reasoning as scope/4): no_empty_block/5
+(+all_no_empty_blocks/1 — {} blocks only, not a function's own empty
+body), unreachable_stmt/4 (+all_unreachable_stmts/1 — anything after a
+return/throw/break/continue in the same block), no_fallthrough_case/5
+(+all_no_fallthrough_cases/1 — a non-empty switch_case/switch_default
+whose last statement isn't a terminator and isn't the last clause; an
+empty case stacking into the next, e.g. `case 1: case 2: ...`, is
+deliberately exempt), curly_violation/5 (+all_curly_violations/1 — an
+if/else/for/while body that isn't a real {} block), and
+inconsistent_return/3 (+all_inconsistent_returns/1 — one function with
+both a valued and a bare return; no control-flow-path analysis, just
+whole-function agreement).
 Docs: docs/lint-queries.md.
 </tools>
 

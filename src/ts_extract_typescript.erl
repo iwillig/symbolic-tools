@@ -36,12 +36,32 @@
 %%%   var_ref(Id, Name, ScopeId, RefKind, File, Line)    — RefKind: read/write/read_write
 %%%   resolves_to(RefId, DeclId)                         — DeclId is `undefined` if unresolved
 %%%   var_decl_initialized(Id)                           — that var_decl has a "value" (initializer)
+%%%   stmt_block(BlockId, Function, Arity, Kind, File, Line) — Kind: block/switch_case/
+%%%                                                         switch_default; see stmt_blocks/4
+%%%   stmt(Id, BlockId, Index, Kind, File, Line)         — a direct statement inside that
+%%%                                                         block, in order; Kind is the raw
+%%%                                                         node type (comments excluded)
+%%%   last_switch_case(BlockId)                          — present only when no next
+%%%                                                         case/default sibling exists
+%%%   braceless_body(Function, Arity, Kind, File, Line)  — Kind: if/else/for/while whose
+%%%                                                         body isn't a statement_block
+%%%   return_stmt(Function, Arity, HasValue, File, Line) — HasValue: true/false
 %%%
 %%% scope/var_decl/var_ref/resolves_to are TypeScript-only (Erlang's
 %%% variable model — single-assignment, pattern-bound, no var/let/const
 %%% distinction — needs its own separate design) and deliberately don't
 %%% handle destructuring (`let {a,b} = x`) or for-in/for-of — see
 %%% scope_facts/3's own doc comment for the full boundary.
+%%%
+%%% stmt_block/stmt/last_switch_case/braceless_body/return_stmt are also
+%%% TypeScript-only (Erlang has no brace-optional if/for/while and no
+%%% separate `return` statement at all — every rule on top of these is a
+%%% JS/TS-specific concept). `stmt/6` deliberately excludes comment
+%%% children — a comment is an ordinary named child of whatever block
+%%% contains it (confirmed by this module's own comment-handling code
+%%% below, which navigates comments via sibling traversal), so including
+%%% one would make a trailing comment after a `return` look like
+%%% unreachable code.
 %%%
 %%% Arity/ArgCount/Params come from `function_declaration`'s "parameters"
 %%% field and `call_expression`'s "arguments" field — same technique and
@@ -76,6 +96,18 @@
 -define(IMPORT_QUERY, "(import_statement) @i").
 -define(EXPORT_QUERY, "(export_statement) @e").
 -define(COMMENT_QUERY, "(comment) @c").
+
+%% Statement/block structure: one query per block-shaped construct —
+%% a real {} block, or a switch_case/switch_default, which have no
+%% wrapping block node at all and need their own query (see
+%% stmt_blocks/4's own doc comment).
+-define(STMT_BLOCK_QUERIES, [
+    {block, "(statement_block) @b"},
+    {switch_case, "(switch_case) @b"},
+    {switch_default, "(switch_default) @b"}
+]).
+
+-define(RETURN_STMT_QUERY, "(return_statement) @r").
 
 %% One query per decision-point construct, for real (McCabe-style)
 %% complexity instead of the fan_out/3-based proxy too_complex/3 uses —
@@ -129,7 +161,10 @@ text(Path, Src) ->
         branches(Lang, Root, Src, PathAtom) ++
         exprs(Lang, Root, Src, PathAtom) ++
         exports(Lang, Root, Src, PathAtom) ++
-        scope_facts(Lang, Root, Src, PathAtom),
+        scope_facts(Lang, Root, Src, PathAtom) ++
+        stmt_blocks(Lang, Root, Src, PathAtom) ++
+        braceless_bodies(Lang, Root, Src, PathAtom) ++
+        return_stmts(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
 
 defines(Lang, Root, Src, PathAtom) ->
@@ -394,6 +429,172 @@ export_specifier_fact(SpecNode, Src, PathAtom, Line) ->
             [{export_decl, to_atom(symbolic_ts:node_text(PublicNode, Src)), named, PathAtom, Line}];
         _ -> []
     end.
+
+%% stmt_block/6 + stmt/6 + last_switch_case/1: statement/block
+%% structure. A real {} block (statement_block) and the two switch-arm
+%% shapes (switch_case/switch_default, which have no wrapping block
+%% node at all — their own children ARE their statement list directly,
+%% confirmed empirically) all need the same treatment, just via
+%% different queries (see ?STMT_BLOCK_QUERIES) since each is captured
+%% by a different node type.
+stmt_blocks(Lang, Root, Src, PathAtom) ->
+    lists:flatmap(
+        fun({Kind, Query}) -> stmt_block_facts(Lang, Root, Src, PathAtom, Kind, Query) end,
+        ?STMT_BLOCK_QUERIES).
+
+stmt_block_facts(Lang, Root, Src, PathAtom, Kind, Query) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, Query),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"b", N} <- Caps]),
+    lists:flatmap(fun(N) -> stmt_block_fact_set(N, Src, PathAtom, Kind) end, Nodes).
+
+stmt_block_fact_set(N, Src, PathAtom, Kind) ->
+    BlockId = node_id(PathAtom, N),
+    {Caller, CallerArity} = caller_info(N, Src),
+    BlockFact = {stmt_block, BlockId, Caller, CallerArity, Kind, PathAtom, line(N)},
+    SkipNode = case Kind of
+        switch_case -> symbolic_ts:node_child_by_field_name(N, "value");
+        _ -> undefined
+    end,
+    StmtFacts = block_stmt_facts(N, BlockId, SkipNode, PathAtom),
+    LastCaseFact =
+        case Kind of
+            block -> [];
+            _ -> last_switch_case_fact(N, BlockId)
+        end,
+    [BlockFact | StmtFacts] ++ LastCaseFact.
+
+%% Every named child of the block/case/default IS a direct statement,
+%% in source order, except a comment — a comment is an ordinary named
+%% child of its enclosing block (see this module's own header comment
+%% for why), and including one here would make an entirely ordinary
+%% trailing comment after a `return` look like unreachable code — and,
+%% for a switch_case specifically, its own case *value* (`case 1:`'s
+%% `1`, confirmed to be its own addressable "value" field, always its
+%% first child in practice but identified by field, not position): a
+%% real bug found by actually running this against a `case 1: case 2:
+%% foo(); break;`-shaped switch — including the value as a "statement"
+%% meant an empty case (`case 1:` alone, immediately falling into the
+%% next) could never register as truly empty, defeating the whole
+%% point of the empty-case-stacking exemption `no_fallthrough_case/5`
+%% needs. Compared by identity (matching byte span), not position, so
+%% it's correct regardless of where the grammar actually places it.
+block_stmt_facts(BlockNode, BlockId, SkipNode, PathAtom) ->
+    SkipId = case SkipNode of
+        undefined -> undefined;
+        _ -> case symbolic_ts:node_is_null(SkipNode) of
+            true -> undefined;
+            false -> node_id(PathAtom, SkipNode)
+        end
+    end,
+    N = symbolic_ts:node_named_child_count(BlockNode),
+    lists:filtermap(
+        fun(Index) ->
+            Child = symbolic_ts:node_named_child(BlockNode, Index),
+            ChildId = node_id(PathAtom, Child),
+            case {symbolic_ts:node_type(Child), ChildId} of
+                {"comment", _} -> false;
+                {_, SkipId} -> false;
+                {Type, _} -> {true, {stmt, ChildId, BlockId, Index, to_atom(Type), PathAtom, line(Child)}}
+            end
+        end, lists:seq(0, N - 1)).
+
+%% A switch_case/switch_default is "last" for fallthrough purposes when
+%% nothing case-shaped follows it — its own next sibling is either
+%% `undefined` (genuinely the last child in switch_body) or some other
+%% non-case node (none exist in practice, but this doesn't assume that).
+last_switch_case_fact(N, BlockId) ->
+    case symbolic_ts:node_next_sibling(N) of
+        undefined -> [{last_switch_case, BlockId}];
+        Next ->
+            case symbolic_ts:node_type(Next) of
+                "switch_case" -> [];
+                "switch_default" -> [];
+                _ -> [{last_switch_case, BlockId}]
+            end
+    end.
+
+%% braceless_body/5: an if/else/for/while whose body is a single bare
+%% statement, not a real {} block — if_statement uses "consequence"/
+%% "alternative" fields, for_statement/while_statement use "body",
+%% confirmed empirically (different field names per construct, same
+%% story as every other per-construct field lookup in this module).
+braceless_bodies(Lang, Root, Src, PathAtom) ->
+    if_braceless_bodies(Lang, Root, Src, PathAtom)
+        ++ loop_braceless_bodies(Lang, Root, Src, PathAtom, 'for', "(for_statement) @b")
+        ++ loop_braceless_bodies(Lang, Root, Src, PathAtom, 'while', "(while_statement) @b").
+
+if_braceless_bodies(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, "(if_statement) @b"),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"b", N} <- Caps]),
+    lists:flatmap(
+        fun(N) ->
+            {Caller, CallerArity} = caller_info(N, Src),
+            braceless_field_fact(N, "consequence", 'if', Caller, CallerArity, PathAtom, Src)
+                ++ else_braceless_fact(N, Caller, CallerArity, PathAtom)
+        end, Nodes).
+
+%% "alternative" is always wrapped in an else_clause node (confirmed
+%% empirically — unlike "consequence", which holds the statement
+%% directly), so it's unwrapped before the same brace check applies.
+%% An `else if` chain (else_clause's own child is itself an
+%% if_statement) is never a curly violation for the else branch
+%% itself — that's ordinary chaining, and the nested if is checked
+%% independently for its own consequence/alternative.
+else_braceless_fact(IfNode, Caller, CallerArity, PathAtom) ->
+    Alt = symbolic_ts:node_child_by_field_name(IfNode, "alternative"),
+    case symbolic_ts:node_is_null(Alt) of
+        true -> [];
+        false ->
+            Body = symbolic_ts:node_named_child(Alt, 0),
+            case symbolic_ts:node_type(Body) of
+                "statement_block" -> [];
+                "if_statement" -> [];
+                _ -> [{braceless_body, Caller, CallerArity, 'else', PathAtom, line(Body)}]
+            end
+    end.
+
+loop_braceless_bodies(Lang, Root, Src, PathAtom, Kind, Query) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, Query),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"b", N} <- Caps]),
+    lists:flatmap(
+        fun(N) ->
+            {Caller, CallerArity} = caller_info(N, Src),
+            braceless_field_fact(N, "body", Kind, Caller, CallerArity, PathAtom, Src)
+        end, Nodes).
+
+%% A field is only present (an `else` may not exist at all — node_is_null
+%% guards that, same as every other optional-field lookup in this
+%% module) and only reported when its own node type isn't statement_block.
+braceless_field_fact(N, FieldName, Kind, Caller, CallerArity, PathAtom, _Src) ->
+    Field = symbolic_ts:node_child_by_field_name(N, FieldName),
+    case symbolic_ts:node_is_null(Field) of
+        true -> [];
+        false ->
+            case symbolic_ts:node_type(Field) of
+                "statement_block" -> [];
+                _ -> [{braceless_body, Caller, CallerArity, Kind, PathAtom, line(Field)}]
+            end
+    end.
+
+%% return_stmt/5: HasValue is whether a return_statement wraps a value
+%% (`return x;`) or not (a bare `return;`, zero named children —
+%% confirmed empirically). Powers consistent_return/3 in
+%% .symbolic/rules.pl, which needs no path-sensitive control-flow
+%% analysis at all — just every return in one function agreeing on
+%% whether it specifies a value.
+return_stmts(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?RETURN_STMT_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"r", N} <- Caps]),
+    lists:map(fun(N) -> return_stmt_fact(N, Src, PathAtom) end, Nodes).
+
+return_stmt_fact(N, Src, PathAtom) ->
+    {Caller, CallerArity} = caller_info(N, Src),
+    HasValue = symbolic_ts:node_named_child_count(N) > 0,
+    {return_stmt, Caller, CallerArity, HasValue, PathAtom, line(N)}.
 
 %% One branch/5 fact per decision point (see ?BRANCH_QUERIES), attributed
 %% to its enclosing function via caller_info/2 — the exact same walk-up
