@@ -20,6 +20,12 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `calls/5` | Erlang, TypeScript, Bash | A call site, shape varies per language |
 | `comment/3` | Erlang, TypeScript, Bash | Every comment, unconditionally |
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
+| `branch/5` | Erlang, TypeScript, Bash | A decision point inside a definition, for real complexity |
+| `expr/6` | Erlang, TypeScript | A binary/unary expression, keyed on real node identity |
+| `expr_operator/2` | Erlang, TypeScript | That expression's operator |
+| `expr_operand/3` | Erlang, TypeScript | One operand's role and which node fills it |
+| `literal/7` | Erlang, TypeScript | A literal value used as an operand |
+| `expr_ref/6` | Erlang, TypeScript | A bare identifier used as an operand |
 | `heading/4` | Markdown | An ATX (`#`) heading |
 | `code_block/3` | Markdown | A fenced code block and its declared language |
 | `paragraph/3` | Markdown | A paragraph (or list-item) of body text |
@@ -79,7 +85,7 @@ simplification remains. Arity **is** now tracked (added after dogfooding
 via `docs/lint-queries.md` found the gap): two same-named functions of
 *different* arity in the same file (Erlang's `query/2` and `query/3`,
 say) used to be indistinguishable from true recursion or genuine
-duplication in any query that only looked at `Function` — `.pi/rules.pl`'s
+duplication in any query that only looked at `Function` — `.symbolic/rules.pl`'s
 `duplicate_name/3`, `self_recursive/3`, `fan_in/3`, `no_local_callers/3`
 now key on `Fun`+`Arity` to avoid that.
 
@@ -99,7 +105,7 @@ now key on `Fun`+`Arity` to avoid that.
   site inside `query/1`'s body (which calls `query/2`) needs to stop
   being indistinguishable from a call site genuinely inside `query/2` —
   the other half of the arity-conflation gap `defines/5` alone didn't
-  close. `.pi/rules.pl`'s `self_recursive/3` is the rule that actually
+  close. `.symbolic/rules.pl`'s `self_recursive/3` is the rule that actually
   needs this: it binds `CallerArity` equal to the definition's own
   `Arity`, requiring the call site to be textually inside *that exact*
   clause, not merely inside some same-named overload.
@@ -180,6 +186,110 @@ to. **Identifier-like atoms elsewhere in this schema are still
 truncated at 200 characters** the same way (`ts_extract_text:to_atom/1`)
 — that's a genuinely different helper, kept separate for exactly this
 reason.
+
+### `branch(Function, Arity, Kind, File, Line)`
+
+A decision point (an `if`, a loop, a `case`/`switch` arm, a
+short-circuit `&&`/`||`, ...) inside `Function` — the raw material for
+real, McCabe-style complexity (`.symbolic/rules.pl`'s `real_complexity/4`),
+as opposed to `too_complex/3`'s fan-out-based proxy. `Function`/`Arity`
+have the same meaning as `defines/5`'s (including `undefined` for
+Bash's `Arity`), found via the same caller-attribution walk-up `calls/5`
+uses. `Kind` is the raw, language-specific construct name (an atom) —
+deliberately not forced into one shared cross-language taxonomy, the
+same reasoning `calls/5`'s per-language `CallSpec` shapes above aren't
+unified either:
+
+| Language | `Kind` values | Notes |
+|---|---|---|
+| Erlang | `cr_clause`, `if_clause`, `receive_after` | `cr_clause` covers **both** `case ... of` arms and `receive` arms (confirmed: same grammar node for both). `andalso`/`orelse` aren't captured yet — unverified whether the grammar exposes an addressable operator field the way TypeScript's does. |
+| TypeScript | `'if'`, `'for'`, `'while'`, `ternary`, `switch_case`, `'catch'`, `'and'`, `'or'` | `if` alone covers `else if` too — tree-sitter nests it as another `if_statement` inside an `else_clause`, so a plain trailing `else` correctly adds nothing. `switch_case`, not `switch_default`, for the same reason. `'and'`/`'or'` come from `binary_expression`'s addressable `operator` field, isolating `&&`/`||` from every other binary operator. |
+| Bash | `'if'`, `elif`, `'for'`, `'while'`, `case_item` | `elif_clause` needs its **own** query: unlike TypeScript, an entire `if`/`elif`/`elif`/`else` chain is *one* `if_statement` node, with each `elif` a sibling clause inside it, not a nested `if_statement` — `if_statement` alone would only ever count the first `if`. `case_item` includes the `*)` wildcard/default arm too, since Bash's grammar doesn't structurally distinguish it. `&&`/`||` chaining (a `list` node) isn't captured yet — the operator isn't a named child or an addressable field the way TypeScript's `operator` field is. |
+
+**A real, documented limitation, not a bug**: facts in this schema
+dedupe by tuple equality (`lists:usort/1` in every extractor), keyed on
+`Line`, not on a per-node byte offset — two decision points that land
+on the exact same source line (e.g. `if a -> x; true -> y end` written
+all on one line) collapse into a single `branch/5` fact, undercounting
+`real_complexity/4` by one in that case. Rare in normally-formatted
+code.
+
+**Also worth knowing**: `real_complexity/4` calls `branch/5` even for a
+function with zero real decision points, and erlog raises
+`existence_error` — not a clean empty result — for a predicate with no
+clauses *at all* in the whole database (not per-function; per-database).
+A source tree that happens to have no `if`/`for`/`case`/etc. anywhere
+would hit this on every query. `.symbolic/rules.pl` works around it with
+one sentinel clause, `branch(none, 0, none, none, 0) :- fail.` — always
+present, never satisfiable by a real query (its `Fun` is the atom
+`none`, and its body is unconditionally `fail` regardless), whose only
+job is to make `branch/5` "exist" so `findall/3` over it fails cleanly
+instead of erroring. The exact same issue already existed for
+`stale_doc_example/4` below (`example_defines/5` has zero clauses
+whenever no Markdown got parsed alongside the code) — pre-existing,
+left unfixed here, since it's a separate predicate outside this change.
+
+### `expr/6`, `expr_operator/2`, `expr_operand/3`, `literal/7`, `expr_ref/6`
+
+`branch/5` says a decision point *exists* — this family says what it
+actually compares. `Function`/`Arity` mean the same as everywhere else
+in this schema (found via the same caller-attribution walk-up
+`calls/5`/`branch/5` use); Erlang and TypeScript only for now (Bash's
+`test_command`/`binary_expression` shape, seen while building
+`branch/5`, needs its own research pass).
+
+- **`expr(Id, Function, Arity, Kind, File, Line)`** — `Kind` is
+  `binary` or `unary`.
+- **`expr_operator(Id, Op)`** — the actual operator, an atom
+  (`'=='`, `'&&'`, `'-'`, `'andalso'`, ...). TypeScript reads this
+  directly off `binary_expression`'s addressable `operator` field —
+  one generic query captures every operator at once. Erlang's
+  `binary_op_expr` has **no such field** (confirmed: `node_child_by_field_name`
+  returns null for `"left"`/`"right"`/`"operator"` there) — one
+  literal-token query per known operator instead (confirmed working:
+  `(binary_op_expr "andalso") @b` matches correctly), scoped today to
+  comparisons (`==`, `/=`, `=:=`, `=/=`, `<`, `>`, `>=`, `=<`) and
+  logical operators (`and`, `or`, `andalso`, `orelse`) — arithmetic is
+  the same mechanism, just unbuilt.
+- **`expr_operand(Id, Role, ChildId)`** — `Role` is `left`/`right` for
+  a binary expression, `operand` for a unary one. `ChildId` may itself
+  be another `expr/6`'s `Id` (a nested expression — no special handling
+  needed, since the top-level query already matches every occurrence
+  regardless of nesting depth), a `literal/7`'s `Id`, or an
+  `expr_ref/6`'s `Id`.
+- **`literal(Id, Function, Arity, LitKind, Value, File, Line)`** —
+  `LitKind` is `number`/`string`/`boolean`/`null` for TypeScript,
+  `integer`/`float`/`atom` for Erlang (Erlang's `true`/`false` are
+  ordinary atoms, not a distinct boolean type, so they come back as
+  `LitKind = atom`, not invented as `boolean`). `Value` for a number is
+  a real Erlang number (arithmetic-ready in Prolog); for a string it's
+  a binary, same reasoning as `comment/3`'s `Text` — no prefix/pattern
+  matching on a string literal's content yet, a real, deliberate limit,
+  not an oversight (revisiting it means reopening the atom-truncation
+  risk this project already resolved once for identifiers).
+- **`expr_ref(Id, Function, Arity, Name, File, Line)`** — a bare
+  identifier (`identifier` in TypeScript, `var` in Erlang) used as an
+  operand. Not scope/binding resolution — just "this position holds a
+  reference to this name," nothing about which declaration it resolves
+  to.
+
+**`Id` is new: a `{File, StartByte, EndByte}` byte span, not
+`(Function, Arity, File, Line)`.** Every other fact in this schema gets
+away with that as its natural key; this family can't, because a rule
+needs to reference *one specific operand of one specific expression*,
+and two of them routinely share a `Line`. It also can't be `{File,
+StartByte}` alone — **a real bug found by actually running this**, not
+a hypothetical: a binary expression and its own leftmost operand
+routinely start at the *same* byte (`x == x` — the expression and its
+left `x` both start where `x` starts), so start-byte alone collided
+until `EndByte` was added to disambiguate. No two distinct nodes in one
+parse occupy the identical byte range, so the span can't collide.
+
+**Same `existence_error`-on-zero-clauses caveat as `branch/5`** (see
+that section above) applies to all five predicates here — a codebase
+with no expressions of some kind has zero clauses for that predicate,
+and erlog errors rather than failing cleanly. `.symbolic/rules.pl` has
+one sentinel clause per predicate in this family, the same fix.
 
 ## Markdown structural facts
 

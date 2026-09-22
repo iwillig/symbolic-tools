@@ -210,11 +210,17 @@ on-disk option:
 - **Rule text hasn't gone away** — `symbolic query -db <facts.dets>
   -rules <rules.pl>` still consults a hand-written Prolog file (real
   syntax someone typed, e.g. [`lint-queries.md`](lint-queries.md)'s rule
-  library) via the ordinary text-based `erlog:consult/2`/
-  `prolog_session:consult/2`. That path was never the buggy one — it's
-  arbitrary *extracted* text (comment/doc bodies full of contractions and
-  possessives) that broke `writeq1`'s naive atom-quoting, not short
-  hand-written rule clauses.
+  library, kept in this project's `.symbolic/rules.pl`) via the ordinary
+  text-based `erlog:consult/2`/`prolog_session:consult/2`. That path was
+  never the buggy one — it's arbitrary *extracted* text (comment/doc
+  bodies full of contractions and possessives) that broke `writeq1`'s
+  naive atom-quoting, not short hand-written rule clauses. Omitting
+  `-rules` doesn't skip consulting either: `symbolic_query:resolve_rules/3`
+  finds the project's own `.symbolic/rules.pl` by walking up from the
+  database and then the cwd, so shared rules are a committed file rather
+  than a flag every caller has to remember. `-rules <file>` replaces that
+  default (it doesn't layer on top of it), and `-no-rules` turns the
+  lookup off.
 
 One real, non-obvious pitfall hit while building this, worth recording
 here rather than only in a commit message: `io:format("~s", [Binary])`
@@ -245,5 +251,6 @@ binary contents at all.
 - [`prolog-schema.md`](prolog-schema.md) — the fact predicates themselves
   (what each argument means), including which are now binaries rather
   than atoms.
-- [`lint-queries.md`](lint-queries.md) — the hand-written rule library
-  `-rules` is for.
+- [`lint-queries.md`](lint-queries.md) — the rule library
+  `.symbolic/rules.pl` implements (and which `symbolic query` consults
+  automatically when no `-rules` is given).

@@ -120,12 +120,15 @@ query_cmd() ->
             #{name => db, long => "db", required => true,
               help => "Path to a fact database (.dets)"},
             #{name => rules, long => "rules", required => false,
-              help => "Optional hand-written Prolog rule file (.pl)"},
+              help => "Hand-written Prolog rule file (.pl) to consult alongside the facts"},
+            #{name => no_rules, long => "no-rules", type => boolean, default => false,
+              help => "Skip the automatic .symbolic/rules.pl lookup"},
             #{name => goal, help => "Goal to prove, e.g. \"foo(X)\""}
         ],
         handler => fun(Args) ->
             #{db := Db, goal := Goal} = Args,
-            symbolic_query:run(Db, maps:get(rules, Args, undefined), Goal)
+            symbolic_query:run(Db, maps:get(rules, Args, undefined),
+                maps:get(no_rules, Args, false), Goal)
         end
     }.
 ```
@@ -133,9 +136,17 @@ query_cmd() ->
 - `query` — load a DETS-backed fact database
   ([`prolog-store.md`](prolog-store.md)) and run a Prolog query through
   [`erlog`](https://github.com/rvirding/erlog)
-  ([`erlang-mcp-design.md`](erlang-mcp-design.md)), with an optional
-  hand-written `-rules` file consulted alongside the facts (for derived
-  rules like [`lint-queries.md`](lint-queries.md)'s). **Implemented.**
+  ([`erlang-mcp-design.md`](erlang-mcp-design.md)), consulting a
+  hand-written rule file alongside the facts (for derived rules like
+  [`lint-queries.md`](lint-queries.md)'s). Which file that is gets decided
+  by `symbolic_query:resolve_rules/3`: an explicit `-rules` wins;
+  otherwise the project's own `.symbolic/rules.pl` is found by walking up
+  from the database's directory and then from the cwd — the same "find the
+  project root" shape git uses for `.git`, so the command works from any
+  subdirectory; `-no-rules` skips that lookup, and finding nothing is fine
+  (facts alone). Note `run_result/3` — the halt-free core the tests and any
+  library caller use — keeps the stricter contract: there, `undefined`
+  means "consult nothing", never "go looking". **Implemented.**
 - `parse` — walk a folder, run the tree-sitter extraction
   ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), print facts as JSON,
   and optionally write them into a fact database via `-db`. **Implemented.**
@@ -145,7 +156,10 @@ query_cmd() ->
 **Sharp edge, verified by running the built escript**: `argparse`'s
 default prefix is a *single* dash — `long => "file"` produces `-file`, not
 `--file`. This is Erlang's own flag convention (matching `erl -pa`,
-`-name`), not GNU's. There is also no automatic `-help`/`--help` — running
+`-name`), not GNU's. A switch with no value is `type => boolean` plus a
+`default` (that's how `-no-rules` works — verified against a real
+`argparse:run/3`, since the key is then always present in the handler's
+Args map). There is also no automatic `-help`/`--help` — running
 `symbolic` with no subcommand, or any parse error, prints usage and exits
 non-zero on its own, but an explicit help flag would need to be added as
 its own argument if wanted.

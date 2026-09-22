@@ -56,7 +56,12 @@ codebase_test_() ->
         fun query_already_terminated_goal_works/1,
         fun query_non_integer_limit_falls_back_to_default/1,
         fun parse_reports_bash_by_extension/1,
-        fun parse_reports_erlang_by_extension/1
+        fun parse_reports_erlang_by_extension/1,
+        fun parse_discovers_and_consults_scratch_rules/1,
+        fun parse_rules_override_takes_precedence_over_discovery/1,
+        fun parse_with_broken_rules_is_error_and_leaves_cache_untouched/1,
+        fun fixtures_parse_picks_up_the_real_project_rules_file/1,
+        fun fixtures_parse_makes_a_real_library_predicate_provable/1
     ]}.
 
 overview_before_parse(_Setup) ->
@@ -192,4 +197,94 @@ parse_reports_erlang_by_extension(_Setup) ->
         ok = file:delete(Path),
         Languages = maps:get(languages, Meta),
         ?assert(lists:member("erlang", Languages))
+    end.
+
+%% --- .symbolic/rules.pl parity with the CLI (symbolic_query:resolve_rules/3) ---
+
+%% Discovery walks up from the scanned directory itself (mirroring
+%% symbolic_query:discover_rules_from_dir/1's use of the fact db's own
+%% directory), so a project's own library is consulted with no extra
+%% argument — the derived predicate it defines (named/1) becomes provable
+%% and Meta reports exactly which file was consulted.
+parse_discovers_and_consults_scratch_rules(_Setup) ->
+    fun() ->
+        with_scratch_codebase(fun(Root, RulesPath) ->
+            {ok, Meta} = symbolic_codebase:parse(Root),
+            ?assertEqual(RulesPath, maps:get(rules_file, Meta)),
+            ?assertMatch({ok, [_ | _]}, symbolic_codebase:query("named(F)"))
+        end)
+    end.
+
+%% An explicit rules override is never second-guessed by discovery — the
+%% scratch project's own .symbolic/rules.pl (defining named/1) is skipped
+%% entirely in favor of the override (defining other_named/1 instead).
+parse_rules_override_takes_precedence_over_discovery(_Setup) ->
+    fun() ->
+        with_scratch_codebase(fun(Root, _DiscoveredRulesPath) ->
+            OverridePath = filename:join(["_build", "codebase_override_rules_scratch.pl"]),
+            ok = file:write_file(OverridePath,
+                <<"other_named(F) :- defines(F, _, _, _, _).\n">>),
+            try
+                {ok, Meta} = symbolic_codebase:parse(Root, OverridePath),
+                ?assertEqual(OverridePath, maps:get(rules_file, Meta)),
+                ?assertMatch({ok, [_ | _]}, symbolic_codebase:query("other_named(F)")),
+                ?assertMatch({error, {existence_error, _, _}},
+                    symbolic_codebase:query("named(F)"))
+            after
+                file:delete(OverridePath)
+            end
+        end)
+    end.
+
+%% A rules file that fails to consult fails the whole parse — the
+%% previously cached codebase (from a prior good parse) stays exactly as
+%% it was, same as a query timeout/crash never touches the cache either.
+parse_with_broken_rules_is_error_and_leaves_cache_untouched(_Setup) ->
+    fun() ->
+        {ok, GoodMeta} = symbolic_codebase:parse(?FIXTURES),
+        Result = symbolic_codebase:parse(?FIXTURES, "no/such/rules_zz.pl"),
+        ?assertMatch({error, {rules_error, "no/such/rules_zz.pl", _}}, Result),
+        {ok, StillGoodMeta} = symbolic_codebase:overview(),
+        ?assertEqual(GoodMeta, StillGoodMeta)
+    end.
+
+%% test/fixtures lives inside this repo, so a parse of it walks up to this
+%% project's own real .symbolic/rules.pl (the same file the CLI's
+%% docs/lint-queries.md library documents) — proving discovery reaches
+%% the real library, not just a hand-written scratch one.
+fixtures_parse_picks_up_the_real_project_rules_file(_Setup) ->
+    fun() ->
+        {ok, Meta} = symbolic_codebase:parse(?FIXTURES),
+        ?assertEqual(filename:absname(filename:join([".symbolic", "rules.pl"])),
+            maps:get(rules_file, Meta))
+    end.
+
+%% The concrete "an agent calling the tool that's actually connected can
+%% use the derived-predicate library" proof: callees/2 (from the real
+%% .symbolic/rules.pl) resolves against test/fixtures/sample.ts's `foo`,
+%% which calls both a local function and a method — an
+%% existence_error here would mean the library silently isn't loaded.
+fixtures_parse_makes_a_real_library_predicate_provable(_Setup) ->
+    fun() ->
+        {ok, _Meta} = symbolic_codebase:parse(?FIXTURES),
+        ?assertMatch({ok, [_ | _]}, symbolic_codebase:query("callees(foo, Callees)"))
+    end.
+
+%% A scratch project under _build/: <root>/.symbolic/rules.pl (defining
+%% named/1, the same convention symbolic_query_tests.erl's
+%% with_scratch_project/1 uses) plus a source file to scan, since
+%% symbolic_codebase:parse/1,2 needs something to extract facts from.
+%% Fun gets the absolute root path and the rules file's path.
+with_scratch_codebase(Fun) ->
+    Root = filename:absname(filename:join(["_build", "codebase_scratch_project"])),
+    _ = file:del_dir_r(Root),
+    RulesPath = filename:join([Root, ".symbolic", "rules.pl"]),
+    ok = filelib:ensure_dir(RulesPath),
+    ok = file:write_file(RulesPath, <<"named(F) :- defines(F, _, _, _, _).\n">>),
+    ok = file:write_file(filename:join([Root, "sample.erl"]),
+        <<"-module(sample).\none() -> ok.\n">>),
+    try
+        Fun(Root, RulesPath)
+    after
+        _ = file:del_dir_r(Root)
     end.

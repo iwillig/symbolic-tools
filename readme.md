@@ -110,8 +110,10 @@ Makefiles).
 
 - **CLI** — `symbolic parse` walks a folder, prints facts as JSON, and
   optionally writes them into a fact database (`-db`); `symbolic query`
-  loads that database and runs a query against it, with an optional
-  hand-written rule file (`-rules`) consulted alongside the facts. See
+  loads that database and runs a query against it, consulting hand-written
+  Prolog rules alongside the facts: `-rules <file>` for a one-off, or the
+  project's shared rule library at `.symbolic/rules.pl`, which is found
+  automatically when no `-rules` is given. See
   `docs/cli-erlang.md`.
 - **MCP server** — `symbolic serve` exposes the same Prolog session and
   fact base over the Model Context Protocol, so an LLM agent can consult
@@ -123,6 +125,7 @@ Makefiles).
 symbolic                                              # prints usage
 symbolic parse ./src -db facts.dets                   # extract facts, print JSON, write a fact database
 symbolic query -db facts.dets 'depends_on(X, Y)'      # ask a question about the codebase
+symbolic query -db facts.dets 'top_fan_in(5, Ranked)' # derived rules, no -rules flag needed
 symbolic serve                                        # start the MCP server (stdio transport)
 ```
 
@@ -132,7 +135,8 @@ files on disk at runtime (`parse` for `symbolic_ts`'s NIF, `serve` for
 `erlmcp`'s supervision tree), and neither works from inside an escript's
 zip archive (a real limitation found while building this, not a bug; see
 `docs/cli-erlang.md` §1/§1.1). Flags use a single dash (`-db`, `-rules`,
-not `--db`/`--rules`) — that's [stdlib `argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html)'s
+`-no-rules`, not `--db`/`--rules`) — that's [stdlib
+`argparse`](https://www.erlang.org/doc/apps/stdlib/argparse.html)'s
 own convention, which `symbolic_cli` uses for all argument parsing and
 usage/help text.
 
@@ -258,38 +262,89 @@ A bound value prints as JSON (`docs/prolog-store.md` §7) — a plain atom
 or binary prints the same way (`"formatName"`), so the type distinction
 between an identifier and free text (`docs/prolog-schema.md`) only
 matters when *writing* a rule, not when reading a query's answer.
-Because it's a real fact base, not a grep result, this composes: point
-`-rules` at a file of hand-written derived predicates (below), or ask
+Because it's a real fact base, not a grep result, this composes: reach
+for the shared rule library (below) for the questions worth asking twice,
+point `-rules` at a scratch file for the ones worth asking once, or ask
 something no text search could answer directly — "what calls a method on
 `console`" is just `calls(X, _, member(console, _, _), _, _)`, and "which
 functions are undocumented" is just
 `defines(F, _, _, _, _), \+ doc(F, _, _, _, _)`.
 
-### Deriving your own rules with `-rules`
+### The shared rule library (`.symbolic/rules.pl`)
 
-Any hand-written Prolog belongs in its own `.pl` file, consulted
-alongside the fact database — the facts and the rules are two different
-kinds of thing (extracted data vs. logic you wrote), and only the rules
-are ever real Prolog *text* on disk:
+The rules worth asking more than once belong to the project, not to the
+individual query — so they live in one committed file, and `symbolic
+query` finds it on its own. No flag, no path, nothing to remember:
 
 ```sh
-$ cat > rules.pl << 'EOF'
-undocumented(Fun, Arity, File, Line) :-
-    defines(Fun, Arity, _Params, File, Line),
-    \+ doc(Fun, Arity, _, _, _).
-EOF
-
-$ symbolic query -db facts.dets -rules rules.pl 'findall(F, undocumented(F, _, _, _), Fs)'
+$ symbolic query -db facts.dets 'findall(F, undocumented(F, _, _, _), Fs)'
 F = [0]
 Fs = ["greet"]
 ```
 
-`F = [0]` is `findall/3`'s own template variable, unbound outside the
-call (standard Prolog semantics, not a bug) — erlog represents an
-unbound variable as a 1-tuple internally, which prints as a 1-element
-JSON array rather than the `_0` a Prolog-text printer would show; `Fs`
-is the answer that matters. See `docs/lint-queries.md` for a much larger
-rule library built the same way.
+(`F = [0]` is `findall/3`'s own template variable, unbound outside the
+call — standard Prolog semantics, not a bug; erlog renders an unbound
+variable as a 1-tuple, which prints as a 1-element JSON array instead of
+the `_0` a Prolog-text printer would show. `Fs` is the answer that
+matters.)
+
+Lookup order, first hit wins:
+
+1. `-rules <file>`, if you passed one (see below — it *replaces* the
+   default rather than adding to it).
+2. `.symbolic/rules.pl`, walking **up** from the fact database's own
+   directory — the same "find the project root" rule git applies to
+   `.git`, so the command works from any subdirectory and the database can
+   live anywhere inside the project.
+3. `.symbolic/rules.pl` walking up from the current directory, for a
+   database kept outside the tree (scratch work under `/tmp`, say).
+4. Nothing found → facts only, no error.
+
+`-no-rules` skips steps 2 and 3 entirely — for debugging a query in
+isolation, or on a machine where an unrelated ancestor happens to have its
+own `.symbolic/rules.pl`:
+
+```sh
+$ symbolic query -db facts.dets -no-rules 'top_fan_in(3, Ranked)'
+query failed: {existence_error,procedure,{'/',top_fan_in,2}}
+```
+
+What the library holds is a project decision; this one's is
+[`docs/lint-queries.md`](docs/lint-queries.md)'s rule set — duplication,
+fan-in/fan-out ranking, dead-code candidates, undocumented definitions and
+comments, risky calls, module dependencies, cycle-guarded reachability —
+kept in `.symbolic/rules.pl` and checked by EUnit
+(`symbolic_query_tests:default_rules_library_over_fixture_test`) so a rule
+can't quietly go missing from the file the docs tell you to use.
+
+### One-off rules with `-rules`
+
+A question you're asking once belongs in a scratch `.pl` file instead —
+consulted alongside the fact database, exactly as the library is, except
+that you name it. Note the two are alternatives, not layers: **`-rules`
+replaces `.symbolic/rules.pl`**, so a rule that leans on a library
+predicate must be added *to* the library instead.
+
+```sh
+$ cat > rules.pl << 'EOF'
+multi_arg(Fun, Arity, File) :-
+    defines(Fun, Arity, _Params, File, _Line),
+    Arity > 1.
+EOF
+
+$ symbolic query -db facts.dets -rules rules.pl 'multi_arg(Fun, Arity, File)'
+Arity = 2
+File = "greeter.ts"
+Fun = "formatName"
+```
+
+`multi_arg/3` stands in for any predicate the library doesn't have, and
+the same query works unchanged once you move it into
+`.symbolic/rules.pl` — the only difference is who names the file.
+
+See `docs/lint-queries.md` for the full library this project actually
+uses, and `docs/agent-examples.md` for worked queries against both fact
+and rule predicates.
 
 **A real limitation, not glossed over:** free-text fields like `Text`
 above are Erlang binaries, not atoms (`docs/prolog-schema.md`) — the fix
@@ -534,17 +589,11 @@ $ symbolic parse . -db facts.dets
 ```
 
 `guide.md`'s sample defines `shout` — a function that was never actually
-added to `greeter.ts`. Write the check to its own rules file and load
-it alongside the facts:
+added to `greeter.ts`. That check is a standing project question, not a
+one-off, so it lives in `.symbolic/rules.pl` and needs no flag of its own:
 
 ```sh
-$ cat > rules.pl << 'EOF'
-stale_doc_example(Fun, Arity, DocFile, Line) :-
-    example_defines(Fun, Arity, _Params, DocFile, Line),
-    \+ defines(Fun, Arity, _, _, _).
-EOF
-
-$ symbolic query -db facts.dets -rules rules.pl 'stale_doc_example(Fun, Arity, DocFile, Line)'
+$ symbolic query -db facts.dets 'stale_doc_example(Fun, Arity, DocFile, Line)'
 Arity = 1
 DocFile = "guide.md"
 Fun = "shout"

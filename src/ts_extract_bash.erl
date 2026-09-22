@@ -18,6 +18,11 @@
 %%%                              (bash has none)
 %%%   comment(File, Line, Text)
 %%%   doc(Function, Arity, File, Line, Text)
+%%%   branch(Function, Arity, Kind, File, Line)     — a decision point (if/elif/for/while/
+%%%                                                     case_item) inside Function; Arity is
+%%%                                                     always `undefined`, same reason as
+%%%                                                     defines/5's. See ?BRANCH_QUERIES and
+%%%                                                     .symbolic/rules.pl's real_complexity/4
 %%%
 %%% Only `local(Command)` — no `remote`/`member` distinction the way
 %%% Erlang/TypeScript have, since Bash has no qualified/namespaced call
@@ -47,6 +52,27 @@
 -define(CALL_QUERY, "(command name: (command_name) @callee)").
 -define(COMMENT_QUERY, "(comment) @c").
 
+%% One query per decision-point construct, for real (McCabe-style)
+%% complexity instead of the fan_out/3-based proxy too_complex/3 uses.
+%% if_statement alone only counts the initial `if` of an if/elif/.../else
+%% chain — unlike TypeScript, Bash nests `elif` as a SIBLING clause
+%% inside the same if_statement, not as another nested if_statement, so
+%% elif_clause needs its own query or every elif goes uncounted (confirmed
+%% empirically). case_item includes the `*)` wildcard/default arm too —
+%% Bash doesn't structurally distinguish it from a real case the way
+%% TypeScript's switch_case/switch_default split does; a known
+%% simplification, not a bug. `&&`/`||` chaining (a `list` node) is
+%% deliberately not here yet — the operator token isn't a named child or
+%% an addressable field the way TypeScript's binary_expression is; needs
+%% its own grammar spike.
+-define(BRANCH_QUERIES, [
+    {'if', "(if_statement) @b"},
+    {elif, "(elif_clause) @b"},
+    {'for', "(for_statement) @b"},
+    {'while', "(while_statement) @b"},
+    {case_item, "(case_item) @b"}
+]).
+
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
     {ok, Bin} = file:read_file(Path),
@@ -69,7 +95,8 @@ text(Path, Src) ->
         defines(Lang, Root, Src, PathAtom) ++
         local_calls(Lang, Root, Src, PathAtom) ++
         comments(Lang, Root, Src, PathAtom) ++
-        docs(Lang, Root, Src, PathAtom),
+        docs(Lang, Root, Src, PathAtom) ++
+        branches(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
 
 defines(Lang, Root, Src, PathAtom) ->
@@ -100,6 +127,24 @@ local_call_fact(N, Src, PathAtom) ->
     {calls, caller_name(N, Src), undefined,
      {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
      PathAtom, line(N)}.
+
+%% One branch/5 fact per decision point (see ?BRANCH_QUERIES), attributed
+%% to its enclosing function via caller_name/2 — the exact same walk-up
+%% local_call_fact/3 uses for calls/5's Caller. CallerArity is always
+%% `undefined`, same reason defines/5's Arity always is: Bash functions
+%% have no parameter-list grammar node at all.
+branches(Lang, Root, Src, PathAtom) ->
+    lists:flatmap(
+        fun({Kind, Query}) -> branch_facts(Lang, Root, Src, PathAtom, Kind, Query) end,
+        ?BRANCH_QUERIES).
+
+branch_facts(Lang, Root, Src, PathAtom, Kind, Query) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, Query),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    lists:usort([branch_fact(N, Src, PathAtom, Kind) || {"b", N} <- Caps]).
+
+branch_fact(N, Src, PathAtom, Kind) ->
+    {branch, caller_name(N, Src), undefined, Kind, PathAtom, line(N)}.
 
 comments(Lang, Root, Src, PathAtom) ->
     lists:usort([

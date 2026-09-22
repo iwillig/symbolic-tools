@@ -16,7 +16,7 @@
 -module(symbolic_codebase).
 -behaviour(gen_server).
 
--export([start_link/0, parse/1, query/1, query/2, overview/0]).
+-export([start_link/0, parse/1, parse/2, query/1, query/2, overview/0]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
 
 -define(DEFAULT_LIMIT, 50).
@@ -30,9 +30,18 @@ start_link() ->
 
 %% Scan Dir, extract facts, and (re)build the in-memory cache. Returns the
 %% same summary `overview` reports, so a parse immediately shows what landed.
+%% Also resolves and consults a `.symbolic/rules.pl` derived-predicate
+%% library, same as the CLI's `symbolic query` does for a fact database:
+%% auto-discovered by walking up from Dir (then falling back to the
+%% server's own cwd) unless RulesOverride is given, in which case that
+%% path is used outright — see symbolic_query:discover_rules_from_dir/1.
 -spec parse(file:name()) -> {ok, map()} | {error, term()}.
 parse(Dir) ->
-    gen_server:call(?MODULE, {parse, Dir}, infinity).
+    parse(Dir, undefined).
+
+-spec parse(file:name(), file:filename() | undefined) -> {ok, map()} | {error, term()}.
+parse(Dir, RulesOverride) ->
+    gen_server:call(?MODULE, {parse, Dir, RulesOverride}, infinity).
 
 %% Prove Goal against the cache, returning ALL solutions (capped at Limit,
 %% default ?DEFAULT_LIMIT). Returns {ok, [Solutions]} or
@@ -63,12 +72,21 @@ overview() ->
 init([]) ->
     {ok, #{erl => undefined, meta => undefined}}.
 
-handle_call({parse, Dir}, _From, State) ->
+handle_call({parse, Dir, RulesOverride}, _From, State) ->
     case symbolic_parse:scan(Dir) of
         {ok, {Files, Facts}} ->
-            Erl = build_state(Facts),
-            Meta = compute_meta(Files, Facts),
-            {reply, {ok, Meta}, State#{erl => Erl, meta => Meta}};
+            RulesPath = resolve_rules(Dir, RulesOverride),
+            case build_state(Facts, RulesPath) of
+                {ok, Erl} ->
+                    Meta = compute_meta(Files, Facts, RulesPath),
+                    {reply, {ok, Meta}, State#{erl => Erl, meta => Meta}};
+                {error, Reason} ->
+                    %% A bad rules file fails the whole parse rather than
+                    %% caching a facts-only session silently missing the
+                    %% library the caller asked for — State is untouched,
+                    %% same as a query timeout/crash leaves it untouched.
+                    {reply, {error, {rules_error, RulesPath, Reason}}, State}
+            end;
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
@@ -106,23 +124,42 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
 %% A fresh erlog state with every fact asserted. Same asserta pattern as
 %% prolog_session:load_facts/2's handle_call (asserta is O(1); facts have no
-%% order-dependent meaning, only backtracking order).
-build_state(Facts) ->
+%% order-dependent meaning, only backtracking order). When RulesPath is
+%% resolved, the same derived-predicate library the CLI consults
+%% (prolog_session:consult/2) is consulted here too, via the same
+%% erlog:consult/2 primitive, so `undefined`/RulesPath's absence is the
+%% only difference from a facts-only cache.
+build_state(Facts, RulesPath) ->
     {ok, Erl} = erlog:new(),
-    lists:foldl(
+    Erl1 = lists:foldl(
         fun(Fact, ErlAcc) ->
             {{succeed, _}, ErlAcc1} = erlog:prove({asserta, Fact}, ErlAcc),
             ErlAcc1
-        end, Erl, Facts).
+        end, Erl, Facts),
+    consult_rules(Erl1, RulesPath).
 
-compute_meta(Files, Facts) ->
+consult_rules(Erl, undefined) -> {ok, Erl};
+consult_rules(Erl, RulesPath) -> erlog:consult(RulesPath, Erl).
+
+%% Explicit RulesOverride wins outright (mirrors the CLI's -rules, which
+%% is never second-guessed by discovery); otherwise auto-discover by
+%% walking up from Dir, then the server's own cwd — see
+%% symbolic_query:discover_rules_from_dir/1. There's no MCP equivalent of
+%% -no-rules yet (a persistent cache has less need for a one-off
+%% "consult nothing" switch); pass an explicit RulesOverride if that's
+%% ever needed.
+resolve_rules(_Dir, RulesOverride) when RulesOverride =/= undefined -> RulesOverride;
+resolve_rules(Dir, undefined) -> symbolic_query:discover_rules_from_dir(Dir).
+
+compute_meta(Files, Facts, RulesPath) ->
     #{
         loaded => true,
         files => length(Files),
         file_list => Files,
         languages => languages_from_files(Files),
         facts_by_predicate => counts_by_predicate(Facts),
-        total_facts => length(Facts)
+        total_facts => length(Facts),
+        rules_file => RulesPath
     }.
 
 %% filename:extension/1 returns the dotted form (".ts", ".erl", ...).

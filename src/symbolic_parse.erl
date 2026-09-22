@@ -54,7 +54,7 @@ run(Dir) ->
     run(Dir, undefined).
 
 %% halt() belongs only here, at the CLI's actual edge (see
-%% symbolic_query:run/3's identical note on why) — scan/1 already
+%% symbolic_query:run/4's identical note on why) — scan/1 already
 %% returns a plain term, and error_message/1 below turns that term into
 %% the exact text printed, so both are directly testable without it.
 run(Dir, DbPath) ->

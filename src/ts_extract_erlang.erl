@@ -9,6 +9,16 @@
 %%%   comment(File, Line, Text)                       — every comment, unconditionally
 %%%   doc(Function, Arity, File, Line, Text)           — a comment run immediately
 %%%                                                       preceding a fun_decl
+%%%   branch(Function, Arity, Kind, File, Line)        — a decision point (cr_clause/
+%%%                                                       if_clause/receive_after) inside
+%%%                                                       Function; see ?BRANCH_QUERIES and
+%%%                                                       .symbolic/rules.pl's real_complexity/4
+%%%   expr(Id, Function, Arity, Kind, File, Line)      — a binary/unary expression, Id keyed
+%%%                                                       on a byte span (see exprs/4)
+%%%   expr_operator(Id, Op)                            — that expression's operator, e.g. '==', 'andalso'
+%%%   expr_operand(Id, Role, ChildId)                  — Role: left/right/operand
+%%%   literal(Id, Function, Arity, LitKind, Value, File, Line) — a literal used as an operand
+%%%   expr_ref(Id, Function, Arity, Name, File, Line)  — a bare `var` used as an operand
 %%%
 %%% Arity/ArgCount and Params come from the `function_clause`/`call`
 %%% node's own "args" field (an `expr_args` node) — its named-child count
@@ -66,6 +76,54 @@
 -define(REMOTE_CALL_QUERY, "(call expr: (remote) @call)").
 -define(COMMENT_QUERY, "(comment) @c").
 
+%% One query per decision-point construct, for real (McCabe-style)
+%% complexity instead of the fan_out/3-based proxy too_complex/3 uses.
+%% cr_clause covers BOTH `case ... of` arms and `receive` arms (same
+%% node type for both, confirmed empirically) — no need for separate
+%% queries. receive_after is a receive's `after Timeout -> ...` escape
+%% path, itself a decision point. andalso/orelse are deliberately not
+%% here yet: both are a plain binary_op_expr, same as `+`/`>`, and
+%% whether the grammar exposes an addressable operator field the way
+%% TypeScript's binary_expression does hasn't been verified — see
+%% .symbolic/rules.pl's real_complexity/4 doc comment.
+-define(BRANCH_QUERIES, [
+    {cr_clause, "(cr_clause) @b"},
+    {if_clause, "(if_clause) @b"},
+    {receive_after, "(receive_after) @b"}
+]).
+
+%% binary_op_expr/unary_op_expr have NO addressable fields at all —
+%% confirmed empirically: node_child_by_field_name(_, "left"/"right"/
+%% "operator") all return null, unlike TypeScript's binary_expression.
+%% Operands are purely positional (node_named_child/2 at index 0/1), and
+%% the operator token itself isn't even a named child. A literal-token
+%% query works instead — confirmed empirically, e.g.
+%% (binary_op_expr "andalso") @b matches correctly — so one query per
+%% known operator, same shape as ?BRANCH_QUERIES, rather than one
+%% generic query the way ts_extract_typescript.erl's exprs/4 reads
+%% TypeScript's operator field. Scoped to comparisons and logical
+%% operators (what the motivating ESLint rules need); arithmetic/
+%% bitwise are the same mechanism, just unbuilt.
+-define(BINARY_OP_QUERIES, [
+    {'==', "(binary_op_expr \"==\") @b"},
+    {'/=', "(binary_op_expr \"/=\") @b"},
+    {'=:=', "(binary_op_expr \"=:=\") @b"},
+    {'=/=', "(binary_op_expr \"=/=\") @b"},
+    {'<', "(binary_op_expr \"<\") @b"},
+    {'>', "(binary_op_expr \">\") @b"},
+    {'>=', "(binary_op_expr \">=\") @b"},
+    {'=<', "(binary_op_expr \"=<\") @b"},
+    {'and', "(binary_op_expr \"and\") @b"},
+    {'or', "(binary_op_expr \"or\") @b"},
+    {'andalso', "(binary_op_expr \"andalso\") @b"},
+    {'orelse', "(binary_op_expr \"orelse\") @b"}
+]).
+
+-define(UNARY_OP_QUERIES, [
+    {'-', "(unary_op_expr \"-\") @b"},
+    {'not', "(unary_op_expr \"not\") @b"}
+]).
+
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
     {ok, Bin} = file:read_file(Path),
@@ -88,7 +146,9 @@ text(Path, Src) ->
         local_calls(Lang, Root, Src, PathAtom) ++
         remote_calls(Lang, Root, Src, PathAtom) ++
         comments(Lang, Root, Src, PathAtom) ++
-        docs(Lang, Root, Src, PathAtom),
+        docs(Lang, Root, Src, PathAtom) ++
+        branches(Lang, Root, Src, PathAtom) ++
+        exprs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
 
 defines(Lang, Root, Src, PathAtom) ->
@@ -151,6 +211,121 @@ remote_call_fact(RemoteNode, Src, PathAtom) ->
      {remote, to_atom(symbolic_ts:node_text(ModAtomNode, Src)),
       to_atom(symbolic_ts:node_text(FunNode, Src)), ArgCount},
      PathAtom, line(RemoteNode)}.
+
+%% One branch/5 fact per decision point (see ?BRANCH_QUERIES), attributed
+%% to its enclosing function_clause via caller_info/2 — the exact same
+%% walk-up local_call_fact/3 uses for calls/5's Caller/CallerArity.
+branches(Lang, Root, Src, PathAtom) ->
+    lists:flatmap(
+        fun({Kind, Query}) -> branch_facts(Lang, Root, Src, PathAtom, Kind, Query) end,
+        ?BRANCH_QUERIES).
+
+branch_facts(Lang, Root, Src, PathAtom, Kind, Query) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, Query),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    lists:usort([branch_fact(N, Src, PathAtom, Kind) || {"b", N} <- Caps]).
+
+branch_fact(N, Src, PathAtom, Kind) ->
+    {Caller, CallerArity} = caller_info(N, Src),
+    {branch, Caller, CallerArity, Kind, PathAtom, line(N)}.
+
+%% Expression content: what a decision point's condition actually
+%% compares, not just that it exists — see ts_extract_typescript.erl's
+%% exprs/4 for the full rationale (shared with this module) on why a
+%% new node identity (node_id/2, keyed on a byte SPAN) is needed here
+%% and nowhere else in this schema.
+exprs(Lang, Root, Src, PathAtom) ->
+    binary_exprs(Lang, Root, Src, PathAtom) ++ unary_exprs(Lang, Root, Src, PathAtom).
+
+binary_exprs(Lang, Root, Src, PathAtom) ->
+    lists:flatmap(
+        fun({Op, Query}) -> binary_op_facts(Lang, Root, Src, PathAtom, Op, Query) end,
+        ?BINARY_OP_QUERIES).
+
+binary_op_facts(Lang, Root, Src, PathAtom, Op, Query) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, Query),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"b", N} <- Caps]),
+    lists:flatmap(fun(N) -> binary_op_fact_set(N, Src, PathAtom, Op) end, Nodes).
+
+%% Operands are positional (no fields — see ?BINARY_OP_QUERIES' own doc
+%% comment): node_named_child(N, 0) is left, node_named_child(N, 1) is
+%% right, confirmed empirically against a real `X > 0`-shaped clause.
+binary_op_fact_set(N, Src, PathAtom, Op) ->
+    Id = node_id(PathAtom, N),
+    {Caller, CallerArity} = caller_info(N, Src),
+    ExprFact = {expr, Id, Caller, CallerArity, binary, PathAtom, line(N)},
+    OpFact = {expr_operator, Id, Op},
+    LeftNode = symbolic_ts:node_named_child(N, 0),
+    RightNode = symbolic_ts:node_named_child(N, 1),
+    [ExprFact, OpFact]
+        ++ operand_facts(Id, left, LeftNode, Caller, CallerArity, Src, PathAtom)
+        ++ operand_facts(Id, right, RightNode, Caller, CallerArity, Src, PathAtom).
+
+unary_exprs(Lang, Root, Src, PathAtom) ->
+    lists:flatmap(
+        fun({Op, Query}) -> unary_op_facts(Lang, Root, Src, PathAtom, Op, Query) end,
+        ?UNARY_OP_QUERIES).
+
+unary_op_facts(Lang, Root, Src, PathAtom, Op, Query) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, Query),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"b", N} <- Caps]),
+    lists:flatmap(fun(N) -> unary_op_fact_set(N, Src, PathAtom, Op) end, Nodes).
+
+unary_op_fact_set(N, Src, PathAtom, Op) ->
+    Id = node_id(PathAtom, N),
+    {Caller, CallerArity} = caller_info(N, Src),
+    ExprFact = {expr, Id, Caller, CallerArity, unary, PathAtom, line(N)},
+    OpFact = {expr_operator, Id, Op},
+    OperandNode = symbolic_ts:node_named_child(N, 0),
+    [ExprFact, OpFact] ++ operand_facts(Id, operand, OperandNode, Caller, CallerArity, Src, PathAtom).
+
+%% Classify one operand node: a literal gets its own literal/7 fact, a
+%% bare `var` gets expr_ref/6, and anything else (a nested
+%% binary_op_expr/unary_op_expr, already captured independently by
+%% binary_exprs/1's or unary_exprs/1's own queries) needs no new fact —
+%% just the expr_operand link to the Id that capture already produced.
+operand_facts(ParentId, Role, Node, Caller, CallerArity, Src, PathAtom) ->
+    ChildId = node_id(PathAtom, Node),
+    Link = {expr_operand, ParentId, Role, ChildId},
+    case classify_literal(Node, Src) of
+        {LitKind, Value} ->
+            [Link, {literal, ChildId, Caller, CallerArity, LitKind, Value, PathAtom, line(Node)}];
+        no ->
+            case symbolic_ts:node_type(Node) of
+                "var" ->
+                    [Link, {expr_ref, ChildId, Caller, CallerArity,
+                        to_atom(symbolic_ts:node_text(Node, Src)), PathAtom, line(Node)}];
+                _ ->
+                    [Link]
+            end
+    end.
+
+%% integer/float/atom are the literal node types verified here. `atom`
+%% covers Erlang's true/false too — they're ordinary atoms in Erlang,
+%% not a distinct boolean type, so LitKind stays `atom` rather than
+%% inventing a `boolean` kind that doesn't correspond to any real
+%% grammar distinction. `string` is deliberately not classified yet —
+%% whether its text includes surrounding quotes the way TypeScript's
+%% does hasn't been verified.
+classify_literal(Node, Src) ->
+    case symbolic_ts:node_type(Node) of
+        "integer" -> {integer, parse_number(symbolic_ts:node_text(Node, Src))};
+        "float" -> {float, parse_number(symbolic_ts:node_text(Node, Src))};
+        "atom" -> {atom, to_atom(symbolic_ts:node_text(Node, Src))};
+        _ -> no
+    end.
+
+parse_number(Text) ->
+    try list_to_integer(Text)
+    catch error:badarg -> list_to_float(Text)
+    end.
+
+%% Same node-identity scheme as ts_extract_typescript.erl's node_id/2 —
+%% see that module for why a byte span, not start-byte alone, is needed.
+node_id(PathAtom, Node) ->
+    {PathAtom, symbolic_ts:node_start_byte(Node), symbolic_ts:node_end_byte(Node)}.
 
 comments(Lang, Root, Src, PathAtom) ->
     lists:usort([

@@ -48,7 +48,11 @@ serve_test_() ->
         fun query_default_limit_is_50/1,
         fun query_undefined_predicate_is_friendly_error/1,
         fun query_malformed_goal_is_error/1,
-        fun query_bad_goal_type_is_caught/1
+        fun query_bad_goal_type_is_caught/1,
+        fun parse_reports_rules_file/1,
+        fun overview_reports_rules_file/1,
+        fun query_resolves_a_real_derived_predicate/1,
+        fun parse_with_broken_rules_override_is_friendly_error/1
     ]}.
 
 overview_before_parse(_Setup) ->
@@ -149,4 +153,47 @@ query_bad_goal_type_is_caught(_Setup) ->
     fun() ->
         Json = decode(symbolic_serve:handle_query(#{<<"goal">> => 123})),
         ?assertMatch(#{<<"error">> := <<"caught error: function_clause", _/binary>>}, Json)
+    end.
+
+%% --- .symbolic/rules.pl parity (symbolic_codebase's rules_file, surfaced) ---
+
+%% test/fixtures lives inside this repo, so parse's discovery walks up to
+%% the real .symbolic/rules.pl — rules_file in the JSON response names it.
+parse_reports_rules_file(_Setup) ->
+    fun() ->
+        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)})),
+        #{<<"ok">> := Ok} = Json,
+        ?assertMatch(<<_/binary>>, maps:get(<<"rules_file">>, Ok)),
+        ?assert(binary:match(maps:get(<<"rules_file">>, Ok), <<".symbolic/rules.pl">>) =/= nomatch)
+    end.
+
+overview_reports_rules_file(_Setup) ->
+    fun() ->
+        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        Json = decode(symbolic_serve:handle_overview(#{})),
+        #{<<"ok">> := Ok} = Json,
+        ?assertMatch(<<_/binary>>, maps:get(<<"rules_file">>, Ok))
+    end.
+
+%% The concrete proof that the MCP tool an agent actually calls can now
+%% answer with the derived-predicate library, not just raw facts: callees/2
+%% (from the real .symbolic/rules.pl) against test/fixtures/sample.ts's
+%% `foo`, instead of the existence_error a facts-only cache would give.
+query_resolves_a_real_derived_predicate(_Setup) ->
+    fun() ->
+        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        Json = decode(symbolic_serve:handle_query(#{<<"goal">> => <<"callees(foo, Callees)">>})),
+        ?assertMatch(#{<<"count">> := C} when C > 0, Json)
+    end.
+
+%% A rules file that fails to consult renders through parse_error_str/1's
+%% new {rules_error, ...} clause, distinct from the existing not_parsed /
+%% existence_error / timeout friendly messages.
+parse_with_broken_rules_override_is_friendly_error(_Setup) ->
+    fun() ->
+        Json = decode(symbolic_serve:handle_parse(#{
+            <<"path">> => list_to_binary(?FIXTURES),
+            <<"rules">> => <<"no/such/rules_zz.pl">>})),
+        ?assertMatch(#{<<"error">> := <<"cannot consult rules no/such/rules_zz.pl", _/binary>>},
+            Json)
     end.

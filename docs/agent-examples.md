@@ -84,9 +84,12 @@ $ symbolic parse . -db facts.dets
 
 Facts print as JSON Lines, not raw Prolog text (`docs/prolog-store.md`
 §7) — one JSON array per fact. `parse -db` also writes the same facts
-into a DETS database (`facts.dets`); write a few small helper rules to
-their own file and load it alongside that database to unlock every
-scenario below —
+into a DETS database (`facts.dets`). Every scenario below needs one more
+thing: derived predicates like these. They're the small end of
+[`lint-queries.md`](lint-queries.md)'s library, and in this project the
+real copy lives in `.symbolic/rules.pl`, which `symbolic query` consults
+by itself — listed here so you can see what each one actually does, not
+as a file you have to write and pass with `-rules`.
 
 ```prolog
 callees(Fun, Callees) :-
@@ -107,6 +110,11 @@ stale_doc_example(Fun, Arity, DocFile, Line) :-
     \+ defines(Fun, Arity, _, _, _).
 ```
 
+(One deliberate difference in the canonical copy: `.symbolic/rules.pl`
+wraps `callees/2`'s `findall` in `sort/2`, so a function that calls the
+same callee from two clauses reports it once, and the answer is stable
+across parses rather than in assertion order.)
+
 Note `calls_object/2` here, not `calls_module/2` — a TypeScript method
 call (`stripeClient.createCharge(...)`) becomes `member(stripeClient,
 createCharge, ArgCount)`, not the `remote(Module, Function, ArgCount)`
@@ -124,13 +132,13 @@ An agent dropped into an unfamiliar codebase and asked to change
 what it *does* underneath. Both are one query each, no file open needed:
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'doc(charge, Arity, File, Line, Text)'
+$ symbolic query -db facts.dets 'doc(charge, Arity, File, Line, Text)'
 Arity = 2
 File = "payments.ts"
 Line = 2
 Text = "Charges a card for the given amount, delegating to the Stripe API."
 
-$ symbolic query -db facts.dets -rules rules.pl 'callees(charge, Callees)'
+$ symbolic query -db facts.dets 'callees(charge, Callees)'
 Callees = [["local","validateCard",1],["member","stripeClient","createCharge",2]]
 ```
 
@@ -146,7 +154,7 @@ the kind of thing a text search gets wrong the moment there's a second
 function with a similar name, or the call is qualified differently.
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'callers(validateCard, 1, Callers)'
+$ symbolic query -db facts.dets 'callers(validateCard, 1, Callers)'
 Callers = ["charge"]
 ```
 
@@ -163,7 +171,7 @@ text pattern — `member(stripeClient, _)` call sites, not any line
 containing the word "stripe":
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'findall(F, calls_object(F, stripeClient), Fs)'
+$ symbolic query -db facts.dets 'findall(F, calls_object(F, stripeClient), Fs)'
 F = [0]
 Fs = ["charge","refund"]
 ```
@@ -184,7 +192,7 @@ Useful both for an agent auditing its own generated code before a PR,
 and for a human deciding where to spend documentation effort:
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'findall(F, undocumented(F, _, _, _), Fs)'
+$ symbolic query -db facts.dets 'findall(F, undocumented(F, _, _, _), Fs)'
 F = [0]
 Fs = ["validateCard"]
 ```
@@ -201,7 +209,7 @@ The motivating example for `example_defines/5` (see
 sample was never actually added to `payments.ts`:
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'stale_doc_example(Fun, Arity, DocFile, Line)'
+$ symbolic query -db facts.dets 'stale_doc_example(Fun, Arity, DocFile, Line)'
 Arity = 2
 DocFile = "guide.md"
 Fun = "authorize"
@@ -214,8 +222,8 @@ answer instead of a wish to "please read both files carefully."
 
 ## Wiring this into an actual agent session, over MCP
 
-Everything above used the CLI (`symbolic query -db facts.dets -rules
-rules.pl ...`) for readability, but an LLM agent talks to a **live,
+Everything above used the CLI (`symbolic query -db facts.dets ...`) for
+readability, but an LLM agent talks to a **live,
 persistent session** over MCP (`symbolic serve`), not a fresh CLI
 process per question — see `docs/erlang-mcp-design.md`. Same facts,
 same rules, same answers; the difference is the transport. This is a

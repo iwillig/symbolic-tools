@@ -3,7 +3,7 @@
 
 %% cli/0 builds the argparse command tree; its structure (help text,
 %% required flags) is asserted directly. Each subcommand's `handler`
-%% closure calls straight into symbolic_query:run/3, symbolic_parse:run/2,
+%% closure calls straight into symbolic_query:run/4, symbolic_parse:run/2,
 %% or symbolic_serve:run/0 — all of which halt() or run forever — so
 %% those three modules are meck-mocked here to verify the handler
 %% extracts and forwards its Args map correctly, without ever running
@@ -17,9 +17,13 @@ cli_structure_test() ->
 
 query_cmd_requires_db_and_goal_test() ->
     #{commands := #{"query" := #{arguments := Args}}} = symbolic_cli:cli(),
-    #{db := Db, rules := Rules, goal := Goal} = args_by_name(Args),
+    #{db := Db, rules := Rules, no_rules := NoRules, goal := Goal} = args_by_name(Args),
     ?assertEqual(true, maps:get(required, Db)),
     ?assertEqual(false, maps:get(required, Rules)),
+    %% -no-rules is a switch: boolean-typed and defaulted to false, so it
+    %% is never absent from the Args map the handler receives.
+    ?assertEqual(boolean, maps:get(type, NoRules)),
+    ?assertEqual(false, maps:get(default, NoRules)),
     %% `goal` is positional (no `long`), so it has no `required` key at
     %% all — argparse treats every positional as required by default.
     ?assertEqual(false, maps:is_key(required, Goal)).
@@ -31,20 +35,36 @@ parse_cmd_db_is_optional_test() ->
 
 query_handler_forwards_db_rules_goal_test() ->
     meck:new(symbolic_query),
-    meck:expect(symbolic_query, run, fun(_Db, _Rules, _Goal) -> ok end),
+    meck:expect(symbolic_query, run, fun(_Db, _Rules, _NoRules, _Goal) -> ok end),
     #{commands := #{"query" := #{handler := Handler}}} = symbolic_cli:cli(),
-    Handler(#{db => "facts.dets", rules => "rules.pl", goal => "foo(X)"}),
-    ?assert(meck:called(symbolic_query, run, ["facts.dets", "rules.pl", "foo(X)"])),
+    Handler(#{db => "facts.dets", rules => "rules.pl", no_rules => false, goal => "foo(X)"}),
+    ?assert(meck:called(symbolic_query, run,
+        ["facts.dets", "rules.pl", false, "foo(X)"])),
     meck:unload(symbolic_query).
 
 %% `rules` absent entirely from Args (the CLI flag wasn't passed) ->
 %% the handler must default it to `undefined`, not crash on maps:get.
+%% `undefined` is also precisely what triggers .symbolic/rules.pl
+%% discovery downstream (resolve_rules/3, covered in
+%% symbolic_query_tests.erl — the run/4 mocked here is where it happens).
+%% `no_rules` defaults to false the same way.
 query_handler_defaults_missing_rules_test() ->
     meck:new(symbolic_query),
-    meck:expect(symbolic_query, run, fun(_Db, _Rules, _Goal) -> ok end),
+    meck:expect(symbolic_query, run, fun(_Db, _Rules, _NoRules, _Goal) -> ok end),
     #{commands := #{"query" := #{handler := Handler}}} = symbolic_cli:cli(),
     Handler(#{db => "facts.dets", goal => "foo(X)"}),
-    ?assert(meck:called(symbolic_query, run, ["facts.dets", undefined, "foo(X)"])),
+    ?assert(meck:called(symbolic_query, run,
+        ["facts.dets", undefined, false, "foo(X)"])),
+    meck:unload(symbolic_query).
+
+%% -no-rules given: forwarded as true, not silently dropped by the handler.
+query_handler_forwards_no_rules_test() ->
+    meck:new(symbolic_query),
+    meck:expect(symbolic_query, run, fun(_Db, _Rules, _NoRules, _Goal) -> ok end),
+    #{commands := #{"query" := #{handler := Handler}}} = symbolic_cli:cli(),
+    Handler(#{db => "facts.dets", no_rules => true, goal => "foo(X)"}),
+    ?assert(meck:called(symbolic_query, run,
+        ["facts.dets", undefined, true, "foo(X)"])),
     meck:unload(symbolic_query).
 
 parse_handler_forwards_dir_and_db_test() ->

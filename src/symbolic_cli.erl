@@ -30,12 +30,17 @@ query_cmd() ->
             #{name => db, long => "db", required => true,
               help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
             #{name => rules, long => "rules", required => false,
-              help => "Optional hand-written Prolog rule file (.pl) to consult alongside the facts"},
+              help => "Hand-written Prolog rule file (.pl) to consult alongside the facts. "
+                      "Defaults to the nearest .symbolic/rules.pl, searched upwards from the "
+                      "fact database and then the current directory"},
+            #{name => no_rules, long => "no-rules", type => boolean, default => false,
+              help => "Skip the automatic .symbolic/rules.pl lookup (an explicit -rules still applies)"},
             #{name => goal, help => "Goal to prove, e.g. \"foo(X)\""}
         ],
         handler => fun(Args) ->
             #{db := Db, goal := Goal} = Args,
-            symbolic_query:run(Db, maps:get(rules, Args, undefined), Goal)
+            symbolic_query:run(Db, maps:get(rules, Args, undefined),
+                maps:get(no_rules, Args, false), Goal)
         end
     }.
 

@@ -75,24 +75,65 @@ setup_logging() ->
 register_tools() ->
     ok = erlmcp_stdio:add_tool(<<"parse">>,
         <<"Scan a directory, extract codebase facts, and cache them in "
-          "memory. Replaces any previously cached codebase. Returns a summary "
-          "of what was loaded (files, languages, fact counts).">>,
+          "memory. Replaces any previously cached codebase. Also "
+          "auto-consults that project's `.symbolic/rules.pl` derived-"
+          "predicate library, if one is found by walking up from the "
+          "scanned directory (pass `rules` to use a specific file "
+          "instead). Returns a summary of what was loaded (files, "
+          "languages, fact counts, and which rules file - if any - was "
+          "consulted, as `rules_file`); check `rules_file` before relying "
+          "on a derived predicate. A bad rules file fails the whole call "
+          "and leaves any previously cached codebase untouched.">>,
         fun handle_parse/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{
               <<"path">> => #{<<"type">> => <<"string">>,
                              <<"description">> =>
-                                 <<"Directory to scan for source files">>}},
+                                 <<"Directory to scan for source files">>},
+              <<"rules">> => #{<<"type">> => <<"string">>,
+                             <<"description">> =>
+                                 <<"Prolog rules file to consult instead of "
+                                   "auto-discovering .symbolic/rules.pl">>}},
           <<"required">> => [<<"path">>]}),
     ok = erlmcp_stdio:add_tool(<<"query">>,
         <<"Prove a Prolog goal against the cached codebase and return all "
-          "solutions (capped). Use predicates from `overview`: "
+          "solutions (capped). Raw facts, from `overview`: "
           "defines(Function, Arity, Params, File, Line), "
           "calls(Caller, CallerArity, CallSpec, File, Line) where CallSpec "
           "is local(Callee, ArgCount)/remote(Module, Function, ArgCount)/"
           "member(Object, Method, ArgCount), doc(Function, Arity, File, "
-          "Line, Text), comment/3, heading/4, paragraph/3, code_block/3, "
-          "config_value/4, config_section/3.">>,
+          "Line, Text), branch(Function, Arity, Kind, File, Line) - a "
+          "decision point, for real complexity, "
+          "expr(Id, Function, Arity, Kind, File, Line)/expr_operator(Id, Op)/"
+          "expr_operand(Id, Role, ChildId)/literal(Id, Function, Arity, "
+          "LitKind, Value, File, Line)/expr_ref(Id, Function, Arity, Name, "
+          "File, Line) - what a decision point actually compares (Erlang/"
+          "TypeScript only; Id is a byte span, not Function/Arity/File/"
+          "Line), comment/3, heading/4, "
+          "paragraph/3, code_block/3, config_value/4, config_section/3. "
+          "Prefer an existing derived "
+          "predicate over reinventing it inline, when `parse`'s "
+          "`rules_file` shows a library was consulted: callees/2, "
+          "callers/3, undocumented/4, calls_object/2, stale_doc_example/4, "
+          "duplicate_name/3 (+all_duplicate_names/1), self_recursive/3, "
+          "fan_out/3, fan_in/3, top_fan_out/2, top_fan_in/2, "
+          "no_local_callers/3 (+all_no_local_callers/1), "
+          "undocumented_comment/3, risky_call/3 (+all_risky_calls/1), "
+          "module_dependency/2 (+all_module_dependencies/1), reaches/2, "
+          "take/3, plus ESLint-style checks: too_many_params/4, "
+          "too_complex/3, mutual_recursion/2 (+all_mutual_recursion/1 - "
+          "bind at least one side, both unbound can time out), "
+          "truly_uncalled/3 (+all_truly_uncalled/1), banned_call/4 "
+          "(+all_banned_calls/1 - edit banned_target/2 for this "
+          "project), god_file/2 (+all_god_files/1), real_complexity/4 "
+          "(+too_complex_real/4, +all_too_complex_real/1 - real McCabe-"
+          "style branch counting on branch/5, more accurate than "
+          "too_complex/3's fan-out proxy), short_name/4 "
+          "(+all_short_names/1 - edit allow_short_name/1 for names like "
+          "ok/id that should stay unflagged), self_compare/4 "
+          "(+all_self_compares/1) and yoda_condition/5 "
+          "(+all_yoda_conditions/1) - both on top of expr/6. "
+          "Docs: docs/lint-queries.md.">>,
         fun handle_query/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{
@@ -114,11 +155,15 @@ register_tools() ->
 
 %% Tool handlers — each returns a JSON binary and never crashes.
 
-handle_parse(#{<<"path">> := Path}) ->
+handle_parse(#{<<"path">> := Path} = Params) ->
     try
         PathStr = to_list(Path),
-        ?LOG_INFO("parse: path=~s", [PathStr]),
-        case symbolic_codebase:parse(PathStr) of
+        RulesOverride = case maps:find(<<"rules">>, Params) of
+            {ok, R} -> to_list(R);
+            error -> undefined
+        end,
+        ?LOG_INFO("parse: path=~s rules=~p", [PathStr, RulesOverride]),
+        case symbolic_codebase:parse(PathStr, RulesOverride) of
             {ok, Meta} ->
                 ?LOG_INFO("parse: ok files=~p total_facts=~p",
                           [maps:get(files, Meta), maps:get(total_facts, Meta)]),
@@ -211,7 +256,14 @@ meta_to_json(Meta) ->
         facts_by_predicate =>
             #{atom_to_binary(K, utf8) => V
               || {K, V} <- maps:to_list(maps:get(facts_by_predicate, Meta))},
-        total_facts => maps:get(total_facts, Meta)
+        total_facts => maps:get(total_facts, Meta),
+        %% undefined -> null when no rules file was found/given, so an
+        %% agent can tell "no derived predicates loaded" from "loaded but
+        %% path unknown" apart at a glance, without guessing from count.
+        rules_file => case maps:get(rules_file, Meta, undefined) of
+            undefined -> null;
+            RulesPath -> jstr(RulesPath)
+        end
     }.
 
 %% Error strings — JSON-safe (always a binary), human/LLM-readable.
@@ -227,6 +279,11 @@ parse_error_str({no_such_directory, Dir}) ->
 parse_error_str({nif_not_loadable, _Reason}) ->
     <<"the tree-sitter NIF (symbolic_ts) isn't loadable in this build - "
       "run via a `rebar3 release`; see docs/cli-erlang.md">>;
+parse_error_str({rules_error, RulesPath, Reason}) ->
+    iolist_to_binary([<<"cannot consult rules ">>, jstr(RulesPath), <<": ">>,
+                       jstr(io_lib:format("~p", [Reason])),
+                       <<" - parse failed, any previously cached codebase "
+                         "is unchanged">>]);
 parse_error_str(Reason) ->
     error_str(Reason).
 
