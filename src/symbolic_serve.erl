@@ -1,143 +1,261 @@
-%%% `symbolic serve` — the MCP server. Exposes the same `prolog_session`
-%%% engine `query`/`parse` already use, over the Model Context Protocol,
-%%% via `erlmcp`. See docs/erlang-mcp-design.md.
+%%% `symbolic serve` — the MCP server. Exposes the in-memory codebase
+%%% cache (symbolic_codebase) over the Model Context Protocol via `erlmcp`.
+%%% See docs/erlang-mcp-design.md.
+%%%
+%%% Three tools, refocused on "an LLM asks about a codebase":
+%%%   parse     scan a directory, extract facts, cache them in memory
+%%%   query     prove a Prolog goal against the cache, all solutions (capped)
+%%%   overview  report the current state of the cached fact base
 %%%
 %%% Uses `erlmcp_stdio` (not the lower-level `erlmcp_server:start_link/2`
-%%% from erlmcp's own README example) — confirmed by testing: the README's
-%%% API starts a process that isn't wired into the app's real stdin/stdout
-%%% loop unless the `erlmcp` OTP application itself is started first.
-%%% `erlmcp_stdio:start/0` goes through `erlmcp_sup` (erlmcp's actual
-%%% top-level supervisor) and is the API that works.
+%%% from erlmcp's README) — confirmed by testing: the README's API starts a
+%%% process that isn't wired into the app's real stdin/stdout loop unless the
+%%% `erlmcp` OTP application itself is started first; `erlmcp_stdio:start/0`
+%%% goes through `erlmcp_sup` (erlmcp's actual top-level supervisor) and is
+%%% the API that works.
 %%%
-%%% Four tools, one session per prolog_start_session call
-%%% (prolog_session_registry maps an opaque session id to its
-%%% prolog_session pid). Results are plain text, with each bound value
-%%% rendered as JSON via symbolic_term_json.erl (the same fix applied to
-%%% symbolic_query.erl's CLI output — erlog_io:writeq1/1 doesn't escape
-%%% an atom's embedded single quotes at all) — full structured
-%%% erlog<->JSON marshalling (docs/erlang-mcp-design.md §4) is
-%%% deliberately deferred.
+%%% Tool handlers are stateless (Params -> Result); the stateful cache lives
+%%% in the separately-started, registered symbolic_codebase process. Handlers
+%%% catch everything and always return a JSON binary — they never crash, so
+%%% behavior doesn't depend on erlmcp's own handler wrapping.
 %%%
-%%% Confirmed by reading erlmcp_stdio_server.erl: it already wraps every
-%%% handler call in try/catch and turns a crash into a proper JSON-RPC
-%%% error response — but each handler here still catches everything
-%%% itself and always returns a binary anyway, the same "structured
-%%% result, never crash" discipline prolog_session.erl already follows,
-%%% so behavior doesn't depend on relying on that erlmcp-side detail.
+%%% Logging goes through Erlang's `logger` to a file, never to standard
+%%% output: stdout is the MCP JSON-RPC transport (see the smoke test in
+%%% docs/erlang-mcp-design.md), and any log line written there would
+%%% corrupt the stream from the client's point of view.
 -module(symbolic_serve).
+-include_lib("kernel/include/logger.hrl").
 -export([run/0]).
+%% Exported for symbolic_serve_tests.erl only — exercising these three
+%% directly also exercises every rendering/error helper below them
+%% (json/1, query_result/3, solution_to_map/1, meta_to_json/1,
+%% parse_error_str/1, error_str/1, caught_str/3, limit_of/1, jstr/1,
+%% to_list/1), so nothing else needs a separate export. run/0,
+%% setup_logging/0, register_tools/0 stay untested by EUnit — they touch
+%% global logger/erlmcp state (removing the default logger handler,
+%% starting the erlmcp application) that a unit test shouldn't mutate;
+%% verified instead by the manual stdio smoke tests (see
+%% docs/erlang-mcp-design.md).
+-export([handle_parse/1, handle_query/1, handle_overview/1]).
 
 run() ->
+    ok = setup_logging(),
+    ?LOG_INFO("symbolic serve starting"),
     {ok, _} = application:ensure_all_started(erlmcp),
-    {ok, _SupPid} = prolog_session_sup:start_link(),
-    {ok, _RegPid} = prolog_session_registry:start_link(),
+    {ok, _CachePid} = symbolic_codebase:start_link(),
     ok = erlmcp_stdio:start(),
     ok = register_tools(),
+    ?LOG_INFO("symbolic serve ready: tools parse, query, overview registered"),
     receive after infinity -> ok end.
 
+%% A file under the platform's standard log directory (e.g. ~/Library/Logs
+%% on macOS, $XDG_STATE_HOME or ~/.local/state on Linux), independent of
+%% the cwd `symbolic serve` happens to be launched from.
+%%
+%% The kernel's own `default` logger handler targets standard_io (real
+%% stdout) and can't be pointed elsewhere at runtime (logger_std_h raises
+%% illegal_config_change on a type change) — confirmed by raising the
+%% primary log level to `info` and watching application/supervisor
+%% PROGRESS REPORTs land on stdout, right in the JSON-RPC stream. So it's
+%% removed outright rather than merely reconfigured, and our own handler
+%% (unfiltered, so it also captures those same OTP/SASL reports) replaces
+%% it as the only sink.
+setup_logging() ->
+    LogDir = filename:basedir(user_log, "symbolic"),
+    ok = filelib:ensure_path(LogDir),
+    LogFile = filename:join(LogDir, "serve.log"),
+    ok = logger:set_primary_config(level, info),
+    ok = logger:remove_handler(default),
+    ok = logger:add_handler(symbolic_serve_file, logger_std_h,
+             #{config => #{type => {file, LogFile}},
+               formatter => {logger_formatter, #{}}}),
+    ?LOG_INFO("logging to ~s", [LogFile]),
+    ok.
+
 register_tools() ->
-    ok = erlmcp_stdio:add_tool(<<"prolog_start_session">>,
-        <<"Start a new Prolog session, returns a session_id">>,
-        fun handle_start_session/1,
-        #{<<"type">> => <<"object">>, <<"properties">> => #{}}),
-    ok = erlmcp_stdio:add_tool(<<"prolog_consult">>,
-        <<"Load Prolog program text into a session">>,
-        fun handle_consult/1,
+    ok = erlmcp_stdio:add_tool(<<"parse">>,
+        <<"Scan a directory, extract codebase facts, and cache them in "
+          "memory. Replaces any previously cached codebase. Returns a summary "
+          "of what was loaded (files, languages, fact counts).">>,
+        fun handle_parse/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{
-              <<"session_id">> => #{<<"type">> => <<"string">>},
-              <<"program">> => #{<<"type">> => <<"string">>}},
-          <<"required">> => [<<"session_id">>, <<"program">>]}),
-    ok = erlmcp_stdio:add_tool(<<"prolog_query">>,
-        <<"Prove a goal against a session and return its bindings">>,
+              <<"path">> => #{<<"type">> => <<"string">>,
+                             <<"description">> =>
+                                 <<"Directory to scan for source files">>}},
+          <<"required">> => [<<"path">>]}),
+    ok = erlmcp_stdio:add_tool(<<"query">>,
+        <<"Prove a Prolog goal against the cached codebase and return all "
+          "solutions (capped). Use predicates from `overview`: "
+          "defines(Function, Arity, Params, File, Line), "
+          "calls(Caller, CallerArity, CallSpec, File, Line) where CallSpec "
+          "is local(Callee, ArgCount)/remote(Module, Function, ArgCount)/"
+          "member(Object, Method, ArgCount), doc(Function, Arity, File, "
+          "Line, Text), comment/3, heading/4, paragraph/3, code_block/3, "
+          "config_value/4, config_section/3.">>,
         fun handle_query/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{
-              <<"session_id">> => #{<<"type">> => <<"string">>},
-              <<"goal">> => #{<<"type">> => <<"string">>}},
-          <<"required">> => [<<"session_id">>, <<"goal">>]}),
-    ok = erlmcp_stdio:add_tool(<<"prolog_end_session">>,
-        <<"End a Prolog session">>,
-        fun handle_end_session/1,
-        #{<<"type">> => <<"object">>,
-          <<"properties">> => #{<<"session_id">> => #{<<"type">> => <<"string">>}},
-          <<"required">> => [<<"session_id">>]}),
+              <<"goal">> => #{<<"type">> => <<"string">>,
+                             <<"description">> =>
+                                 <<"Prolog goal, e.g. calls(X, local(foo), _, _)">>},
+              <<"limit">> => #{<<"type">> => <<"integer">>,
+                              <<"description">> =>
+                                  <<"Max solutions to return (default 50)">>}},
+          <<"required">> => [<<"goal">>]}),
+    ok = erlmcp_stdio:add_tool(<<"overview">>,
+        <<"Report the current state of the cached fact base: whether a "
+          "codebase is loaded, how many files/languages, and fact counts by "
+          "predicate. Call it after `parse`, or to check state before "
+          "`query`.">>,
+        fun handle_overview/1,
+        #{<<"type">> => <<"object">>, <<"properties">> => #{}}),
     ok.
 
-%% Tool handlers
+%% Tool handlers — each returns a JSON binary and never crashes.
 
-handle_start_session(_Params) ->
+handle_parse(#{<<"path">> := Path}) ->
     try
-        {ok, SessionId} = prolog_session_registry:start_session(),
-        SessionId
-    catch
-        Class:Reason -> render_caught(Class, Reason)
-    end.
-
-handle_consult(#{<<"session_id">> := SessionId, <<"program">> := Program}) ->
-    try
-        with_session(SessionId, fun(Pid) ->
-            case prolog_session:consult_string(Pid, to_list(Program)) of
-                ok -> <<"ok">>;
-                {error, Reason} -> render_error(Reason)
-            end
-        end)
-    catch
-        Class:Reason -> render_caught(Class, Reason)
-    end.
-
-handle_query(#{<<"session_id">> := SessionId, <<"goal">> := Goal}) ->
-    try
-        with_session(SessionId, fun(Pid) ->
-            case prolog_session:query(Pid, to_list(Goal)) of
-                {ok, Bindings} -> render_bindings(Bindings);
-                no_solution -> <<"No.">>;
-                {error, Reason} -> render_error(Reason)
-            end
-        end)
-    catch
-        Class:Reason -> render_caught(Class, Reason)
-    end.
-
-handle_end_session(#{<<"session_id">> := SessionId}) ->
-    try
-        case prolog_session_registry:end_session(SessionId) of
-            ok -> <<"ok">>;
-            error -> <<"error: unknown session_id">>
+        PathStr = to_list(Path),
+        ?LOG_INFO("parse: path=~s", [PathStr]),
+        case symbolic_codebase:parse(PathStr) of
+            {ok, Meta} ->
+                ?LOG_INFO("parse: ok files=~p total_facts=~p",
+                          [maps:get(files, Meta), maps:get(total_facts, Meta)]),
+                json(#{ok => meta_to_json(Meta)});
+            {error, ParseErr} ->
+                ?LOG_ERROR("parse: error=~p", [ParseErr]),
+                json(#{error => parse_error_str(ParseErr)})
         end
     catch
-        Class:Reason -> render_caught(Class, Reason)
+        Class:Crash:ST ->
+            ?LOG_ERROR("parse: crashed ~p:~p~n~p", [Class, Crash, ST]),
+            json(#{error => caught_str(Class, Crash, ST)})
     end.
 
-%% Internal
-
-with_session(SessionId, Fun) ->
-    case prolog_session_registry:lookup(SessionId) of
-        {ok, Pid} -> Fun(Pid);
-        error -> <<"error: unknown session_id">>
+handle_query(Params) ->
+    try
+        Goal = to_list(maps:get(<<"goal">>, Params)),
+        Limit = limit_of(Params),
+        ?LOG_INFO("query: goal=~s limit=~p", [Goal, Limit]),
+        Result = symbolic_codebase:query(Goal, Limit),
+        log_query_result(Result),
+        render_query(Result, Limit)
+    catch
+        Class:Crash:ST ->
+            ?LOG_ERROR("query: crashed ~p:~p~n~p", [Class, Crash, ST]),
+            json(#{error => caught_str(Class, Crash, ST)})
     end.
 
-render_bindings([]) ->
-    <<"Yes.">>;
-render_bindings(Bindings) ->
-    %% ~ts, not ~s, for the JSON value — see symbolic_parse.erl's
-    %% print_fact/1 for why (a plain ~s mangles a binary's non-ASCII
-    %% UTF-8 bytes).
-    Lines = [
-        io_lib:format("~s = ~ts",
-            [name_to_list(Name), jsx:encode(symbolic_term_json:encode_term(Value))])
-     || {Name, Value} <- Bindings
-    ],
-    iolist_to_binary(lists:join("\n", Lines)).
+log_query_result({ok, Solutions}) ->
+    ?LOG_INFO("query: ok count=~p", [length(Solutions)]);
+log_query_result({truncated, Solutions}) ->
+    ?LOG_INFO("query: truncated count=~p", [length(Solutions)]);
+log_query_result({error, QueryErr}) ->
+    ?LOG_ERROR("query: error=~p", [QueryErr]).
 
-render_error(Reason) ->
-    iolist_to_binary(io_lib:format("error: ~p", [Reason])).
+render_query({ok, Solutions}, Limit) ->
+    json(query_result(Solutions, false, Limit));
+render_query({truncated, Solutions}, Limit) ->
+    json(query_result(Solutions, true, Limit));
+render_query({error, QueryErr}, _Limit) ->
+    json(#{error => error_str(QueryErr)}).
 
-render_caught(Class, Reason) ->
-    iolist_to_binary(io_lib:format("error: ~p:~p", [Class, Reason])).
+handle_overview(_Params) ->
+    ?LOG_INFO("overview"),
+    try
+        case symbolic_codebase:overview() of
+            {ok, Meta} -> json(#{ok => meta_to_json(Meta)});
+            {not_parsed, NotParsed} -> json(#{ok => NotParsed})
+        end
+    catch
+        Class:Crash:ST ->
+            ?LOG_ERROR("overview: crashed ~p:~p~n~p", [Class, Crash, ST]),
+            json(#{error => caught_str(Class, Crash, ST)})
+    end.
 
-name_to_list(Name) when is_atom(Name) -> atom_to_list(Name);
-name_to_list(Name) when is_integer(Name) -> "_" ++ integer_to_list(Name).
+%% Rendering — everything out the door is a JSON binary via jsx.
+
+json(Term) ->
+    jsx:encode(Term).
+
+%% {solutions: [VarMap], count: N, truncated: Bool} — uniform, LLM-friendly.
+query_result(Solutions, Truncated, Limit) ->
+    #{solutions => [solution_to_map(S) || S <- Solutions],
+      count => length(Solutions),
+      truncated => Truncated,
+      limit => Limit}.
+
+%% One solution (a [{Name, Value}] binding list) -> a JSON object mapping
+%% variable names to their JSON-encoded values.
+solution_to_map(Bindings) ->
+    maps:from_list(
+        [{var_name_key(Name), symbolic_term_json:encode_term(Value)}
+         || {Name, Value} <- Bindings]).
+
+%% erlog names user variables as atoms and its own internal/anonymous
+%% variables as integers; render both as readable JSON keys. Must be binaries
+%% (not charlists): jsx only encodes map keys that are atom/binary/integer, and
+%% a bare list of ints would hit a function_clause in jsx_encoder:unpack/3.
+var_name_key(A) when is_atom(A) -> atom_to_binary(A, utf8);
+var_name_key(N) when is_integer(N) -> <<"_">> ++ integer_to_binary(N).
+
+meta_to_json(Meta) ->
+    #{
+        loaded => maps:get(loaded, Meta),
+        files => maps:get(files, Meta),
+        file_list => [jstr(F) || F <- maps:get(file_list, Meta)],
+        %% languages are Erlang charlists; jsx encodes a bare int-list as a
+        %% number-array, so convert to binaries so they render as JSON strings.
+        languages => [jstr(L) || L <- maps:get(languages, Meta)],
+        facts_by_predicate =>
+            #{atom_to_binary(K, utf8) => V
+              || {K, V} <- maps:to_list(maps:get(facts_by_predicate, Meta))},
+        total_facts => maps:get(total_facts, Meta)
+    }.
+
+%% Error strings — JSON-safe (always a binary), human/LLM-readable.
+%%
+%% Plain ASCII only in these literals, deliberately: a `<<"...">>` binary
+%% literal's characters are packed as plain 8-bit integer segments unless
+%% each is marked `/utf8`, so a non-ASCII codepoint like an em dash (U+2014)
+%% silently truncates to a bogus single byte (0x14, a control character)
+%% instead of raising an error — found via the friendly-error smoke test
+%% for a non-existent predicate coming back corrupted rather than crashing.
+parse_error_str({no_such_directory, Dir}) ->
+    <<"no such directory: ", (jstr(Dir))/binary>>;
+parse_error_str({nif_not_loadable, _Reason}) ->
+    <<"the tree-sitter NIF (symbolic_ts) isn't loadable in this build - "
+      "run via a `rebar3 release`; see docs/cli-erlang.md">>;
+parse_error_str(Reason) ->
+    error_str(Reason).
+
+error_str(not_parsed) ->
+    <<"no codebase is cached - call `parse` first, then `query`">>;
+error_str({existence_error, procedure, {'/', F, A}}) ->
+    iolist_to_binary([<<"no such predicate: ">>, atom_to_binary(F, utf8),
+                       <<"/">>, integer_to_binary(A),
+                       <<" - see `overview` for available predicates">>]);
+error_str(timeout) ->
+    <<"query timed out - the goal may be cyclic or unbounded; try a more "
+      "specific goal">>;
+error_str(Reason) ->
+    jstr(io_lib:format("~p", [Reason])).
+
+caught_str(Class, Reason, ST) ->
+    jstr(io_lib:format("caught ~p: ~p ~p", [Class, Reason, ST])).
+
+limit_of(Params) ->
+    case maps:find(<<"limit">>, Params) of
+        {ok, N} when is_integer(N) -> N;
+        _ -> 50
+    end.
+
+%% unicode:characters_to_binary, not list_to_binary: io_lib:format can return
+%% deep/nested iodata (e.g. it nests a literal sub-string for some ~p args),
+%% which list_to_binary rejects with badarg since it requires a flat list.
+jstr(B) when is_binary(B) -> B;
+jstr(S) when is_list(S) -> unicode:characters_to_binary(S).
 
 to_list(B) when is_binary(B) -> binary_to_list(B);
 to_list(L) when is_list(L) -> L.

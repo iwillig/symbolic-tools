@@ -13,8 +13,8 @@
 %%%   code_block(File, Lang, Line)     — Lang is `none` for a fence with
 %%%                                       no declared language
 %%%   paragraph(File, Text, Line)
-%%%   example_defines(Function, File, Line)
-%%%   example_calls(Caller, CallSpec, File, Line)
+%%%   example_defines(Function, Arity, Params, File, Line)
+%%%   example_calls(Caller, CallerArity, CallSpec, File, Line)
 %%%
 %%% `example_defines`/`example_calls` re-run the real
 %%% ts_extract_erlang/ts_extract_typescript/ts_extract_bash extractors
@@ -30,10 +30,10 @@
 %%% undercut that. The split makes the actual motivating query trivial:
 %%%
 %%%   stale_doc_example(Fun, DocFile, Line) :-
-%%%       example_defines(Fun, DocFile, Line),
-%%%       \+ defines(Fun, _, _).
+%%%       example_defines(Fun, _, _, DocFile, Line),
+%%%       \+ defines(Fun, _, _, _, _).
 %%%
-%%% `comment/3`/`doc/4` are deliberately NOT extracted from embedded
+%%% `comment/3`/`doc/5` are deliberately NOT extracted from embedded
 %%% snippets — not asked for, and a fragment's own comments add noise
 %%% without helping answer "does this still exist for real."
 %%%
@@ -162,10 +162,10 @@ extractor_for_lang(sh) -> fun ts_extract_bash:text/2;
 extractor_for_lang(bash) -> fun ts_extract_bash:text/2;
 extractor_for_lang(_) -> undefined.
 
-example_fact({defines, Name, File, Line}, Offset) ->
-    {true, {example_defines, Name, File, Line + Offset}};
-example_fact({calls, Caller, CallSpec, File, Line}, Offset) ->
-    {true, {example_calls, Caller, CallSpec, File, Line + Offset}};
+example_fact({defines, Name, Arity, Params, File, Line}, Offset) ->
+    {true, {example_defines, Name, Arity, Params, File, Line + Offset}};
+example_fact({calls, Caller, CallerArity, CallSpec, File, Line}, Offset) ->
+    {true, {example_calls, Caller, CallerArity, CallSpec, File, Line + Offset}};
 example_fact(_Other, _Offset) ->
     false.
 

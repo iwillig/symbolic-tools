@@ -6,20 +6,20 @@
 extracts_defines_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
-    ?assert(lists:member({defines, foo, Path, 1}, Facts)),
-    ?assert(lists:member({defines, other, Path, 6}, Facts)).
+    ?assert(lists:member({defines, foo, 1, <<"(x: number)">>, Path, 1}, Facts)),
+    ?assert(lists:member({defines, other, 0, <<"()">>, Path, 6}, Facts)).
 
 extracts_local_call_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
-    ?assert(lists:member({calls, foo, {local, bar}, Path, 2}, Facts)),
-    ?assert(lists:member({calls, other, {local, bar}, Path, 7}, Facts)).
+    ?assert(lists:member({calls, foo, 1, {local, bar, 1}, Path, 2}, Facts)),
+    ?assert(lists:member({calls, other, 0, {local, bar, 1}, Path, 7}, Facts)).
 
 extracts_member_call_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
     ?assert(lists:member(
-        {calls, foo, {member, 'this.baz', qux}, Path, 3}, Facts)).
+        {calls, foo, 1, {member, 'this.baz', qux, 2}, Path, 3}, Facts)).
 
 no_duplicate_facts_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
@@ -41,13 +41,13 @@ extracts_doc_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
     ?assert(lists:member(
-        {doc, capitalize, Path, 11, <<"Capitalizes the first letter of a word.">>}, Facts)),
+        {doc, capitalize, 1, Path, 11, <<"Capitalizes the first letter of a word.">>}, Facts)),
     ?assert(lists:member(
-        {doc, shout, Path, 18,
+        {doc, shout, 1, Path, 18,
          <<"Shouts a word by capitalizing it and adding an exclamation mark.">>},
         Facts)).
 
 standalone_comment_has_no_doc_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     ?assertEqual(
-        [], [F || {doc, _, _, 22, _} = F <- Facts]).
+        [], [F || {doc, _, _, _, 22, _} = F <- Facts]).

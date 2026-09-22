@@ -65,20 +65,20 @@ $ symbolic parse . -db facts.dets
 ["code_block","guide.md","ts",14]
 ["comment","payments.ts",1,"Charges a card for the given amount, delegating to the Stripe API."]
 ["comment","payments.ts",7,"Refunds a previous charge by its Stripe charge id."]
-["defines","charge","payments.ts",2]
-["defines","refund","payments.ts",8]
-["defines","validateCard","payments.ts",12]
-["example_defines","authorize","guide.md",15]
-["example_defines","charge","guide.md",6]
+["defines","charge",2,"(cardToken: string, amountCents: number)","payments.ts",2]
+["defines","refund",2,"(chargeId: string, amountCents: number)","payments.ts",8]
+["defines","validateCard",1,"(cardToken: string)","payments.ts",12]
+["example_defines","authorize",2,"(cardToken: string, amountCents: number)","guide.md",15]
+["example_defines","charge",2,"(cardToken: string, amountCents: number)","guide.md",6]
 ["paragraph","guide.md","Call `authorize` first if you need a separate authorization step before charging the card:",11]
 ["paragraph","guide.md","`charge` takes a card token and an amount in cents:",3]
-["calls","charge",["local","validateCard"],"payments.ts",3]
-["calls","charge",["member","stripeClient","createCharge"],"payments.ts",4]
-["calls","refund",["member","stripeClient","createRefund"],"payments.ts",9]
-["doc","charge","payments.ts",2,"Charges a card for the given amount, delegating to the Stripe API."]
-["doc","refund","payments.ts",8,"Refunds a previous charge by its Stripe charge id."]
-["example_calls","authorize",["member","stripeClient","createAuthorization"],"guide.md",16]
-["example_calls","charge",["member","stripeClient","createCharge"],"guide.md",7]
+["calls","charge",2,["local","validateCard",1],"payments.ts",3]
+["calls","charge",2,["member","stripeClient","createCharge",2],"payments.ts",4]
+["calls","refund",2,["member","stripeClient","createRefund",2],"payments.ts",9]
+["doc","charge",2,"payments.ts",2,"Charges a card for the given amount, delegating to the Stripe API."]
+["doc","refund",2,"payments.ts",8,"Refunds a previous charge by its Stripe charge id."]
+["example_calls","authorize",2,["member","stripeClient","createAuthorization",2],"guide.md",16]
+["example_calls","charge",2,["member","stripeClient","createCharge",2],"guide.md",7]
 ["heading","guide.md",1,"Payments Module",1]
 ```
 
@@ -90,29 +90,30 @@ scenario below —
 
 ```prolog
 callees(Fun, Callees) :-
-    findall(C, calls(Fun, C, _, _), Callees).
+    findall(C, calls(Fun, _CallerArity, C, _, _), Callees).
 
-callers(Fun, Callers) :-
-    findall(Caller, calls(Caller, local(Fun), _, _), Callers).
+callers(Fun, Arity, Callers) :-
+    findall(Caller, calls(Caller, _CallerArity, local(Fun, Arity), _, _), Callers).
 
-undocumented(Fun, File, Line) :-
-    defines(Fun, File, Line),
-    \+ doc(Fun, _, _, _).
+undocumented(Fun, Arity, File, Line) :-
+    defines(Fun, Arity, _Params, File, Line),
+    \+ doc(Fun, Arity, _, _, _).
 
 calls_object(Fun, Object) :-
-    calls(Fun, member(Object, _), _, _).
+    calls(Fun, _CallerArity, member(Object, _, _), _, _).
 
-stale_doc_example(Fun, DocFile, Line) :-
-    example_defines(Fun, DocFile, Line),
-    \+ defines(Fun, _, _).
+stale_doc_example(Fun, Arity, DocFile, Line) :-
+    example_defines(Fun, Arity, _Params, DocFile, Line),
+    \+ defines(Fun, Arity, _, _, _).
 ```
 
 Note `calls_object/2` here, not `calls_module/2` — a TypeScript method
 call (`stripeClient.createCharge(...)`) becomes `member(stripeClient,
-createCharge)`, not the `remote(Module, Function)` shape a qualified
-Erlang call (`stripe_client:create_charge(...)`) would produce. Same
-underlying question ("what does this call into"), different fact shape
-per language — see `docs/tree-sitter-erlang.md` §3.
+createCharge, ArgCount)`, not the `remote(Module, Function, ArgCount)`
+shape a qualified Erlang call (`stripe_client:create_charge(...)`)
+would produce. Same underlying question ("what does this call into"),
+different fact shape per language — see `docs/tree-sitter-erlang.md`
+§3.
 
 ## Five things an agent would otherwise have to grep and re-read for
 
@@ -123,13 +124,14 @@ An agent dropped into an unfamiliar codebase and asked to change
 what it *does* underneath. Both are one query each, no file open needed:
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'doc(charge, File, Line, Text)'
+$ symbolic query -db facts.dets -rules rules.pl 'doc(charge, Arity, File, Line, Text)'
+Arity = 2
 File = "payments.ts"
 Line = 2
 Text = "Charges a card for the given amount, delegating to the Stripe API."
 
 $ symbolic query -db facts.dets -rules rules.pl 'callees(charge, Callees)'
-Callees = [["local","validateCard"],["member","stripeClient","createCharge"]]
+Callees = [["local","validateCard",1],["member","stripeClient","createCharge",2]]
 ```
 
 `callees/2` (defined above) uses `findall/3` to collect every call site
@@ -144,7 +146,7 @@ the kind of thing a text search gets wrong the moment there's a second
 function with a similar name, or the call is qualified differently.
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'callers(validateCard, Callers)'
+$ symbolic query -db facts.dets -rules rules.pl 'callers(validateCard, 1, Callers)'
 Callers = ["charge"]
 ```
 
@@ -182,24 +184,25 @@ Useful both for an agent auditing its own generated code before a PR,
 and for a human deciding where to spend documentation effort:
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'findall(F, undocumented(F, _, _), Fs)'
+$ symbolic query -db facts.dets -rules rules.pl 'findall(F, undocumented(F, _, _, _), Fs)'
 F = [0]
 Fs = ["validateCard"]
 ```
 
-`charge` and `refund` both have doc comments (see `doc/4` in the fact
-dump above); `validateCard` doesn't. This is `defines/3` minus `doc/4`,
+`charge` and `refund` both have doc comments (see `doc/5` in the fact
+dump above); `validateCard` doesn't. This is `defines/5` minus `doc/5`,
 expressed once as a rule and reused instead of re-derived by eye every
 time.
 
 ### 5. Documentation drift: "Does `guide.md` still match the code?"
 
-The motivating example for `example_defines/3` (see
+The motivating example for `example_defines/5` (see
 `docs/tree-sitter-markdown.md` §4) — `guide.md`'s `authorize` code
 sample was never actually added to `payments.ts`:
 
 ```sh
-$ symbolic query -db facts.dets -rules rules.pl 'stale_doc_example(Fun, DocFile, Line)'
+$ symbolic query -db facts.dets -rules rules.pl 'stale_doc_example(Fun, Arity, DocFile, Line)'
+Arity = 2
 DocFile = "guide.md"
 Fun = "authorize"
 Line = 15
@@ -310,8 +313,8 @@ delegating the actual multi-step logical resolution to a real Prolog
 interpreter, rather than asking a model to simulate it in prose,
 produces both more accurate answers and answers that don't degrade as
 the question gets one hop harder ("who calls this" vs. "who calls
-something that calls this"). `callers/2` above already gets that for
-free — `findall(GrandCaller, (calls(GrandCaller, local(Caller), _, _),
+something that calls this"). `callers/3` above already gets that for
+free — `findall(GrandCaller, (calls(GrandCaller, _, local(Caller, _), _, _),
 member(Caller, Callers)), GrandCallers)` is a small extension of the
 same rule, not a harder prompt.
 
@@ -322,7 +325,7 @@ same rule, not a harder prompt.
 - [`erlang-mcp-design.md`](erlang-mcp-design.md) — the MCP server design
   §3's four tools are shown against above.
 - [`tree-sitter-markdown.md`](tree-sitter-markdown.md) §4 —
-  `example_defines/3`/`example_calls/4`, the facts behind scenario 5.
+  `example_defines/5`/`example_calls/5`, the facts behind scenario 5.
 - [`grpo-prolog-tool.md`](grpo-prolog-tool.md),
   [`lorp-approach.md`](lorp-approach.md) — the research on delegating
   logical reasoning to a real Prolog interpreter this project applies to

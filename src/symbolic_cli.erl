@@ -5,6 +5,11 @@
 %%% input — see https://www.erlang.org/doc/apps/stdlib/argparse.html.
 -module(symbolic_cli).
 -export([main/1]).
+%% Exported for symbolic_cli_tests.erl only — lets it inspect the
+%% argparse command tree (help text, required flags) and invoke each
+%% handler closure directly (mocking the downstream halt()-invoking
+%% modules with meck) without going through argparse:run/3 itself.
+-export([cli/0]).
 
 main(Argv) ->
     argparse:run(Argv, cli(), #{progname => "symbolic"}).
@@ -50,7 +55,7 @@ parse_cmd() ->
 
 serve_cmd() ->
     #{
-        help => "Start the MCP server (not yet implemented)",
+        help => "Start the MCP server over stdio (parse / query / overview)",
         handler => fun(_) ->
             symbolic_serve:run()
         end

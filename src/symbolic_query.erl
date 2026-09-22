@@ -14,38 +14,72 @@
 %%% reason to move it off text.
 -module(symbolic_query).
 -export([run/2, run/3]).
+%% Exported for symbolic_query_tests.erl — run_result/3 is the halt-free
+%% core (see its own doc comment); maybe_consult_rules/2, print_bindings/1
+%% and name_to_list/1 are its remaining halt-free pieces.
+-export([run_result/3, maybe_consult_rules/2, print_bindings/1, name_to_list/1]).
 
 run(DbPath, Goal) ->
     run(DbPath, undefined, Goal).
 
+%% halt() belongs only here, at the CLI's actual edge — everything that
+%% decides the outcome lives in run_result/3, which returns a plain term
+%% instead of halting, precisely so EUnit can exercise it directly. See
+%% docs/testing-erlang.md — using erlang:halt/0,1 anywhere else (deep in
+%% business logic) is a well-known Erlang anti-pattern: it kills the
+%% entire runtime, not just "the current operation", which is exactly
+%% why run_result/3 couldn't be unit tested before this split existed.
 run(DbPath, RulesPath, Goal) ->
+    case run_result(DbPath, RulesPath, Goal) of
+        {solutions, Bindings} ->
+            print_bindings(Bindings),
+            halt(0);
+        no_solution ->
+            io:format("No.~n"),
+            halt(1);
+        {error, {no_such_db, Path}} ->
+            fail("cannot read fact database: ~s", [Path]);
+        {error, {rules_error, RulesPath1, Reason}} ->
+            fail("cannot consult rules ~s: ~p", [RulesPath1, Reason]);
+        {error, {query_failed, Reason}} ->
+            fail("query failed: ~p", [Reason])
+    end.
+
+%% The halt-free core: load the fact database, optionally consult a
+%% rules file, prove Goal, and report what happened as a plain term.
+%% Starts (and always stops) its own prolog_session — a caller gets a
+%% clean session either way, never one left running after this returns.
+-spec run_result(file:filename(), file:filename() | undefined, string()) ->
+    {solutions, [{atom(), term()}]} | no_solution
+    | {error, {no_such_db, file:filename()}}
+    | {error, {rules_error, file:filename() | undefined, term()}}
+    | {error, {query_failed, term()}}.
+run_result(DbPath, RulesPath, Goal) ->
     case filelib:is_regular(DbPath) of
         true -> run_checked(DbPath, RulesPath, Goal);
-        false -> fail("cannot read fact database: ~s", [DbPath])
+        false -> {error, {no_such_db, DbPath}}
     end.
 
 run_checked(DbPath, RulesPath, Goal) ->
     Facts = symbolic_fact_store:read(DbPath),
     {ok, Pid} = prolog_session:start_link(),
     ok = prolog_session:load_facts(Pid, Facts),
-    case maybe_consult_rules(Pid, RulesPath) of
-        ok -> handle_query(Pid, Goal);
-        {error, Reason} -> fail("cannot consult rules ~s: ~p", [RulesPath, Reason])
-    end.
+    Result =
+        case maybe_consult_rules(Pid, RulesPath) of
+            ok -> query_result(Pid, Goal);
+            {error, Reason} -> {error, {rules_error, RulesPath, Reason}}
+        end,
+    prolog_session:stop(Pid),
+    Result.
 
 maybe_consult_rules(_Pid, undefined) -> ok;
 maybe_consult_rules(Pid, RulesPath) -> prolog_session:consult(Pid, RulesPath).
 
-handle_query(Pid, Goal) ->
+query_result(Pid, Goal) ->
     case prolog_session:query(Pid, Goal) of
-        {ok, Bindings} ->
-            print_bindings(Bindings),
-            halt(0);
-        no_solution ->
-            io:format("No.~n"),
-            halt(1);
-        {error, Reason} ->
-            fail("query failed: ~p", [Reason])
+        {ok, Bindings} -> {solutions, Bindings};
+        no_solution -> no_solution;
+        {error, Reason} -> {error, {query_failed, Reason}}
     end.
 
 print_bindings([]) ->

@@ -166,6 +166,46 @@ Only add once there is a CI pipeline to report to:
 - **[`rebar3_codecov`](https://github.com/esl/rebar3_codecov)** — converts
   `.coverdata` to Codecov's JSON format instead.
 
+### 4.2 `erlang:halt/0,1` as a coverage boundary — and why it's an
+     anti-pattern to leave alone
+
+`erlang:halt/0,1,2` terminates the **entire runtime**, not just the
+current operation — calling a function that halts from EUnit kills the
+whole test VM, not just that test case. `symbolic_query.erl`'s
+`run/2,3` and `symbolic_parse.erl`'s `run/1,2` are the CLI entry points
+this project actually has, and both used to weave `halt/1` calls through
+their real decision-making logic (deciding *what* to print, not just
+printing it) — every branch of that logic was therefore permanently
+stuck at 0% coverage, not because it was untested but because it was
+*untestable in place*.
+
+**The fix, not a workaround**: push `halt/0,1` out to the literal edge —
+one thin function that calls a halt-free "what happened" function and
+maps its plain-term result to `halt(0)`/`halt(1)`. Everything that used
+to be inline in the halting function moves into that halt-free one,
+which EUnit can call directly:
+
+```erlang
+%% halt() belongs only here.
+run(DbPath, RulesPath, Goal) ->
+    case run_result(DbPath, RulesPath, Goal) of
+        {solutions, Bindings} -> print_bindings(Bindings), halt(0);
+        no_solution            -> io:format("No.~n"), halt(1);
+        {error, Reason}        -> fail(Reason)
+    end.
+
+%% Everything else — halt-free, fully unit-testable.
+-spec run_result(...) -> {solutions, [...]} | no_solution | {error, term()}.
+run_result(DbPath, RulesPath, Goal) -> ...
+```
+
+`symbolic_query:run_result/3` and `symbolic_parse:error_message/1` are
+the two real instances of this split in this project — see
+`symbolic_query_tests.erl`/`symbolic_parse_tests.erl` for the resulting
+tests. The thin `run/*` wrapper stays untested (there's nothing left in
+it to assert on beyond "does it halt"), but that's now a couple of
+lines, not the actual logic.
+
 ## 5. Mocking
 
 ### 5.1 The idiomatic answer: try not to need one

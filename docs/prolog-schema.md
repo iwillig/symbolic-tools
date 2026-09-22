@@ -16,15 +16,15 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 
 | Predicate | Produced by | Meaning |
 |---|---|---|
-| `defines/3` | Erlang, TypeScript, Bash | A named function/definition exists |
-| `calls/4` | Erlang, TypeScript, Bash | A call site, shape varies per language |
+| `defines/5` | Erlang, TypeScript, Bash | A named function/definition exists |
+| `calls/5` | Erlang, TypeScript, Bash | A call site, shape varies per language |
 | `comment/3` | Erlang, TypeScript, Bash | Every comment, unconditionally |
-| `doc/4` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
+| `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
 | `heading/4` | Markdown | An ATX (`#`) heading |
 | `code_block/3` | Markdown | A fenced code block and its declared language |
 | `paragraph/3` | Markdown | A paragraph (or list-item) of body text |
-| `example_defines/3` | Markdown | A `defines/3`-equivalent, but from inside a fenced code sample |
-| `example_calls/4` | Markdown | A `calls/4`-equivalent, but from inside a fenced code sample |
+| `example_defines/5` | Markdown | A `defines/5`-equivalent, but from inside a fenced code sample |
+| `example_calls/5` | Markdown | A `calls/5`-equivalent, but from inside a fenced code sample |
 | `config_value/4` | TOML, JSON | A dotted key path resolving to a scalar value |
 | `config_section/3` | TOML, JSON | A named table/object container exists |
 
@@ -39,11 +39,13 @@ There's also a cross-cutting **type** split, orthogonal to the three
 shapes above: every predicate's short, query-literal-matched arguments
 (function/module/callee names, file paths, config key paths, language
 tags) are Erlang **atoms**; every predicate's free-text argument
-(`comment/3`/`doc/4`/`heading/4`/`paragraph/3`'s `Text`,
+(`comment/3`/`doc/5`/`heading/4`/`paragraph/3`'s `Text`,
 `config_value/4`'s `Value`) is an Erlang **binary** instead — called out
-at each predicate below, with the reasoning under `doc/4`.
+at each predicate below, with the reasoning under `doc/5`. `defines/5`'s
+`Params` is also free text, same reasoning, called out under `defines/5`
+itself.
 
-## Code facts: `defines/3`, `calls/4`, `comment/3`, `doc/4`
+## Code facts: `defines/5`, `calls/5`, `comment/3`, `doc/5`
 
 Produced by `src/ts_extract_erlang.erl`, `src/ts_extract_typescript.erl`,
 and `src/ts_extract_bash.erl` — one query set per language (no shared
@@ -52,21 +54,36 @@ module's own header), but the same four predicate names and arities
 across all three, so a query written against one language's facts
 reads the same way against another's.
 
-### `defines(Function, File, Line)`
+### `defines(Function, Arity, Params, File, Line)`
 
 - **`Function`** — the defined name, as an atom (`charge`, `deploy`).
+- **`Arity`** — integer, from the definition node's own argument-list
+  field (`function_clause`'s `"args"` field in Erlang,
+  `function_declaration`'s `"parameters"` field in TypeScript) — that
+  field's *named-child count*. A destructured pattern like `{Y,Z}` or
+  `[H|T]` is still one named child, so one argument (confirmed
+  empirically: `baz(X, {Y,Z}, [H|T])` → arity 3), matching real
+  language semantics, not a naive token count. **`undefined` for Bash**
+  — bash functions have no parameter-list grammar node at all; there is
+  no arity to report.
+- **`Params`** — binary, the argument-list field's own raw source text
+  (e.g. `<<"(A, B)">>`, `<<"(word: string)">>`), so a query result shows
+  not just how many arguments a function takes but what they are.
+  **`undefined` for Bash**, same reason as `Arity`.
 - **`File`** — the source file path, as an atom.
 - **`Line`** — 1-based line number of the definition.
 
-No module name and no arity are tracked (`Function` alone, not
-`Module:Function/Arity`) — a deliberate Phase 1 simplification kept
-ever since, not an oversight. The practical consequence, found via
-dogfooding (`docs/lint-queries.md`): two same-named functions of
-*different arity* in the same file (Erlang's `query/2` and `query/3`,
-say) are indistinguishable from true recursion or genuine duplication
-in any query that only looks at `Function`.
+Module name is still not tracked (`Function` alone, not
+`Module:Function/Arity`) — that part of the original Phase 1
+simplification remains. Arity **is** now tracked (added after dogfooding
+via `docs/lint-queries.md` found the gap): two same-named functions of
+*different* arity in the same file (Erlang's `query/2` and `query/3`,
+say) used to be indistinguishable from true recursion or genuine
+duplication in any query that only looked at `Function` — `.pi/rules.pl`'s
+`duplicate_name/3`, `self_recursive/3`, `fan_in/3`, `no_local_callers/3`
+now key on `Fun`+`Arity` to avoid that.
 
-### `calls(Caller, CallSpec, File, Line)`
+### `calls(Caller, CallerArity, CallSpec, File, Line)`
 
 - **`Caller`** — the enclosing definition's name, found by walking
   `node_parent/1` up from the call site to the nearest recognized
@@ -76,22 +93,41 @@ in any query that only looks at `Function`.
   references parse identically to real calls, and always come back with
   `Caller = undefined` since a `-spec` lives outside any function
   clause; see `docs/lint-queries.md`).
+- **`CallerArity`** — that same enclosing clause's arity (same source and
+  same semantics as `defines/5`'s `Arity`, including `undefined` for
+  Bash and wherever `Caller` itself is `undefined`). This is what a call
+  site inside `query/1`'s body (which calls `query/2`) needs to stop
+  being indistinguishable from a call site genuinely inside `query/2` —
+  the other half of the arity-conflation gap `defines/5` alone didn't
+  close. `.pi/rules.pl`'s `self_recursive/3` is the rule that actually
+  needs this: it binds `CallerArity` equal to the definition's own
+  `Arity`, requiring the call site to be textually inside *that exact*
+  clause, not merely inside some same-named overload.
 - **`CallSpec`** — the actual call's shape, and this is where the three
   languages genuinely differ (same pattern `config_value`'s `Path`
-  takes per-format, just for a different reason — see below):
+  takes per-format, just for a different reason — see below). Every
+  shape's last argument is an `ArgCount` (integer): the call site's own
+  argument-list field's named-child count — the number of arguments
+  actually *passed*, not a validated arity (nothing here confirms it
+  matches the callee's `defines` arity; that's a query you can now write
+  yourself, joining on `Callee`/`Arity`).
 
   | Language | `CallSpec` shapes | Example |
   |---|---|---|
-  | Erlang | `local(Callee)`, `remote(Module, Function)` | `local(bar)`, `remote(io, format)` |
-  | TypeScript | `local(Callee)`, `member(Object, Method)` | `local(bar)`, `member(console, log)` |
-  | Bash | `local(Command)` only | `local(build)` |
+  | Erlang | `local(Callee, ArgCount)`, `remote(Module, Function, ArgCount)` | `local(bar, 1)`, `remote(io, format, 2)` |
+  | TypeScript | `local(Callee, ArgCount)`, `member(Object, Method, ArgCount)` | `local(bar, 1)`, `member(console, log, 1)` |
+  | Bash | `local(Command, ArgCount)` only | `local(build, 0)` |
 
   Bash has no qualified-call syntax (nothing like `mod:fun()` or
   `obj.method()`) to tell a call to a same-script function apart from a
   call to an external program or a shell builtin — so it doesn't
-  pretend to know the difference; `local(build)` and `local(rsync)`
-  look exactly alike on purpose.
-- **`File`**, **`Line`** — same meaning as in `defines/3`, `Line` is the
+  pretend to know the difference; `local(build, 0)` and `local(rsync, 3)`
+  look exactly alike on purpose. Bash's `ArgCount` is also different in
+  kind from the other two languages': it's a **word count** following
+  the command name (`scp a b c` → `ArgCount` 3), not anything bash
+  itself validates against a declared parameter list — bash functions
+  accept any number of arguments always.
+- **`File`**, **`Line`** — same meaning as in `defines/5`, `Line` is the
   call site's own line.
 
 ### `comment(File, Line, Text)`
@@ -108,18 +144,21 @@ there's no benefit to being the exception.
 `Text` is an Erlang **binary**, not an atom — see the shared caveat
 below.
 
-### `doc(Function, File, Line, Text)`
+### `doc(Function, Arity, File, Line, Text)`
 
 Only emitted when a comment (or a contiguous *run* of them) sits
 immediately before a recognized definition node — found via sibling
 navigation (`node_next_sibling/1`/`node_prev_sibling/1`), not the
-`node_parent/1` walk `calls/4` uses, since a comment is a *sibling* of
-what it documents, not a child of it. `Line` is the **definition's**
-line (so it joins cleanly with that function's own `defines/3` fact),
-not the comment's own line. A comment with nothing recognizable
-following it (the last thing in a file, or followed by something that
-isn't a function) gets a `comment/3` fact and no `doc/4` fact at all.
-`Text` is a binary, same as `comment/3`.
+`node_parent/1` walk `calls/5` uses, since a comment is a *sibling* of
+what it documents, not a child of it. `Arity` has the same meaning and
+the same `undefined`-for-Bash exception as `defines/5`'s — a doc
+comment has the identical same-name-different-arity ambiguity, fixed
+the same way. `Line` is the **definition's** line (so it joins cleanly
+with that function's own `defines/5` fact), not the comment's own line.
+A comment with nothing recognizable following it (the last thing in a
+file, or followed by something that isn't a function) gets a
+`comment/3` fact and no `doc/5` fact at all. `Text` is a binary, same
+as `comment/3`.
 
 **Shared caveat across all three languages, worth knowing before
 walking siblings yourself:** `node_next_sibling/1`/`node_prev_sibling/1`
@@ -129,7 +168,7 @@ Calling `node_is_null/1` on `undefined` raises `badarg`. See
 `docs/tree-sitter-erlang.md` §6.
 
 **Shared caveat on `Text`'s type: binary, not atom, and unbounded.**
-`comment/3` and `doc/4`'s `Text` — and `heading/4`/`paragraph/3`'s
+`comment/3` and `doc/5`'s `Text` — and `heading/4`/`paragraph/3`'s
 `Text` and `config_value/4`'s `Value` below — are Erlang **binaries**
 (`ts_extract_text:to_text/1`), not atoms. Free text like this is never
 unified against a literal a person types in a query, unlike an
@@ -152,7 +191,7 @@ still-open inline-grammar/`link/4` work this doesn't cover).
 
 - **`Level`** — 1–6, from the number of `#` characters.
 - **`Text`** — the heading's own text, trimmed. A binary, not an atom —
-  see the shared caveat under `doc/4` above.
+  see the shared caveat under `doc/5` above.
 
 **ATX (`#`) headings only** — the underline (setext) style isn't
 handled. A real, not hypothetical, scope limit: this repo's own docs
@@ -167,7 +206,7 @@ never use setext headings.
 ### `paragraph(File, Text, Line)`
 
 - **`Text`** — the paragraph's text (a binary, not an atom — see the
-  shared caveat under `doc/4` above). A soft-wrapped paragraph (multiple
+  shared caveat under `doc/5` above). A soft-wrapped paragraph (multiple
   source lines, no blank line between them) is still *one* fact, its
   embedded newline collapsed into a single space, the same cleaning
   `comment/3`'s multi-line runs get.
@@ -179,7 +218,7 @@ things, not a hand-picked notion of "real" paragraphs.
 
 ## Markdown example facts: re-extracting fenced code
 
-### `example_defines(Function, File, Line)` / `example_calls(Caller, CallSpec, File, Line)`
+### `example_defines(Function, Arity, Params, File, Line)` / `example_calls(Caller, CallerArity, CallSpec, File, Line)`
 
 For a fenced code block tagged `erlang`, `ts`, `typescript`, `sh`, or
 `bash`, the block's own text is re-parsed by the *real* language
@@ -188,7 +227,7 @@ expose for this purpose), with `File` set to the **Markdown file**
 (not a synthetic path) and `Line` offset back to that file's real line
 numbers.
 
-**Deliberately different predicate names than `defines/3`/`calls/4`**,
+**Deliberately different predicate names than `defines/5`/`calls/5`**,
 not the same predicates reused with an `.md` `File` — this project's
 whole value proposition is a fact base worth trusting ("a real fact
 base, not a grep result"), and conflating "this function really exists
@@ -197,12 +236,12 @@ this name" would undercut that directly. The split makes the actual
 motivating check trivial:
 
 ```prolog
-stale_doc_example(Fun, DocFile, Line) :-
-    example_defines(Fun, DocFile, Line),
-    \+ defines(Fun, _, _).
+stale_doc_example(Fun, Arity, DocFile, Line) :-
+    example_defines(Fun, Arity, _Params, DocFile, Line),
+    \+ defines(Fun, Arity, _, _, _).
 ```
 
-`comment/3`/`doc/4` are **not** extracted from embedded snippets — a
+`comment/3`/`doc/5` are **not** extracted from embedded snippets — a
 fragment's own comments aren't the point, and doc-comment attribution
 inside an illustrative example adds noise without answering the
 question this feature exists for (see `docs/agent-examples.md` for the
@@ -224,7 +263,7 @@ of whether the file is a `Cargo.toml` or a `package.json`.
   produce a multi-level path directly, unlike every code-fact predicate
   above.
 - **`Value`** — the leaf's raw text (quotes stripped for strings) as a
-  binary, not an atom — see the shared caveat under `doc/4` above.
+  binary, not an atom — see the shared caveat under `doc/5` above.
   **Array values are captured whole, as one opaque leaf** — the array's
   own raw source text, not walked element-by-element. A real, deliberate
   scope limit for both formats, not a missing case.
@@ -250,8 +289,9 @@ since this pass doesn't do numeric array indexing.
   by `symbolic_ts`. See `docs/tree-sitter-markdown.md` §3.
 - **Array-element recursion** for `config_value`/`config_section` — see
   above.
-- **Module/arity tracking** for `defines`/`calls` — see `defines/3`
-  above.
+- **Module name tracking** for `defines`/`calls` — arity is now tracked
+  on both `Function`/`Arity` and `Caller`/`CallerArity` (see `defines/5`
+  and `calls/5` above); module name is not.
 
 ## References
 
@@ -266,8 +306,9 @@ since this pass doesn't do numeric array indexing.
 - [`agent-examples.md`](agent-examples.md) — narrative worked examples
   of an agent using several of these predicates together.
 - [`lint-queries.md`](lint-queries.md) — a reusable rule library over
-  `defines`/`calls`/`comment`/`doc`, including two real quirks
-  (`-spec` noise, no-arity-tracking recursion false positives) found by
-  running it against this project's own `src/`.
+  `defines`/`calls`/`comment`/`doc`, including a real quirk (`-spec`
+  noise in `calls/5`) found by running it against this project's own
+  `src/` — the arity-conflation false positive that doc also used to
+  describe is fixed now that `defines`/`doc` carry `Arity`.
 - [`../readme.md`](../readme.md) — the CLI-level introduction to all of
   the above, with one real worked example per language.

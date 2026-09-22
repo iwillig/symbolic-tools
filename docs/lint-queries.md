@@ -34,7 +34,7 @@ through `src/`) — `symbolic parse src` would fail to `consult` its own
 output back in.
 
 **Fixed at the source, not worked around**: free-text fact fields
-(`comment/3`/`doc/4`'s `Text`, and friends — see
+(`comment/3`/`doc/5`'s `Text`, and friends — see
 [`prolog-schema.md`](prolog-schema.md)) are now Erlang binaries instead
 of atoms (`ts_extract_text.erl`), and facts move as JSON
 (`symbolic_term_json.erl`, via `jsx`) or as raw Erlang terms asserted
@@ -46,31 +46,35 @@ fixed pipeline.
 ## The rules
 
 ```prolog
-%% Same function name defined in more than one file — a duplication or
-%% naming-collision candidate.
-duplicate_name(Fun, Files) :-
-    defines(Fun, _, _),
-    findall(File, defines(Fun, File, _), AllFiles),
+%% Same function/arity defined in more than one file — a duplication or
+%% naming-collision candidate. Keyed on Fun+Arity (not bare Fun): a
+%% function of one name but two arities in the same file, like Erlang's
+%% query/2 and query/3, is two overloads, not a duplicate.
+duplicate_name(Fun, Arity, Files) :-
+    defines(Fun, Arity, _, _, _),
+    findall(File, defines(Fun, Arity, _, File, _), AllFiles),
     sort(AllFiles, Files),
     length(Files, N),
     N > 1.
 
-all_duplicate_names(Pairs) :-
-    findall(Fun-Files, duplicate_name(Fun, Files), Raw),
-    sort(Raw, Pairs).
+all_duplicate_names(Triples) :-
+    findall(Fun-Arity-Files, duplicate_name(Fun, Arity, Files), Raw),
+    sort(Raw, Triples).
 
-%% A function that calls itself directly by name. Caveat: this fact
-%% base doesn't track arity, so Erlang overloads (query/2 calling
-%% query/3) show up here too — a real, known limitation, not a bug in
-%% this rule.
-self_recursive(Fun, File) :-
-    defines(Fun, File, _),
-    calls(Fun, local(Fun), File, _).
+%% A function that calls itself directly by name AND arity — fully
+%% precise on both sides: CallerArity = Arity requires the call site to
+%% be textually inside THIS exact clause, and local(Fun, Arity) requires
+%% the call target to be this exact arity too. Closes both halves of the
+%% old bare-name gap (query/2-vs-query/3 on the target side, and
+%% query/1-calls-query/2 on the caller side).
+self_recursive(Fun, Arity, File) :-
+    defines(Fun, Arity, _, File, _),
+    calls(Fun, Arity, local(Fun, Arity), File, _).
 
 %% Fan-out: how many distinct things a function calls.
 fan_out(Fun, File, Count) :-
-    defines(Fun, File, _),
-    findall(Callee, calls(Fun, Callee, File, _), Callees),
+    defines(Fun, _Arity, _, File, _),
+    findall(Callee, calls(Fun, _CallerArity, Callee, File, _), Callees),
     sort(Callees, Unique),
     length(Unique, Count).
 
@@ -80,41 +84,41 @@ top_fan_out(N, Top) :-
     reverse(Sorted, Ranked),
     take(N, Ranked, Top).
 
-%% Fan-in: how many distinct local callers a function has.
-fan_in(Fun, Count) :-
-    defines(Fun, _, _),
-    findall(Caller, calls(Caller, local(Fun), _, _), Callers),
+%% Fan-in: how many distinct local callers a function/arity has.
+fan_in(Fun, Arity, Count) :-
+    defines(Fun, Arity, _, _, _),
+    findall(Caller, calls(Caller, _CallerArity, local(Fun, Arity), _, _), Callers),
     sort(Callers, Unique),
     length(Unique, Count).
 
 top_fan_in(N, Top) :-
-    findall(Count-Fun, fan_in(Fun, Count), Raw),
+    findall(Count-Fun-Arity, fan_in(Fun, Arity, Count), Raw),
     sort(Raw, Sorted),
     reverse(Sorted, Ranked),
     take(N, Ranked, Top).
 
-%% Defined but never called locally within this same parse. Caveat: a
-%% real caller in a different directory (test/, or another module via
-%% a *remote* call) won't show up here — this only sees local(...)
-%% calls captured in the same parse run.
-no_local_callers(Fun, File) :-
-    defines(Fun, File, _),
-    \+ calls(_, local(Fun), _, _).
+%% Defined but never called locally (by name+arity) within this same
+%% parse. Caveat: a real caller in a different directory (test/, or
+%% another module via a *remote* call) won't show up here — this only
+%% sees local(...) calls captured in the same parse run.
+no_local_callers(Fun, Arity, File) :-
+    defines(Fun, Arity, _, File, _),
+    \+ calls(_, _CallerArity, local(Fun, Arity), _, _).
 
-all_no_local_callers(Pairs) :-
-    findall(Fun-File, no_local_callers(Fun, File), Raw),
-    sort(Raw, Pairs).
+all_no_local_callers(Triples) :-
+    findall(Fun-Arity-File, no_local_callers(Fun, Arity, File), Raw),
+    sort(Raw, Triples).
 
 %% A comment not immediately followed by a recognized definition —
 %% section headers, module-doc headers, inline explanations, etc.
 undocumented_comment(File, Line, Text) :-
     comment(File, Line, Text),
-    \+ doc(_, File, Line, _).
+    \+ doc(_, _, File, Line, _).
 
 %% Calls into modules worth a second look in review (process control,
 %% the filesystem, NIF loading, env vars).
 risky_call(Caller, Module, Fun) :-
-    calls(Caller, remote(Module, Fun), _, _),
+    calls(Caller, _CallerArity, remote(Module, Fun, _ArgCount), _, _),
     member(Module, [os, erlang, file, init]).
 
 all_risky_calls(Triples) :-
@@ -129,8 +133,17 @@ take(N, [H|T], [H|Rest]) :- N > 0, N1 is N - 1, take(N1, T, Rest).
 
 ## Running them against this repo's own `src/`
 
-For scale: 222 `defines/3`, 723 `calls/4`, 524 `comment/3`, and 23
-`doc/4` facts.
+For scale (at the time this section was captured): 222 `defines/3`, 723
+`calls/4`, 524 `comment/3`, and 23 `doc/4` facts.
+
+**Everything below this point predates two things**: this project's own
+`src/` growing since the numbers were captured, and two schema changes
+(`docs/prolog-schema.md`) — `defines`/`doc` gaining `Arity`/`Params`, and
+`calls` gaining `CallerArity` plus an `ArgCount` on every `local`/
+`remote`/`member` term. The query *syntax* below (`duplicate_name/3` etc., already updated above)
+still runs; the *captured output* (counts, JSON blobs) will differ from
+a fresh `symbolic parse src -db facts.dets` run today — regenerate
+rather than trust these numbers at face value.
 
 **A visible side effect of the JSON output format** (`prolog-store.md`
 §7): a bound `Key - Value` pair — the `-/2` infix operator, a plain
@@ -141,8 +154,8 @@ not as `Key - Value` text. Every array below whose first element is
 ### Duplicate function names across modules
 
 ```sh
-$ symbolic query -db facts.dets -rules lint-rules.pl 'all_duplicate_names(Pairs)'
-Pairs = [["-","caller_name",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","clean_join",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","clean_line",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","code_change",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","collect_run",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","comment_nodes",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","comments",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","defines",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","definition_name",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","doc_fact",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","docs",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","file",["src/ts_extract.erl","src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_json.erl","src/ts_extract_markdown.erl","src/ts_extract_toml.erl","src/ts_extract_typescript.erl"]],["-","find_named_child_by_type",["src/ts_extract_json.erl","src/ts_extract_markdown.erl"]],["-","handle_call",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","handle_cast",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","handle_query",["src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","init",["src/prolog_session.erl","src/prolog_session_registry.erl","src/prolog_session_sup.erl","src/symbolic_ts.erl"]],["-","is_run_start",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","join_path",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]],["-","leaf_value",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]],["-","line",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_json.erl","src/ts_extract_markdown.erl","src/ts_extract_toml.erl","src/ts_extract_typescript.erl"]],["-","local_calls",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","name_to_list",["src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","run",["src/symbolic_parse.erl","src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","run_checked",["src/symbolic_parse.erl","src/symbolic_query.erl"]],["-","start_link",["src/prolog_session.erl","src/prolog_session_registry.erl","src/prolog_session_sup.erl"]],["-","terminate",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","text",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","to_lines",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","walk_pair",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]]]
+$ symbolic query -db facts.dets -rules lint-rules.pl 'all_duplicate_names(Triples)'
+Triples = [["-","caller_name",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","clean_join",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","clean_line",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","code_change",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","collect_run",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","comment_nodes",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","comments",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","defines",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","definition_name",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","doc_fact",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","docs",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","file",["src/ts_extract.erl","src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_json.erl","src/ts_extract_markdown.erl","src/ts_extract_toml.erl","src/ts_extract_typescript.erl"]],["-","find_named_child_by_type",["src/ts_extract_json.erl","src/ts_extract_markdown.erl"]],["-","handle_call",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","handle_cast",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","handle_query",["src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","init",["src/prolog_session.erl","src/prolog_session_registry.erl","src/prolog_session_sup.erl","src/symbolic_ts.erl"]],["-","is_run_start",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","join_path",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]],["-","leaf_value",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]],["-","line",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_json.erl","src/ts_extract_markdown.erl","src/ts_extract_toml.erl","src/ts_extract_typescript.erl"]],["-","local_calls",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","name_to_list",["src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","run",["src/symbolic_parse.erl","src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","run_checked",["src/symbolic_parse.erl","src/symbolic_query.erl"]],["-","start_link",["src/prolog_session.erl","src/prolog_session_registry.erl","src/prolog_session_sup.erl"]],["-","terminate",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","text",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","to_lines",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","walk_pair",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]]]
 ```
 
 `line` is still defined identically in all six `ts_extract_*` modules
@@ -178,11 +191,12 @@ unqualified into all six extractors — see `prolog-store.md` §7) is
 still the single most relied-upon function in the codebase (10 distinct
 callers); its sibling `to_text/1` already has 4.
 
-### Self-recursive functions (and a real limitation this reveals)
+### Self-recursive functions (and a limitation that used to be here)
 
 ```sh
-$ symbolic query -db facts.dets -rules lint-rules.pl 'findall(F-Fl, self_recursive(F, Fl), Xs)'
+$ symbolic query -db facts.dets -rules lint-rules.pl 'findall(F-A-Fl, self_recursive(F, A, Fl), Xs)'
 F = [0]
+A = [2]
 Fl = [1]
 Xs = [["-","caller_name","src/ts_extract_bash.erl"],["-","caller_name","src/ts_extract_erlang.erl"],["-","caller_name","src/ts_extract_typescript.erl"],["-","collect_run","src/ts_extract_bash.erl"],["-","collect_run","src/ts_extract_erlang.erl"],["-","collect_run","src/ts_extract_typescript.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","encode_term","src/symbolic_term_json.erl"],["-","find_named_child_by_type","src/ts_extract_json.erl"],["-","find_named_child_by_type","src/ts_extract_json.erl"],["-","find_named_child_by_type","src/ts_extract_json.erl"],["-","find_named_child_by_type","src/ts_extract_json.erl"],["-","find_named_child_by_type","src/ts_extract_json.erl"],["-","find_named_child_by_type","src/ts_extract_json.erl"],["-","find_named_child_by_type","src/ts_extract_markdown.erl"],["-","find_named_child_by_type","src/ts_extract_markdown.erl"],["-","find_named_child_by_type","src/ts_extract_markdown.erl"],["-","find_named_child_by_type","src/ts_extract_markdown.erl"],["-","find_named_child_by_type","src/ts_extract_markdown.erl"],["-","find_named_child_by_type","src/ts_extract_markdown.erl"],["-","query","src/prolog_session.erl"],["-","query","src/prolog_session.erl"],["-","run","src/symbolic_parse.erl"],["-","run","src/symbolic_parse.erl"],["-","run","src/symbolic_query.erl"],["-","run","src/symbolic_query.erl"],["-","to_atom","src/ts_extract_text.erl"],["-","to_atom","src/ts_extract_text.erl"],["-","to_lines","src/ts_extract_bash.erl"],["-","to_lines","src/ts_extract_bash.erl"],["-","to_lines","src/ts_extract_erlang.erl"],["-","to_lines","src/ts_extract_erlang.erl"],["-","to_lines","src/ts_extract_typescript.erl"],["-","to_lines","src/ts_extract_typescript.erl"],["-","walk_pair","src/ts_extract_toml.erl"]]
 ```
@@ -200,14 +214,34 @@ Most of the real matches are genuinely, deliberately recursive
 (`caller_name`/`collect_run` walk the tree; `find_named_child_by_type`
 scans siblings; `to_atom`/`to_lines`/`encode_term` dispatch on their
 argument's shape via a second clause that calls itself once).
-`["-","query","src/prolog_session.erl"]` is **not** actually recursive,
-though — `query/2` calls `query/3`. This fact base doesn't track arity
-(documented from early in the project as "no module name or arity
-yet"), so same-named functions of different arity are indistinguishable
-from real recursion. `run/1` calling `run/2` (`symbolic_parse.erl`,
-`symbolic_query.erl` — both added `-db`/`-rules` support this session)
-is the same false positive, appearing for the first time here. Worth
-knowing before trusting this query's output at face value.
+
+**A real limitation this query used to have, now fixed in two stages**:
+the captured output above (from before `defines`/`calls` tracked arity
+at all) included `["-","query","src/prolog_session.erl"]` and
+`["-","run","src/symbolic_parse.erl"]` as false positives — any
+same-named call looked recursive when only the bare name was checked.
+
+- **Stage 1** (target-side): `defines`/`calls` gained `Arity`, and
+  `self_recursive/3` started requiring `local(Fun, Arity)` to match the
+  definition's own arity. This closed the "`query/2` looks recursive
+  because it calls `query/3`" shape of false positive — but a *subtler*
+  one survived: `symbolic_codebase:query/1`'s body calls `query/2`
+  (`query(Goal) -> query(Goal, ?DEFAULT_LIMIT)`), and since the caller
+  attribution was still bare-name, that call site — really inside
+  `query/1` — got attributed to plain `query`, indistinguishable from a
+  call genuinely inside `query/2`. `self_recursive(query, 2, File)`
+  matched: `defines(query, 2, ...)` exists, and *some* `calls(query,
+  local(query, 2), ...)` fact existed too, just not one that actually
+  came from query/2's own body.
+- **Stage 2** (caller-side): `calls` gained `CallerArity` — the
+  enclosing clause's own arity, not just its name. `self_recursive/3`
+  now binds `CallerArity = Arity`, requiring the call site to be
+  textually inside *that exact* clause. `query/1`'s call to `query/2`
+  has `CallerArity` 1, which no longer unifies with `query/2`'s
+  `Arity` 2 check.
+
+Re-running the query above against a fresh parse should no longer
+include either `query` or `run`.
 
 ### Risky calls (process control, filesystem, NIF loading)
 
@@ -225,24 +259,25 @@ new fact-store's DETS file, `os:getenv` for `TMPDIR`,
 looked concerning on inspection — but that last entry,
 `["-",["-","undefined","file"],"filename"]`, is a second real finding:
 
-**`-spec` type annotations get extracted as fake `calls/4` facts.**
+**`-spec` type annotations get extracted as fake `calls/5` facts.**
 `-spec file(file:filename()) -> [tuple()].` (`src/ts_extract.erl` and
-several others) produces `calls(undefined, remote(file, filename),
-File, Line)` — `file:filename()` there is a **type** reference, not a
-call, but tree-sitter-erlang's grammar shapes a `-spec`'s contents
-identically to a real function call, and `ts_extract_erlang.erl`'s
-`(call expr: (remote) @call)` query doesn't distinguish the two.
-`Caller = undefined` in every case is the tell — a `-spec` lives
-outside any `function_clause`, so the caller-attribution walk-up finds
-nothing. Low severity (nothing crashes), but real noise in `calls/4`
-for any `-spec`-heavy Erlang code, which is all of it here — a
-"exclude `-spec`/`-type` attribute bodies" fix belongs in
+several others) produces `calls(undefined, undefined, remote(file,
+filename, ArgCount), File, Line)` — `file:filename()` there is a
+**type** reference, not a call, but tree-sitter-erlang's grammar shapes
+a `-spec`'s contents identically to a real function call, and
+`ts_extract_erlang.erl`'s `(call expr: (remote) @call)` query doesn't
+distinguish the two. `Caller = undefined` (and now `CallerArity =
+undefined` too) in every case is the tell — a `-spec` lives outside any
+`function_clause`, so the caller-attribution walk-up finds nothing. Low
+severity (nothing crashes), but real noise in `calls/5` for any
+`-spec`-heavy Erlang code, which is all of it here — a "exclude
+`-spec`/`-type` attribute bodies" fix belongs in
 `ts_extract_erlang.erl`'s query, not in this rule file.
 
 ### "No local callers" — mostly false positives, and why
 
 ```sh
-$ symbolic query -db facts.dets -rules lint-rules.pl 'all_no_local_callers(Pairs), length(Pairs, N)'
+$ symbolic query -db facts.dets -rules lint-rules.pl 'all_no_local_callers(Triples), length(Triples, N)'
 N = 59
 ```
 

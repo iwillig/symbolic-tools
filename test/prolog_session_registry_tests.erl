@@ -1,6 +1,16 @@
 -module(prolog_session_registry_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+%% Trivial gen_server boilerplate — no registered process needed.
+handle_cast_is_a_noop_test() ->
+    ?assertEqual({noreply, some_state}, prolog_session_registry:handle_cast(ignored, some_state)).
+
+terminate_returns_ok_test() ->
+    ?assertEqual(ok, prolog_session_registry:terminate(shutdown, some_state)).
+
+code_change_keeps_state_test() ->
+    ?assertEqual({ok, some_state}, prolog_session_registry:code_change(old_vsn, some_state, extra)).
+
 setup() ->
     {ok, SupPid} = prolog_session_sup:start_link(),
     {ok, RegPid} = prolog_session_registry:start_link(),
@@ -32,6 +42,7 @@ registry_test_() ->
         fun start_and_lookup_session/1,
         fun end_session_removes_it/1,
         fun lookup_of_unknown_session_is_error/1,
+        fun end_session_of_unknown_session_is_error/1,
         fun consult_and_query_through_the_registry/1
     ]}.
 
@@ -51,6 +62,11 @@ end_session_removes_it(_) ->
 lookup_of_unknown_session_is_error(_) ->
     fun() ->
         ?assertEqual(error, prolog_session_registry:lookup(<<"no-such-session">>))
+    end.
+
+end_session_of_unknown_session_is_error(_) ->
+    fun() ->
+        ?assertEqual(error, prolog_session_registry:end_session(<<"no-such-session">>))
     end.
 
 consult_and_query_through_the_registry(_) ->

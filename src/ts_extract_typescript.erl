@@ -6,12 +6,18 @@
 %%% query (query_capture/2's per-capture duplication quirk), dedupe via
 %%% lists:usort/1.
 %%%
-%%%   defines(Function, File, Line)
-%%%   calls(Caller, local(Callee), File, Line)          — plain calls: bar(x)
-%%%   calls(Caller, member(Object, Method), File, Line)  — method calls: obj.method(x)
+%%%   defines(Function, Arity, Params, File, Line)
+%%%   calls(Caller, CallerArity, local(Callee, ArgCount), File, Line)          — plain calls: bar(x)
+%%%   calls(Caller, CallerArity, member(Object, Method, ArgCount), File, Line)  — method calls: obj.method(x)
 %%%   comment(File, Line, Text)                          — every comment, unconditionally
-%%%   doc(Function, File, Line, Text)                    — a comment run immediately
+%%%   doc(Function, Arity, File, Line, Text)             — a comment run immediately
 %%%                                                         preceding a function_declaration
+%%%
+%%% Arity/ArgCount/Params come from `function_declaration`'s "parameters"
+%%% field and `call_expression`'s "arguments" field — same technique and
+%%% same false-positive fix as ts_extract_erlang.erl's identical header
+%%% note (query/2-vs-query/3-style ambiguity, and its CallerArity note
+%%% for the query/1-calls-query/2 half of that same gap).
 %%%
 %%% Associating a comment with what it documents needs sibling
 %%% navigation (node_next_sibling/1, node_prev_sibling/1), not the
@@ -67,18 +73,39 @@ defines(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?DEF_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
     lists:usort([
-        {defines, to_atom(symbolic_ts:node_text(N, Src)), PathAtom, line(N)}
+        define_fact(N, Src, PathAtom)
      || {"fun_name", N} <- Caps
     ]).
+
+define_fact(NameNode, Src, PathAtom) ->
+    Decl = symbolic_ts:node_parent(NameNode),
+    {Arity, Params} = args_shape(Decl, "parameters", Src),
+    {defines, to_atom(symbolic_ts:node_text(NameNode, Src)), Arity, Params,
+     PathAtom, line(NameNode)}.
+
+%% A node's arg-list field (`formal_parameters` for a declaration,
+%% `arguments` for a call) — named-child count is the arity/arg count,
+%% and the field's own text is the raw "(a, b)" for a human/LLM to read.
+args_shape(Node, FieldName, Src) ->
+    ArgsNode = symbolic_ts:node_child_by_field_name(Node, FieldName),
+    {symbolic_ts:node_named_child_count(ArgsNode),
+     to_text(symbolic_ts:node_text(ArgsNode, Src))}.
 
 local_calls(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?LOCAL_CALL_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
     lists:usort([
-        {calls, caller_name(N, Src), {local, to_atom(symbolic_ts:node_text(N, Src))},
-         PathAtom, line(N)}
+        local_call_fact(N, Src, PathAtom)
      || {"callee", N} <- Caps
     ]).
+
+local_call_fact(N, Src, PathAtom) ->
+    CallNode = symbolic_ts:node_parent(N),
+    {ArgCount, _Params} = args_shape(CallNode, "arguments", Src),
+    {Caller, CallerArity} = caller_info(N, Src),
+    {calls, Caller, CallerArity,
+     {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
+     PathAtom, line(N)}.
 
 %% Query returns each match's two captures (@obj, @prop) as separate
 %% entries, not paired — find each unique property_identifier's own
@@ -95,9 +122,11 @@ member_call_fact(PropNode, Src, PathAtom) ->
     MemberNode = symbolic_ts:node_parent(PropNode),
     ObjNode = symbolic_ts:node_child_by_field_name(MemberNode, "object"),
     CallNode = symbolic_ts:node_parent(MemberNode),
-    {calls, caller_name(CallNode, Src),
+    {ArgCount, _Params} = args_shape(CallNode, "arguments", Src),
+    {Caller, CallerArity} = caller_info(CallNode, Src),
+    {calls, Caller, CallerArity,
      {member, to_atom(symbolic_ts:node_text(ObjNode, Src)),
-      to_atom(symbolic_ts:node_text(PropNode, Src))},
+      to_atom(symbolic_ts:node_text(PropNode, Src)), ArgCount},
      PathAtom, line(PropNode)}.
 
 comments(Lang, Root, Src, PathAtom) ->
@@ -139,30 +168,36 @@ doc_fact(StartNode, Src, PathAtom) ->
     {Texts, Target} = collect_run(StartNode, Src, []),
     case Target =/= undefined andalso definition_name(Target, Src) of
         false -> false;
-        Name -> {true, {doc, Name, PathAtom, line(Target), clean_join(Texts)}}
+        {Name, Arity} ->
+            {true, {doc, Name, Arity, PathAtom, line(Target), clean_join(Texts)}}
     end.
 
 definition_name(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_declaration" ->
             NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
-            to_atom(symbolic_ts:node_text(NameNode, Src));
+            {Arity, _Params} = args_shape(Node, "parameters", Src),
+            {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         _ ->
             false
     end.
 
 %% Walk up to the nearest enclosing function_declaration to attribute a
-%% call site to the function it appears in.
-caller_name(Node, Src) ->
+%% call site to the function it appears in — {Name, Arity}, or
+%% {undefined, undefined} if the call isn't inside any recognized
+%% definition. Arity comes from that same declaration's "parameters"
+%% field, same technique as define_fact/3.
+caller_info(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_declaration" ->
             NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
-            to_atom(symbolic_ts:node_text(NameNode, Src));
+            {Arity, _Params} = args_shape(Node, "parameters", Src),
+            {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         _ ->
             Parent = symbolic_ts:node_parent(Node),
             case symbolic_ts:node_is_null(Parent) of
-                true -> undefined;
-                false -> caller_name(Parent, Src)
+                true -> {undefined, undefined};
+                false -> caller_info(Parent, Src)
             end
     end.
 

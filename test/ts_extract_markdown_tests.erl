@@ -31,24 +31,27 @@ no_duplicate_facts_test() ->
 extracts_example_defines_test() ->
     Facts = ts_extract_markdown:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
-    ?assert(lists:member({example_defines, greet, Path, 23}, Facts)),
-    ?assert(lists:member({example_defines, hello, Path, 26}, Facts)),
-    ?assert(lists:member({example_defines, shout, Path, 31}, Facts)),
-    ?assert(lists:member({example_defines, deploy, Path, 37}, Facts)).
+    ?assert(lists:member({example_defines, greet, 1, <<"(Name)">>, Path, 23}, Facts)),
+    ?assert(lists:member({example_defines, hello, 1, <<"(Name)">>, Path, 26}, Facts)),
+    ?assert(lists:member(
+        {example_defines, shout, 1, <<"(word: string)">>, Path, 31}, Facts)),
+    ?assert(lists:member(
+        {example_defines, deploy, undefined, undefined, Path, 37}, Facts)).
 
 extracts_example_calls_test() ->
     Facts = ts_extract_markdown:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
-    ?assert(lists:member({example_calls, greet, {local, hello}, Path, 24}, Facts)),
-    ?assert(lists:member({example_calls, hello, {remote, io, format}, Path, 27}, Facts)),
+    ?assert(lists:member({example_calls, greet, 1, {local, hello, 1}, Path, 24}, Facts)),
     ?assert(lists:member(
-        {example_calls, shout, {member, word, toUpperCase}, Path, 32}, Facts)),
+        {example_calls, hello, 1, {remote, io, format, 2}, Path, 27}, Facts)),
     ?assert(lists:member(
-        {example_calls, deploy, {local, build}, Path, 38}, Facts)).
+        {example_calls, shout, 1, {member, word, toUpperCase, 0}, Path, 32}, Facts)),
+    ?assert(lists:member(
+        {example_calls, deploy, undefined, {local, build, 0}, Path, 38}, Facts)).
 
 unsupported_lang_has_no_example_facts_test() ->
     Facts = ts_extract_markdown:file(?FIXTURE),
     %% The bare (no-language) fence at line 16-18 and the (skipped)
     %% "no lang here" text inside it must never produce example facts.
     ?assertEqual(
-        [], [F || {example_defines, _, _, Line} = F <- Facts, Line >= 16, Line =< 18]).
+        [], [F || {example_defines, _, _, _, _, Line} = F <- Facts, Line >= 16, Line =< 18]).

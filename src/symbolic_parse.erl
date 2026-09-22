@@ -12,48 +12,73 @@
 %%% truncated-at-200-chars atoms, not arbitrary-length values. See
 %%% symbolic_term_json.erl and ts_extract_text.erl.
 -module(symbolic_parse).
--export([run/1, run/2]).
+-export([run/1, run/2, scan/1]).
+%% Exported for symbolic_parse_tests.erl only — run/1,2 halt() on every
+%% path and can't be called directly from EUnit; maybe_store/2 and
+%% print_fact/1 are the halt-free parts of that same code worth testing
+%% in isolation.
+-export([maybe_store/2, print_fact/1, error_message/1]).
+
+%% Scan a directory and extract facts with NO side effects — no printing,
+%% no DETS write, no halt. Returns the scanned file list alongside the
+%% (usorted) fact set. The MCP server's `parse` tool (symbolic_codebase) is
+%% the main consumer; the CLI's run/2 below reuses it too. This is the
+%% single source of truth for "which files does a scan look at".
+-spec scan(file:name()) ->
+    {ok, {Files :: [file:name()], Facts :: [tuple()]}} | {error, term()}.
+scan(Dir) ->
+    case filelib:is_dir(Dir) of
+        true ->
+            case code:ensure_loaded(symbolic_ts) of
+                {module, symbolic_ts} ->
+                    Files = scan_files(Dir),
+                    Facts = lists:usort(lists:flatmap(fun ts_extract:file/1, Files)),
+                    {ok, {Files, Facts}};
+                {error, Reason} ->
+                    {error, {nif_not_loadable, Reason}}
+            end;
+        false ->
+            {error, {no_such_directory, Dir}}
+    end.
+
+scan_files(Dir) ->
+    filelib:wildcard(filename:join(Dir, "**/*.erl")) ++
+    filelib:wildcard(filename:join(Dir, "**/*.ts")) ++
+    filelib:wildcard(filename:join(Dir, "**/*.md")) ++
+    filelib:wildcard(filename:join(Dir, "**/*.toml")) ++
+    filelib:wildcard(filename:join(Dir, "**/*.json")) ++
+    filelib:wildcard(filename:join(Dir, "**/*.sh")) ++
+    filelib:wildcard(filename:join(Dir, "**/*.bash")).
 
 run(Dir) ->
     run(Dir, undefined).
 
+%% halt() belongs only here, at the CLI's actual edge (see
+%% symbolic_query:run/3's identical note on why) — scan/1 already
+%% returns a plain term, and error_message/1 below turns that term into
+%% the exact text printed, so both are directly testable without it.
 run(Dir, DbPath) ->
-    case filelib:is_dir(Dir) of
-        true -> run_checked(Dir, DbPath);
-        false ->
-            io:put_chars(standard_error,
-                io_lib:format("parse: no such directory: ~s~n", [Dir])),
-            halt(1)
-    end.
-
-run_checked(Dir, DbPath) ->
-    case code:ensure_loaded(symbolic_ts) of
-        {module, symbolic_ts} ->
-            Files = filelib:wildcard(filename:join(Dir, "**/*.erl")) ++
-                    filelib:wildcard(filename:join(Dir, "**/*.ts")) ++
-                    filelib:wildcard(filename:join(Dir, "**/*.md")) ++
-                    filelib:wildcard(filename:join(Dir, "**/*.toml")) ++
-                    filelib:wildcard(filename:join(Dir, "**/*.json")) ++
-                    filelib:wildcard(filename:join(Dir, "**/*.sh")) ++
-                    filelib:wildcard(filename:join(Dir, "**/*.bash")),
-            Facts = lists:usort(lists:flatmap(fun ts_extract:file/1, Files)),
+    case scan(Dir) of
+        {ok, {_Files, Facts}} ->
             maybe_store(DbPath, Facts),
             lists:foreach(fun print_fact/1, Facts),
             halt(0);
-        {error, _} ->
-            %% Known limitation, not a bug in this code: the escript build
-            %% doesn't (can't) embed symbolic_ts's NIF .so — see
-            %% rebar.config's escript_incl_apps comment and
-            %% docs/cli-erlang.md. Run via `rebar3 shell` (or a
-            %% `rebar3 release`) instead of the escript binary until
-            %% that's resolved.
-            io:put_chars(standard_error,
-                "parse: symbolic_ts (the tree-sitter NIF) isn't loadable "
-                "from this escript binary — a known packaging limitation, "
-                "not a code bug. Run via `rebar3 shell` for now; see "
-                "docs/cli-erlang.md.\n"),
+        {error, Reason} ->
+            io:put_chars(standard_error, error_message(Reason)),
             halt(1)
     end.
+
+error_message({no_such_directory, Dir}) ->
+    io_lib:format("parse: no such directory: ~s~n", [Dir]);
+error_message({nif_not_loadable, _}) ->
+    %% Known packaging limitation, not a bug here: the escript build
+    %% can't embed symbolic_ts's NIF .so — see rebar.config /
+    %% docs/cli-erlang.md. Run via `rebar3 release` (or `rebar3 shell`)
+    %% instead of the escript binary.
+    "parse: symbolic_ts (the tree-sitter NIF) isn't loadable "
+    "in this build - a known packaging limitation, not a code "
+    "bug. Run via a `rebar3 release` (or `rebar3 shell`); see "
+    "docs/cli-erlang.md.\n".
 
 maybe_store(undefined, _Facts) -> ok;
 maybe_store(DbPath, Facts) -> symbolic_fact_store:write(DbPath, Facts).

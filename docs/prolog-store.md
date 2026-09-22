@@ -184,8 +184,10 @@ on-disk option:
   regenerates it, not an incremental merge); `read/1` folds the table back
   into a plain fact list. Facts are stored **as-is** — a fact tuple's own
   first element (`defines`, `calls`, `comment`, ...) doubles as its DETS
-  key, so `dets:lookup(Table, defines)` already returns every `defines/3`
-  fact with no extra indexing code.
+  key, so `dets:lookup(Table, defines)` already returns every `defines/5`
+  fact with no extra indexing code — generic over the fact's own arity,
+  so the `defines`/`doc` schema growing an `Arity`/`Params` field (see
+  `docs/prolog-schema.md`) needed no change here.
 - **`prolog_session:load_facts/2`** — asserts a fact list directly into an
   erlog session via `erlog:prove({asserta, Fact}, State)`, entirely in
   Erlang-term space. `asserta`, not `assertz`: order doesn't matter for

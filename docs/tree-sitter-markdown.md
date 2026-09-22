@@ -7,7 +7,7 @@ fenced-code-block languages) becomes Prolog facts the same way source-code
 definitions and call sites do.
 
 **Status: partially implemented.** `heading/4`, `code_block/3`,
-`paragraph/3`, and `example_defines/3`/`example_calls/4` (facts
+`paragraph/3`, and `example_defines/5`/`example_calls/5` (facts
 re-extracted from a fenced code block's own contents — see §4) are real
 today via `symbolic parse`, using only the **block** grammar — see
 `src/ts_extract_markdown.erl`. `link/4` (§4) is **not implemented yet**;
@@ -108,7 +108,7 @@ from the block grammar alone with none of that risk.
 
 Mirrors the shape in [`tree-sitter-erlang.md`](tree-sitter-erlang.md) §3 —
 facts, not a rendered tree. `Line`, not `Span`, following the same
-simplification `defines/3`/`calls/4` already made (see
+simplification `defines/5`/`calls/5` already made (see
 `tree-sitter-erlang.md`'s Phase 1 notes) — a single 1-based line number,
 not a byte range:
 
@@ -130,19 +130,20 @@ not a byte range:
 - **`link(File, Text, Target, Line)`** — **not implemented.** Needs the
   inline grammar (§3); `Target` would be the raw link destination (a URL,
   or a relative path like `cli-erlang.md` or `cli-erlang.md#5-testing`).
-- **`example_defines(Function, File, Line)` / `example_calls(Caller,
-  CallSpec, File, Line)`** — implemented. For a fenced block tagged
-  `erlang`, `ts`, or `typescript`, the block's own text is re-run through
-  the real `ts_extract_erlang`/`ts_extract_typescript` extractors
-  (`text/2`, added alongside their existing `file/1`), with `File` set to
-  *this* Markdown file and `Line` offset back to this file's real line
-  numbers. **Deliberately a different predicate name than
-  `defines/3`/`calls/4`**, not the same predicate reused with an `.md`
-  `File` — conflating "this function really exists" with "a doc's
-  example happened to show a function of this name" would undercut the
-  fact base's whole point. `comment/3`/`doc/4` are not extracted from
-  snippets. See `src/ts_extract_markdown.erl` for the exact mapping and
-  line-offset math.
+- **`example_defines(Function, Arity, Params, File, Line)` /
+  `example_calls(Caller, CallerArity, CallSpec, File, Line)`** — implemented. For a
+  fenced block tagged `erlang`, `ts`, or `typescript`, the block's own
+  text is re-run through the real `ts_extract_erlang`/
+  `ts_extract_typescript` extractors (`text/2`, added alongside their
+  existing `file/1`), with `File` set to *this* Markdown file and `Line`
+  offset back to this file's real line numbers. **Deliberately a
+  different predicate name than `defines/5`/`calls/5`**, not the same
+  predicate reused with an `.md` `File` — conflating "this function
+  really exists" with "a doc's example happened to show a function of
+  this name" would undercut the fact base's whole point. `comment/3`/
+  `doc/5` are not extracted from snippets. See
+  `src/ts_extract_markdown.erl` for the exact mapping and line-offset
+  math.
 
 Once `link/4` exists, it's enough to write the check that would have
 caught this repo's own stale cross-references by query instead of by
@@ -161,14 +162,14 @@ existence, heading-anchor lookup across the parsed doc set) — consistent
 with `erlang-mcp-design.md` §5's "compute what doesn't fit Prolog's
 execution model in Erlang, not Prolog."
 
-`example_defines/3` already enables the analogous check for code
+`example_defines/5` already enables the analogous check for code
 *samples*, no further implementation needed — parse a doc together with
 the real source it documents, then:
 
 ```prolog
-stale_doc_example(Fun, DocFile, Line) :-
-    example_defines(Fun, DocFile, Line),
-    \+ defines(Fun, _, _).
+stale_doc_example(Fun, Arity, DocFile, Line) :-
+    example_defines(Fun, Arity, _Params, DocFile, Line),
+    \+ defines(Fun, Arity, _, _, _).
 ```
 
 catches a doc's example showing a function that doesn't (or no longer)

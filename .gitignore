@@ -11,3 +11,7 @@ erl_crash.dump
 *.dylib
 *.d
 tree-sitter.pc
+
+# Derived Prolog fact database — deterministic rebuild from source via
+# `symbolic parse`, not something to version (docs/prolog-store.md §7).
+.pi/facts.dets

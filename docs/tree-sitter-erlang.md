@@ -217,8 +217,8 @@ value" extraction has to handle all three cases, not just leaf scalars.
 Unlike TOML/JSON, Bash has real functions and call sites, so it reuses
 the exact `defines`/`calls`/`comment`/`doc` shape §5.1 contrasted itself
 against — `src/ts_extract_bash.erl` is close to a line-for-line mirror
-of `ts_extract_erlang.erl`. One real difference: `calls/4` only ever
-produces `local(Command)`, never `remote`/`member` the way
+of `ts_extract_erlang.erl`. One real difference: `calls/5` only ever
+produces `local(Command, ArgCount)`, never `remote`/`member` the way
 Erlang/TypeScript can — Bash has no qualified-call syntax
 (`mod:fun()`, `obj.method()`) to distinguish a call to a function
 defined in the same script from a call to an external program or a

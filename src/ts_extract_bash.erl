@@ -6,10 +6,18 @@
 %%% `defines`/`calls`/`comment`/`doc` apply directly, not the
 %%% `config_value`/`config_section` shape those two use:
 %%%
-%%%   defines(Function, File, Line)
-%%%   calls(Caller, local(Command), File, Line)
+%%%   defines(Function, Arity, Params, File, Line)   — Arity/Params always
+%%%                                                     `undefined`: bash
+%%%                                                     functions have no
+%%%                                                     parameter-list
+%%%                                                     grammar node at all
+%%%   calls(Caller, CallerArity, local(Command, ArgCount), File, Line) —
+%%%                              CallerArity is always `undefined` (same
+%%%                              reason as defines/5's), and ArgCount is
+%%%                              a word count, not a validated arity
+%%%                              (bash has none)
 %%%   comment(File, Line, Text)
-%%%   doc(Function, File, Line, Text)
+%%%   doc(Function, Arity, File, Line, Text)
 %%%
 %%% Only `local(Command)` — no `remote`/`member` distinction the way
 %%% Erlang/TypeScript have, since Bash has no qualified/namespaced call
@@ -68,7 +76,8 @@ defines(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?DEF_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
     lists:usort([
-        {defines, to_atom(symbolic_ts:node_text(N, Src)), PathAtom, line(N)}
+        {defines, to_atom(symbolic_ts:node_text(N, Src)), undefined, undefined,
+         PathAtom, line(N)}
      || {"fun_name", N} <- Caps
     ]).
 
@@ -76,10 +85,21 @@ local_calls(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?CALL_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
     lists:usort([
-        {calls, caller_name(N, Src), {local, to_atom(symbolic_ts:node_text(N, Src))},
-         PathAtom, line(N)}
+        local_call_fact(N, Src, PathAtom)
      || {"callee", N} <- Caps
     ]).
+
+%% A `command`'s named children include the command name itself at index
+%% 0, so the word count following it is named_child_count - 1 (confirmed
+%% empirically: `scp a b c` -> 4 named children -> ArgCount 3). This is
+%% an observed word count, not a validated arity — bash has no fixed
+%% parameter list to check it against.
+local_call_fact(N, Src, PathAtom) ->
+    CommandNode = symbolic_ts:node_parent(N),
+    ArgCount = symbolic_ts:node_named_child_count(CommandNode) - 1,
+    {calls, caller_name(N, Src), undefined,
+     {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
+     PathAtom, line(N)}.
 
 comments(Lang, Root, Src, PathAtom) ->
     lists:usort([
@@ -120,7 +140,8 @@ doc_fact(StartNode, Src, PathAtom) ->
     {Texts, Target} = collect_run(StartNode, Src, []),
     case Target =/= undefined andalso definition_name(Target, Src) of
         false -> false;
-        Name -> {true, {doc, Name, PathAtom, line(Target), clean_join(Texts)}}
+        Name ->
+            {true, {doc, Name, undefined, PathAtom, line(Target), clean_join(Texts)}}
     end.
 
 definition_name(Node, Src) ->

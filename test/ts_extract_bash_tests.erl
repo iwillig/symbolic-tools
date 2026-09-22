@@ -6,15 +6,19 @@
 extracts_defines_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
-    ?assert(lists:member({defines, deploy, Path, 2}, Facts)),
-    ?assert(lists:member({defines, build, Path, 7}, Facts)).
+    %% Arity/Params are always `undefined` — bash has no parameter-list
+    %% grammar node to derive them from.
+    ?assert(lists:member({defines, deploy, undefined, undefined, Path, 2}, Facts)),
+    ?assert(lists:member({defines, build, undefined, undefined, Path, 7}, Facts)).
 
 extracts_local_call_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
-    ?assert(lists:member({calls, deploy, {local, build}, Path, 3}, Facts)),
-    ?assert(lists:member({calls, deploy, {local, scp}, Path, 4}, Facts)),
-    ?assert(lists:member({calls, build, {local, echo}, Path, 8}, Facts)).
+    %% CallerArity (the 2nd calls/5 field) is always `undefined` — same
+    %% reason as defines/5's.
+    ?assert(lists:member({calls, deploy, undefined, {local, build, 0}, Path, 3}, Facts)),
+    ?assert(lists:member({calls, deploy, undefined, {local, scp, 2}, Path, 4}, Facts)),
+    ?assert(lists:member({calls, build, undefined, {local, echo, 1}, Path, 8}, Facts)).
 
 extracts_comment_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),
@@ -28,12 +32,13 @@ extracts_doc_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
     ?assert(lists:member(
-        {doc, deploy, Path, 2, <<"Deploys the app to the given environment.">>}, Facts)).
+        {doc, deploy, undefined, Path, 2, <<"Deploys the app to the given environment.">>},
+        Facts)).
 
 standalone_comment_has_no_doc_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),
     ?assertEqual(
-        [], [F || {doc, _, _, 11, _} = F <- Facts]).
+        [], [F || {doc, _, _, _, 11, _} = F <- Facts]).
 
 no_duplicate_facts_test() ->
     Facts = ts_extract_bash:file(?FIXTURE),

@@ -166,16 +166,16 @@ $ symbolic parse .
 ["comment","greeter.ts",1,"Formats a full name from its parts."]
 ["comment","greeter.ts",12,"Capitalizes the first letter of a word."]
 ["comment","greeter.ts",17,"TODO: handle names with a middle name too"]
-["defines","capitalize","greeter.ts",13]
-["defines","formatName","greeter.ts",2]
-["defines","greet","greeter.ts",6]
-["calls","capitalize",["member","word","toUpperCase"],"greeter.ts",14]
-["calls","formatName",["local","capitalize"],"greeter.ts",3]
-["calls","greet",["local","formatName"],"greeter.ts",7]
-["calls","greet",["member","console","log"],"greeter.ts",8]
-["calls","greet",["member","this.logger","info"],"greeter.ts",9]
-["doc","capitalize","greeter.ts",13,"Capitalizes the first letter of a word."]
-["doc","formatName","greeter.ts",2,"Formats a full name from its parts."]
+["defines","capitalize",1,"(word: string)","greeter.ts",13]
+["defines","formatName",2,"(first: string, last: string)","greeter.ts",2]
+["defines","greet",1,"(name: string)","greeter.ts",6]
+["calls","capitalize",1,["member","word","toUpperCase",0],"greeter.ts",14]
+["calls","formatName",2,["local","capitalize",1],"greeter.ts",3]
+["calls","greet",1,["local","formatName",2],"greeter.ts",7]
+["calls","greet",1,["member","console","log",1],"greeter.ts",8]
+["calls","greet",1,["member","this.logger","info",1],"greeter.ts",9]
+["doc","capitalize",1,"greeter.ts",13,"Capitalizes the first letter of a word."]
+["doc","formatName",2,"greeter.ts",2,"Formats a full name from its parts."]
 ```
 
 Facts print as JSON Lines — one JSON array per fact, `[Functor, Arg1,
@@ -184,22 +184,31 @@ Prolog-text printer had: it didn't escape an atom's embedded single
 quote at all, corrupting ordinary prose ("it's", "doesn't") in
 `comment`/`doc` text. See `docs/prolog-store.md` §7.
 
-A plain call (`bar()`) becomes `local(bar)`; a method call (`obj.method()`)
-becomes `member(obj, method)` — so a query can tell "calls that function
-directly" apart from "calls a method on something." Every comment becomes a
-`comment(File, Line, Text)` fact, unconditionally; a comment (or run of
-consecutive `//` lines) that sits immediately before a function also
-becomes a `doc(Function, File, Line, Text)` fact, attributed to that
-function at its own definition line — `greet` has no `doc/4` fact because
-nothing precedes it, and the trailing `// TODO: ...` line has a `comment/3`
-fact but no `doc/4`, because nothing follows it. Finding this attribution
-needed a part of the tree-sitter API this project hadn't used before: a
-comment is a **sibling** of the code it documents, not a parent/child of
-it, so extracting `doc/4` walks `node_next_sibling/1`/`node_prev_sibling/1`
-rather than the `node_parent/1` walk `calls/4` uses for caller attribution
-— see `docs/tree-sitter-erlang.md` §6 for a real inconsistency this
-uncovered in that part of the API (`node_is_null/1` doesn't apply to a
-missing sibling the way it does to a missing parent).
+A plain call (`bar()`) becomes `local(bar, ArgCount)`; a method call
+(`obj.method()`) becomes `member(obj, method, ArgCount)` — so a query can
+tell "calls that function directly" apart from "calls a method on
+something," and (via `ArgCount`) how many arguments the call actually
+passed. `calls`'s own second argument, `CallerArity`, is the *enclosing*
+function's arity — `["calls","formatName",2,["local","capitalize",1],...]`
+means this call site is inside `formatName`'s 2-arg clause specifically,
+not just "some function named formatName." `defines(Function, Arity, Params, File, Line)`'s own `Arity`/
+`Params` come from the same definition's parameter list, so `formatName`
+above is `["defines","formatName",2,"(first: string, last: string)",...]`
+— arity 2, and the raw parameter text for a human/LLM to read directly.
+Every comment becomes a `comment(File, Line, Text)` fact, unconditionally;
+a comment (or run of consecutive `//` lines) that sits immediately before
+a function also becomes a `doc(Function, Arity, File, Line, Text)` fact,
+attributed to that function at its own definition line — `greet` has no
+`doc/5` fact because nothing precedes it, and the trailing `// TODO: ...`
+line has a `comment/3` fact but no `doc/5`, because nothing follows it.
+Finding this attribution needed a part of the tree-sitter API this
+project hadn't used before: a comment is a **sibling** of the code it
+documents, not a parent/child of it, so extracting `doc/5` walks
+`node_next_sibling/1`/`node_prev_sibling/1` rather than the
+`node_parent/1` walk `calls/5` uses for caller attribution — see
+`docs/tree-sitter-erlang.md` §6 for a real inconsistency this uncovered
+in that part of the API (`node_is_null/1` doesn't apply to a missing
+sibling the way it does to a missing parent).
 
 ### Querying the facts
 
@@ -210,32 +219,36 @@ the facts directly (no text parsing either way — see
 ```sh
 $ symbolic parse . -db facts.dets
 
-$ symbolic query -db facts.dets 'calls(X, local(capitalize), _, _)'
+$ symbolic query -db facts.dets 'calls(X, _, local(capitalize, _), _, _)'
 X = "formatName"                    # the only caller of capitalize
 
-$ symbolic query -db facts.dets 'defines(formatName, File, Line)'
+$ symbolic query -db facts.dets 'defines(formatName, Arity, Params, File, Line)'
+Arity = 2
 File = "greeter.ts"
 Line = 2
+Params = "(first: string, last: string)"
 
-$ symbolic query -db facts.dets 'calls(X, member(console, _), _, _)'
+$ symbolic query -db facts.dets 'calls(X, _, member(console, _, _), _, _)'
 X = "greet"                         # who calls a method on console
 
-$ symbolic query -db facts.dets 'calls(greet, X, _, Line)'
+$ symbolic query -db facts.dets 'calls(greet, CallerArity, X, _, Line)'
+CallerArity = 1
 Line = 7
-X = ["local","formatName"]          # greet's first call — one solution at a time
+X = ["local","formatName",2]        # greet's first call — one solution at a time
 
-$ symbolic query -db facts.dets 'calls(capitalize, member(_, missingMethod), _, _)'
+$ symbolic query -db facts.dets 'calls(capitalize, _, member(_, missingMethod, _), _, _)'
 No.                                 # capitalize never calls a method by that name
 
-$ symbolic query -db facts.dets 'doc(formatName, File, Line, Text)'
+$ symbolic query -db facts.dets 'doc(formatName, Arity, File, Line, Text)'
+Arity = 2
 File = "greeter.ts"
 Line = 2
 Text = "Formats a full name from its parts."
 
-$ symbolic query -db facts.dets 'defines(F, _, _), \+ doc(F, _, _, _)'
+$ symbolic query -db facts.dets 'defines(F, _, _, _, _), \+ doc(F, _, _, _, _)'
 F = "greet"                         # which functions have no doc comment
 
-$ symbolic query -db facts.dets 'comment(File, Line, Text), \+ doc(_, _, _, Text)'
+$ symbolic query -db facts.dets 'comment(File, Line, Text), \+ doc(_, _, _, _, Text)'
 File = "greeter.ts"
 Line = 17
 Text = "TODO: handle names with a middle name too"   # comments not attached to any definition
@@ -248,8 +261,9 @@ matters when *writing* a rule, not when reading a query's answer.
 Because it's a real fact base, not a grep result, this composes: point
 `-rules` at a file of hand-written derived predicates (below), or ask
 something no text search could answer directly — "what calls a method on
-`console`" is just `calls(X, member(console, _), _, _)`, and "which
-functions are undocumented" is just `defines(F, _, _), \+ doc(F, _, _, _)`.
+`console`" is just `calls(X, _, member(console, _, _), _, _)`, and "which
+functions are undocumented" is just
+`defines(F, _, _, _, _), \+ doc(F, _, _, _, _)`.
 
 ### Deriving your own rules with `-rules`
 
@@ -260,12 +274,12 @@ are ever real Prolog *text* on disk:
 
 ```sh
 $ cat > rules.pl << 'EOF'
-undocumented(Fun, File, Line) :-
-    defines(Fun, File, Line),
-    \+ doc(Fun, _, _, _).
+undocumented(Fun, Arity, File, Line) :-
+    defines(Fun, Arity, _Params, File, Line),
+    \+ doc(Fun, Arity, _, _, _).
 EOF
 
-$ symbolic query -db facts.dets -rules rules.pl 'findall(F, undocumented(F, _, _), Fs)'
+$ symbolic query -db facts.dets -rules rules.pl 'findall(F, undocumented(F, _, _, _), Fs)'
 F = [0]
 Fs = ["greet"]
 ```
@@ -312,8 +326,8 @@ $ symbolic parse . -db facts.dets
 ["code_block","notes.md","sh",8]
 ["paragraph","notes.md","A short intro paragraph that wraps onto a second line.",3]
 ["paragraph","notes.md","No config needed yet.",15]
-["example_calls","undefined",["local","brew"],"notes.md",9]
-["example_calls","undefined",["local","rebar3"],"notes.md",10]
+["example_calls","undefined",undefined,["local","brew",1],"notes.md",9]
+["example_calls","undefined",undefined,["local","rebar3",1],"notes.md",10]
 ["heading","notes.md",1,"Getting Started",1]
 ["heading","notes.md",2,"Configuration",13]
 ["heading","notes.md",2,"Installation",6]
@@ -440,25 +454,35 @@ build() {
 $ symbolic parse . -db facts.dets
 ["comment","deploy.sh",1,"Deploys the app to the given environment."]
 ["comment","deploy.sh",7,"Builds the release artifact."]
-["defines","build","deploy.sh",8]
-["defines","deploy","deploy.sh",2]
-["calls","build",["local","npm"],"deploy.sh",9]
-["calls","deploy",["local","build"],"deploy.sh",3]
-["calls","deploy",["local","rsync"],"deploy.sh",4]
-["doc","build","deploy.sh",8,"Builds the release artifact."]
-["doc","deploy","deploy.sh",2,"Deploys the app to the given environment."]
+["defines","build",undefined,undefined,"deploy.sh",8]
+["defines","deploy",undefined,undefined,"deploy.sh",2]
+["calls","build",undefined,["local","npm",2],"deploy.sh",9]
+["calls","deploy",undefined,["local","build",0],"deploy.sh",3]
+["calls","deploy",undefined,["local","rsync",3],"deploy.sh",4]
+["doc","build",undefined,"deploy.sh",8,"Builds the release artifact."]
+["doc","deploy",undefined,"deploy.sh",2,"Deploys the app to the given environment."]
 
-$ symbolic query -db facts.dets 'calls(deploy, X, _, Line)'
+$ symbolic query -db facts.dets 'calls(deploy, CallerArity, X, _, Line)'
+CallerArity = undefined
 Line = 3
-X = ["local","build"]
+X = ["local","build",0]
 ```
 
-Every `calls/4` fact is `local(...)` — Bash has no qualified-call
+`defines`/`doc`'s `Arity`/`Params` are always `undefined` for Bash —
+bash functions have no parameter-list grammar node to derive them from,
+unlike Erlang/TypeScript. `calls/5`'s `CallerArity` is `undefined` too,
+for the same reason. `ArgCount` (the `0`/`2`/`3` above, inside the
+`local(...)` term) is still real: a word count following the command
+name, not a validated arity (bash has no fixed parameter list to check
+it against — `build` happens to take no arguments here, but nothing
+stops it from being called with some).
+
+Every `calls/5` fact is `local(...)` — Bash has no qualified-call
 syntax (nothing like Erlang's `mod:fun()` or TypeScript's `obj.method()`)
 to tell a call to a function defined in this same script apart from a
 call to an external program or a builtin, so this project doesn't
-pretend to know the difference either; `local(build)` and
-`local(rsync)` look exactly alike, on purpose. A fenced `sh`/`bash`
+pretend to know the difference either; `local(build, 0)` and
+`local(rsync, 3)` look exactly alike, on purpose. A fenced `sh`/`bash`
 block in a Markdown doc gets the same `example_defines`/`example_calls`
 re-extraction TypeScript/Erlang blocks already get — see "Catching
 stale doc examples" below, which works identically for a shell snippet.
@@ -499,13 +523,13 @@ function shout(word: string): string {
 ```sh
 $ symbolic parse . -db facts.dets
 ["code_block","guide.md","ts",5]
-["defines","capitalize","greeter.ts",5]
-["defines","formatName","greeter.ts",1]
-["example_defines","shout","guide.md",6]
+["defines","capitalize",1,"(word: string)","greeter.ts",5]
+["defines","formatName",2,"(first: string, last: string)","greeter.ts",1]
+["example_defines","shout",1,"(word: string)","guide.md",6]
 ["paragraph","guide.md","Use `capitalize` to fix casing, and `shout` for emphasis:",3]
-["calls","capitalize",["member","word","toUpperCase"],"greeter.ts",6]
-["calls","formatName",["local","capitalize"],"greeter.ts",2]
-["example_calls","shout",["local","capitalize"],"guide.md",7]
+["calls","capitalize",1,["member","word","toUpperCase",0],"greeter.ts",6]
+["calls","formatName",2,["local","capitalize",1],"greeter.ts",2]
+["example_calls","shout",1,["local","capitalize",1],"guide.md",7]
 ["heading","guide.md",1,"Formatting Names",1]
 ```
 
@@ -515,12 +539,13 @@ it alongside the facts:
 
 ```sh
 $ cat > rules.pl << 'EOF'
-stale_doc_example(Fun, DocFile, Line) :-
-    example_defines(Fun, DocFile, Line),
-    \+ defines(Fun, _, _).
+stale_doc_example(Fun, Arity, DocFile, Line) :-
+    example_defines(Fun, Arity, _Params, DocFile, Line),
+    \+ defines(Fun, Arity, _, _, _).
 EOF
 
-$ symbolic query -db facts.dets -rules rules.pl 'stale_doc_example(Fun, DocFile, Line)'
+$ symbolic query -db facts.dets -rules rules.pl 'stale_doc_example(Fun, Arity, DocFile, Line)'
+Arity = 1
 DocFile = "guide.md"
 Fun = "shout"
 Line = 6
