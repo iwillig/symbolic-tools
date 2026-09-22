@@ -60,8 +60,13 @@ literal(Id, Function, Arity, LitKind, Value, File, Line)/
 expr_ref(Id, Function, Arity, Name, File, Line) — what a decision point
 actually compares (Erlang/TypeScript only; Id is a {File, StartByte,
 EndByte} byte span, not (Function, Arity, File, Line) — see
-docs/prolog-schema.md) — comment/3, heading/4, paragraph/3, code_block/3,
-config_value/4, config_section/3.
+docs/prolog-schema.md), scope(ScopeId, Kind, ParentScopeId, File)/
+var_decl(Id, Name, Kind, ScopeId, File, Line)/var_ref(Id, Name, ScopeId,
+RefKind, File, Line)/resolves_to(RefId, DeclId) — variables and scope
+(TypeScript only; var_decl's Kind is var/let/const/param/import),
+import_decl(Module, File, Line)/export_decl(Name, Kind, File, Line) —
+imports/exports (TypeScript only) — comment/3, heading/4, paragraph/3,
+code_block/3, config_value/4, config_section/3.
 Names, modules and file paths in facts are atoms, so local(caller_name, 1)
 matches and local("caller_name", 1) does not.
 
@@ -85,7 +90,42 @@ branch/5, more accurate than the fan-out-based too_complex/3 above, and
 short_name/4 (+all_short_names/1 — edit allow_short_name/1 for names
 like ok/id that should stay unflagged), self_compare/4
 (+all_self_compares/1) and yoda_condition/5 (+all_yoda_conditions/1) —
-both on top of expr/6, what a decision point actually compares.
+both on top of expr/6, what a decision point actually compares — and
+unused_var/4 (+all_unused_vars/1) and shadowed_var/5
+(+all_shadowed_vars/1) on top of scope/4 + var_decl/6 + var_ref/6 +
+resolves_to/2 (TypeScript only; resolves_to(_, undefined) means "not
+declared in anything tracked," not "definitely a bug" until
+undeclared_var/4 below checks it against a globals allowlist — see
+docs/prolog-schema.md), plus five more on the same scope facts, no new
+extraction needed: prefer_const/4 (+all_prefer_const/1), redeclared_var/5
+(+all_redeclared_vars/1), shadows_restricted_name/4
+(+all_restricted_name_shadows/1 — edit restricted_name/1 for this
+runtime's own reserved names), use_before_define/5
+(+all_use_before_define/1), and undeclared_var/4
+(+all_undeclared_vars/1 — edit known_global/1 for this runtime's own
+globals; that table is what makes this a real no-undef check instead of
+just resolves_to(_, undefined)). `new X(...)` needs no new fact family
+— it's calls/5's new(Constructor, ArgCount) shape (TypeScript only) —
+plus one more predicate for the one rule that needs statement context:
+bare_new(Caller, Arity, Constructor, File, Line), a `new X()` whose
+value is discarded outright. On top of those: no_new/4
+(+all_no_new/1), no_new_wrapper/5 (+all_no_new_wrappers/1 —
+String/Number/Boolean), no_new_func/4 (+all_no_new_func/1),
+no_object_constructor/4 (+all_no_object_constructors/1 — checks both
+`new Object()` and bare `Object()`), prefer_regex_literal/4
+(+all_prefer_regex_literals/1 — checks both `new RegExp(...)` and bare
+`RegExp(...)`), and lowercase_constructor/5
+(+all_lowercase_constructors/1). An import binding is itself a
+var_decl/6 (Kind=import, module scope — TypeScript only) — so
+unused_var/4/shadowed_var/5 above already apply to an unused/shadowed
+import for free — plus import_decl(Module, File, Line) and
+export_decl(Name, Kind, File, Line) for what that alone can't answer:
+duplicate_import/4 (+all_duplicate_imports/1), restricted_import/3
+(+all_restricted_imports/1 — edit restricted_module/1, no universal
+default exists), and restricted_export/4 (+all_restricted_exports/1 —
+edit restricted_export_name/1). sort-imports is deliberately not
+built — no per-import-statement grouping key exists cheaply, and it's
+the most purely stylistic rule in this group.
 Docs: docs/lint-queries.md.
 </tools>
 

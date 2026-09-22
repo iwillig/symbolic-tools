@@ -474,6 +474,349 @@ yoda_condition_is_clean_with_zero_expressions_test() ->
             symbolic_query:run_result(?DB, real_rules(), "yoda_condition(_, plain, 0, _, _)"))
     end).
 
+%% --- Variables and scope: unused_var/4, shadowed_var/5 ---
+%%
+%% Facts hand-built here rather than via a live parse (isolates the
+%% Prolog rule from the extraction layer, whose own coverage — including
+%% the trickiest cases, real shadowing and a two-level for-loop
+%% scope-chain walk-up — lives in extracts_scope_facts_test in
+%% ts_extract_typescript_tests.erl).
+
+unused_var_flags_a_declaration_with_no_read_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, unused, const, fscope, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(), "unused_var(_, unused, File, Line)"))
+    end).
+
+%% A read anywhere (even via resolves_to from a nested scope) counts —
+%% must NOT flag a variable that's genuinely used.
+unused_var_does_not_flag_a_read_variable_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, used, 'let', fscope, 'p.ts', 2},
+             {var_ref, r1, used, fscope, read, 'p.ts', 3},
+             {resolves_to, r1, d1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "unused_var(_, used, _, _)"))
+    end).
+
+%% Parameters are deliberately excluded (see unused_var/4's own doc
+%% comment) — a never-read param must NOT be flagged.
+unused_var_does_not_flag_an_unread_parameter_test() ->
+    with_db([{defines, f, 1, <<"(a)">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, a, param, fscope, 'p.ts', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "unused_var(_, a, _, _)"))
+    end).
+
+unused_var_is_clean_with_zero_declarations_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "unused_var(_, _, _, _)"))
+    end).
+
+%% A block scope nested inside a function scope, both declaring `x` —
+%% real shadowing, the shape shadowed_var/5 exists for.
+shadowed_var_flags_an_inner_declaration_of_the_same_name_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {scope, bscope, block, fscope, 'p.ts'},
+             {var_decl, outer, x, 'let', fscope, 'p.ts', 2},
+             {var_decl, inner, x, 'let', bscope, 'p.ts', 6}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 6}]},
+            symbolic_query:run_result(?DB, real_rules(), "shadowed_var(_, _, x, File, Line)"))
+    end).
+
+%% Two DIFFERENT names in nested scopes must not match — the negative
+%% case a rule that ignored Name entirely would get wrong.
+shadowed_var_does_not_flag_different_names_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {scope, bscope, block, fscope, 'p.ts'},
+             {var_decl, outer, x, 'let', fscope, 'p.ts', 2},
+             {var_decl, inner, y, 'let', bscope, 'p.ts', 6}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "shadowed_var(_, _, _, _, _)"))
+    end).
+
+shadowed_var_is_clean_with_zero_declarations_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "shadowed_var(_, _, _, _, _)"))
+    end).
+
+%% --- More rules on the same scope facts: prefer_const/4, redeclared_var/5,
+%% shadows_restricted_name/4, use_before_define/5, undeclared_var/4 ---
+
+%% A `let` with an initializer and no write/read_write ref pointing at
+%% it should be a `const`.
+prefer_const_flags_a_never_reassigned_let_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, x, 'let', fscope, 'p.ts', 2},
+             {var_decl_initialized, d1}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(), "prefer_const(_, x, File, Line)"))
+    end).
+
+%% A `let` that IS later reassigned must not be flagged — it genuinely
+%% needs to stay mutable.
+prefer_const_does_not_flag_a_reassigned_let_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, x, 'let', fscope, 'p.ts', 2},
+             {var_decl_initialized, d1},
+             {var_ref, r1, x, fscope, write, 'p.ts', 3},
+             {resolves_to, r1, d1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "prefer_const(_, x, _, _)"))
+    end).
+
+%% A bare `let x;` (no var_decl_initialized fact at all) must never be
+%% suggested as `const x;` — that's not valid syntax.
+prefer_const_does_not_flag_an_uninitialized_let_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, x, 'let', fscope, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "prefer_const(_, x, _, _)"))
+    end).
+
+redeclared_var_flags_two_decls_in_the_same_scope_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, x, 'let', fscope, 'p.ts', 2},
+             {var_decl, d2, x, 'let', fscope, 'p.ts', 3}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 3}]},
+            symbolic_query:run_result(?DB, real_rules(), "redeclared_var(_, _, x, File, Line)"))
+    end).
+
+%% shadowed_var/5's own case (a nested scope) must NOT also trip
+%% redeclared_var/5 — same scope, not one nested in the other, is the
+%% whole distinction between the two rules.
+redeclared_var_does_not_flag_a_nested_shadow_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {scope, bscope, block, fscope, 'p.ts'},
+             {var_decl, outer, x, 'let', fscope, 'p.ts', 2},
+             {var_decl, inner, x, 'let', bscope, 'p.ts', 6}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "redeclared_var(_, _, x, _, _)"))
+    end).
+
+shadows_restricted_name_flags_undefined_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, 'undefined', 'let', fscope, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(), "shadows_restricted_name(_, 'undefined', File, Line)"))
+    end).
+
+shadows_restricted_name_does_not_flag_an_ordinary_name_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, x, 'let', fscope, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "shadows_restricted_name(_, x, _, _)"))
+    end).
+
+%% A reference (line 3) resolving to a declaration one line LATER (line
+%% 4) — the temporal-dead-zone shape.
+use_before_define_flags_a_reference_before_its_declaration_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, x, 'let', fscope, 'p.ts', 4},
+             {var_ref, r1, x, fscope, read, 'p.ts', 3},
+             {resolves_to, r1, d1}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 3}]},
+            symbolic_query:run_result(?DB, real_rules(), "use_before_define(_, _, x, File, Line)"))
+    end).
+
+%% A reference AFTER its declaration (the ordinary case) must not match.
+use_before_define_does_not_flag_a_reference_after_its_declaration_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_decl, d1, x, 'let', fscope, 'p.ts', 2},
+             {var_ref, r1, x, fscope, read, 'p.ts', 3},
+             {resolves_to, r1, d1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "use_before_define(_, _, x, _, _)"))
+    end).
+
+%% An unresolved reference to a name NOT in known_global/1 — a genuine
+%% no-undef candidate.
+undeclared_var_flags_an_unresolved_non_global_reference_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_ref, r1, totallyUndeclaredThing, fscope, read, 'p.ts', 2},
+             {resolves_to, r1, undefined}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "undeclared_var(_, totallyUndeclaredThing, File, Line)"))
+    end).
+
+%% A real global (console) resolving to undefined must NOT be flagged —
+%% the whole point of known_global/1.
+undeclared_var_does_not_flag_a_known_global_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {scope, fscope, function, none, 'p.ts'},
+             {var_ref, r1, console, fscope, read, 'p.ts', 2},
+             {resolves_to, r1, undefined}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "undeclared_var(_, console, _, _)"))
+    end).
+
+%% --- `new` expressions: no_new/4, no_new_wrapper/5, no_new_func/4,
+%% no_object_constructor/4, prefer_regex_literal/4, lowercase_constructor/5 ---
+
+no_new_flags_a_discarded_construction_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {bare_new, f, 0, 'Logger', 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_new(_, _, 'Logger', File, Line)"))
+    end).
+
+%% A `new X()` that's assigned (no bare_new/5 fact at all) must not match.
+no_new_does_not_flag_an_assigned_construction_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, 'Bar', 0}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_new(_, _, 'Bar', _, _)"))
+    end).
+
+no_new_wrapper_flags_string_number_and_boolean_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, 'String', 1}, 'p.ts', 2},
+             {calls, f, 0, {new, 'Number', 1}, 'p.ts', 3},
+             {calls, f, 0, {new, 'Boolean', 1}, 'p.ts', 4},
+             {calls, f, 0, {new, 'Bar', 0}, 'p.ts', 5}], fun() ->
+        ?assertEqual({solutions, [{'Triples', [dash('Boolean', 'p.ts', 4),
+                                                dash('Number', 'p.ts', 3),
+                                                dash('String', 'p.ts', 2)]}]},
+            symbolic_query:run_result(?DB, real_rules(), "all_no_new_wrappers(Triples)"))
+    end).
+
+no_new_func_flags_new_function_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, 'Function', 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_new_func(_, _, File, Line)"))
+    end).
+
+%% Both shapes: `new Object()` and the bare `Object()` call (already
+%% calls/5's existing local(...) shape, no new extraction needed for it).
+no_object_constructor_flags_both_call_shapes_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, 'Object', 0}, 'p.ts', 2},
+             {calls, f, 0, {local, 'Object', 0}, 'p.ts', 3}], fun() ->
+        ?assertEqual({solutions, [{'Triples', [dash('p.ts', 2), dash('p.ts', 3)]}]},
+            symbolic_query:run_result(?DB, real_rules(), "all_no_object_constructors(Triples)"))
+    end).
+
+%% `Object(x)` with an argument is a legitimate coercion, not `{}` — must
+%% not match (ArgCount 0 is the whole point of both clauses above).
+no_object_constructor_does_not_flag_a_coercion_call_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, 'Object', 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_object_constructor(_, _, _, _)"))
+    end).
+
+prefer_regex_literal_flags_both_call_shapes_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, 'RegExp', 1}, 'p.ts', 2},
+             {calls, f, 0, {local, 'RegExp', 1}, 'p.ts', 3}], fun() ->
+        ?assertEqual({solutions, [{'Triples', [dash('p.ts', 2), dash('p.ts', 3)]}]},
+            symbolic_query:run_result(?DB, real_rules(), "all_prefer_regex_literals(Triples)"))
+    end).
+
+lowercase_constructor_flags_a_lowercase_name_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, foo, 0}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 2}]},
+            symbolic_query:run_result(?DB, real_rules(), "lowercase_constructor(_, _, foo, File, Line)"))
+    end).
+
+%% A properly-capitalized constructor must not match.
+lowercase_constructor_does_not_flag_a_capitalized_name_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, 'Bar', 0}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "lowercase_constructor(_, _, 'Bar', _, _)"))
+    end).
+
+%% Every `new`-expression rule above must still answer cleanly — not
+%% existence_error — against a codebase with zero calls at all (a real
+%% predicate-existence trap; calls/5 itself needs no sentinel since a
+%% real parse almost always has at least one call, but bare_new/5 is a
+%% genuinely new predicate that easily has zero facts).
+no_new_is_clean_with_zero_bare_new_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_new(_, _, _, _, _)"))
+    end).
+
+%% --- Imports and exports: duplicate_import/4, restricted_import/4, restricted_export/5 ---
+
+duplicate_import_flags_the_second_occurrence_test() ->
+    with_db([{import_decl, lodash, 'p.ts', 1},
+             {import_decl, lodash, 'p.ts', 5}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 5}]},
+            symbolic_query:run_result(?DB, real_rules(), "duplicate_import(lodash, File, _, Line)"))
+    end).
+
+%% Two DIFFERENT module paths must not match each other.
+duplicate_import_does_not_flag_different_modules_test() ->
+    with_db([{import_decl, lodash, 'p.ts', 1},
+             {import_decl, moment, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "duplicate_import(lodash, _, _, _)"))
+    end).
+
+restricted_import_flags_a_listed_module_test() ->
+    with_db([{import_decl, lodash, 'p.ts', 1}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 1}]},
+            symbolic_query:run_result(?DB, real_rules(), "restricted_import(lodash, File, Line)"))
+    end).
+
+restricted_import_does_not_flag_an_unlisted_module_test() ->
+    with_db([{import_decl, 'my-own-module', 'p.ts', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "restricted_import('my-own-module', _, _)"))
+    end).
+
+restricted_export_flags_default_test() ->
+    with_db([{export_decl, 'default', default, 'p.ts', 4}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}, {'Line', 4}]},
+            symbolic_query:run_result(?DB, real_rules(), "restricted_export('default', default, File, Line)"))
+    end).
+
+restricted_export_does_not_flag_an_ordinary_name_test() ->
+    with_db([{export_decl, x, named, 'p.ts', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "restricted_export(x, named, _, _)"))
+    end).
+
+%% Every import/export rule above must still answer cleanly — not
+%% existence_error — against a codebase with zero import/export facts
+%% at all (an Erlang-only tree, or TS with none), the same
+%% predicate-existence trap every other new predicate this session
+%% needed a sentinel clause for.
+duplicate_import_is_clean_with_zero_import_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "duplicate_import(_, _, _, _)"))
+    end).
+
+restricted_export_is_clean_with_zero_export_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "restricted_export(_, _, _, _)"))
+    end).
+
 %% A scratch project under _build/: <root>/.symbolic/rules.pl, plus a
 %% data/ subdirectory to hang a fact database in and an other/ subtree
 %% with its own library, for the ordering tests. Fun gets the absolute

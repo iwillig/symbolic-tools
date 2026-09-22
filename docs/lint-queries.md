@@ -683,6 +683,211 @@ expression's `Id`) until `EndByte` was added: no two distinct nodes in
 one parse occupy the identical byte range, so the span can't collide
 the same way.
 
+### Variables and scope, on top of `scope/4` + `var_decl/6` + `var_ref/6` + `resolves_to/2`
+
+The single biggest gap the ESLint-rule review turned up: every rule
+above is about functions, calls, branches, or expressions — none of it
+sees a *variable*. This is TypeScript-only (Erlang's variable model is
+different enough to need its own design) and needed real scope
+resolution, not just one more query — computed once by the extractor,
+not re-derived per query, the same design `calls/5`'s caller-attribution
+walk-up already uses.
+
+```sh
+$ symbolic query -db facts.dets 'all_unused_vars(X)'
+X = [["-",["-","debug","sample.ts"],10]]
+
+$ symbolic query -db facts.dets 'all_shadowed_vars(X)'
+X = [["-",["-","sum","sample.ts"],6]]
+```
+
+Both against
+
+```ts
+function total(items: number[]) {
+  let sum = 0;
+  for (let i = 0; i < items.length; i++) {
+    sum += items[i];
+    if (sum > 100) {
+      let sum = 0;         // shadowed_var: a different `sum` than the outer one
+      console.log(sum);
+    }
+  }
+  const debug = "unused";  // unused_var: declared, never read
+  return sum;
+}
+```
+
+`unused_var/4` correctly leaves `sum`/`i`/`items` alone — all genuinely
+read — and `shadowed_var/5` correctly catches the inner `let sum` at
+line 6 without also flagging `i`/`items`/`debug`, none of which shadow
+anything. Getting the outer `sum += items[i]` (line 4) and the inner
+`console.log(sum)` (line 7) to resolve to *different* declarations,
+just four lines apart with the same name, is the actual point — a
+naive name-only match would conflate them.
+
+**Verified against a case designed to break a careless implementation,
+not a toy one**: a `var`/`` 'let' `` each read from two scope levels
+down inside a `for`-loop's own nested body block correctly walk up
+*through* the loop's own scope to reach a declaration beyond it, and a
+reference to something never declared anywhere (`resolves_to(Ref,
+undefined)`) comes back clean rather than crashing — but that same
+clean `undefined` is also exactly what every ordinary global
+(`console`, `Math`, ...) looks like, since there's no allowlist here;
+don't read it as "undefined variable" on its own.
+
+### Five more rules on the same scope facts — no new extraction needed
+
+`unused_var/4`/`shadowed_var/5` above needed the new `scope/4` family
+to exist at all. These five don't need anything beyond what that family
+already provides (plus one small additive fact, `var_decl_initialized/1`
+— whether a declarator has a `value` at all) — they're new Prolog only.
+
+```sh
+$ symbolic query -db facts.dets 'all_prefer_const(X)'
+X = [["-",["-","pending","sample.ts"],6],["-",["-","ready","sample.ts"],2],["-",["-","undefined","sample.ts"],7]]
+
+$ symbolic query -db facts.dets 'all_redeclared_vars(X)'
+X = [["-",["-","retries","sample.ts"],4]]
+
+$ symbolic query -db facts.dets 'all_restricted_name_shadows(X)'
+X = [["-",["-","undefined","sample.ts"],7]]
+
+$ symbolic query -db facts.dets 'all_use_before_define(X)'
+X = [["-",["-","pending","sample.ts"],5]]
+
+$ symbolic query -db facts.dets 'all_undeclared_vars(X)'
+X = [["-",["-","unknownGlobal","sample.ts"],8]]
+```
+
+All five against
+
+```ts
+function validate(count: number) {
+  let ready = true;         // prefer_const: never reassigned
+  var retries = 1;
+  var retries = 2;          // redeclared_var: same scope, same name
+  console.log(pending);     // use_before_define: read before its own declaration
+  let pending = false;      // (also prefer_const: never reassigned)
+  let undefined = 0;        // shadows_restricted_name (also prefer_const)
+  return unknownGlobal;     // undeclared_var: not declared, not a known global
+}
+```
+
+`prefer_const/4` correctly picks up all three never-reassigned `let`s
+(`ready`, `pending`, `undefined`) — a variable can trip more than one
+rule at once, same as a real linter; `pending`'s own entry is exactly
+where `prefer_const/4` and `use_before_define/5` overlap without either
+rule needing to know about the other. `redeclared_var/5` reports line 4
+(the real redeclaration), not line 3 — `EarlierId`/`LaterId` are ordered
+by line for exactly this reason. `undeclared_var/4` is the one that
+needed `known_global/1`: `resolves_to/2` alone can't tell "genuinely
+undeclared" (`unknownGlobal`, flagged) apart from "a real global this
+walk never tracked" (`console`, correctly *not* flagged, even though
+both come back `resolves_to(Ref, undefined)` identically) — see
+`known_global/1`'s own table in `.symbolic/rules.pl` for the exact list.
+
+### `new` expressions, on top of `calls/5`'s `new(Constructor, ArgCount)` shape
+
+`new X(...)` needed no new fact family — it's modeled as one more
+`CallSpec` on `calls/5`, the same way a call's shape already varies by
+language. Only `no_new/4` needed anything extra (`bare_new/5` — see
+`docs/prolog-schema.md`); the rest is plain Prolog over `calls/5`, the
+same shape `risky_call/3` already has.
+
+```sh
+$ symbolic query -db facts.dets 'all_no_new(X)'
+X = [["-",["-","Logger","sample.ts"],2]]
+
+$ symbolic query -db facts.dets 'all_no_new_wrappers(X)'
+X = [["-",["-","Boolean","sample.ts"],3]]
+
+$ symbolic query -db facts.dets 'all_prefer_regex_literals(X)'
+X = [["-","sample.ts",4]]
+
+$ symbolic query -db facts.dets 'all_lowercase_constructors(X)'
+X = [["-",["-","httpClient","sample.ts"],5]]
+```
+
+All four against
+
+```ts
+function buildClient(pattern: string) {
+  new Logger();                         // no_new: constructed value discarded
+  const wrapper = new Boolean(false);   // no_new_wrapper: boxed primitive
+  const compiled = new RegExp(pattern); // prefer_regex_literal
+  const client = new httpClient();      // lowercase_constructor
+  return client;
+}
+```
+
+`no_new/4` flags only `Logger` — `Boolean`/`RegExp`/`httpClient` are all
+assigned, so none of them produce a `bare_new/5` fact at all, correctly
+leaving the other three rules to catch them on entirely separate
+grounds. `no_object_constructor/4` and `prefer_regex_literal/4` both
+check two call shapes at once — `new RegExp(...)` and a bare
+`RegExp(...)` (no `new`) are equally valid JS/TS and equally worth
+flagging, and the bare half needed no new extraction at all: it's
+`calls/5`'s pre-existing `local(RegExp, ArgCount)` shape, unchanged.
+
+**A real crash found and guarded against, not a hypothetical**: `new
+Baz` — no parentheses at all, real and legal TypeScript — has a null
+`arguments` field, and calling `symbolic_ts:node_named_child_count/1`
+on a null node **segfaults the whole BEAM process**, confirmed by
+actually doing it, not a catchable Erlang error the way a `badarg`
+would be. `new_expr_arg_count/1` in `ts_extract_typescript.erl` checks
+`node_is_null/1` first specifically because of this.
+
+### Imports and exports, on top of `import_decl/4` + `export_decl/4`
+
+An import binding itself is just an ordinary `var_decl/6` (`Kind =
+import`) — `unused_var/4`/`shadowed_var/5` above already apply to an
+unused or shadowed import for free, no new rule needed. These two
+facts answer what that alone can't: which module a name came from, and
+what a file makes public. TypeScript only.
+
+```sh
+$ symbolic query -db facts.dets 'all_duplicate_imports(X)'
+X = [["-",["-","lodash","sample.ts"],3]]
+
+$ symbolic query -db facts.dets 'all_restricted_imports(X)'
+X = [["-",["-","lodash","sample.ts"],1],["-",["-","lodash","sample.ts"],3],["-",["-","moment","sample.ts"],2]]
+
+$ symbolic query -db facts.dets 'all_restricted_exports(X)'
+X = [["-",["-",["-","default","default"],"sample.ts"],6]]
+```
+
+All three against
+
+```ts
+import _ from "lodash";
+import moment from "moment";
+import _2 from "lodash";      // duplicate_import: "lodash" already imported on line 1
+
+export const version = "1.0";
+export default version;       // restricted_export: exports the literal name 'default'
+```
+
+`all_restricted_imports/1` flags all three imports here — both
+`lodash` occurrences *and* `moment` — since `restricted_module/1`
+ships with both as illustrative defaults; `all_duplicate_imports/1`
+only flags line 3 specifically (the real redundant one), the same
+"report the later occurrence" convention `redeclared_var/5` already
+uses. Unlike `known_global/1` (a real, close-to-universal set of JS/TS
+globals), there's no universal "always-restricted" module — every
+project bans different things for different reasons — so
+`restricted_module/1`/`restricted_export_name/1` are shipped with a
+couple of realistic, commonly-cited examples specifically to be edited
+for this project's own conventions, not treated as a real default.
+
+**A real bug found by actually running this against a file that both
+imports and later references a name, not a hypothetical**: import
+bindings used to be computed *after* the reference resolver already
+ran (see `docs/prolog-schema.md`), so `Foo(1)` after `import Foo from
+"lodash"` came back `resolves_to(_, undefined)` — indistinguishable
+from a genuinely undeclared `Foo` — everywhere in the file, not just
+in one spot. Fixed by computing import bindings first.
+
 ## References
 
 - [`agent-examples.md`](agent-examples.md) — the narrative version of

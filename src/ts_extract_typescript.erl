@@ -9,6 +9,12 @@
 %%%   defines(Function, Arity, Params, File, Line)
 %%%   calls(Caller, CallerArity, local(Callee, ArgCount), File, Line)          — plain calls: bar(x)
 %%%   calls(Caller, CallerArity, member(Object, Method, ArgCount), File, Line)  — method calls: obj.method(x)
+%%%   calls(Caller, CallerArity, new(Constructor, ArgCount), File, Line)        — new X(...); bare-identifier
+%%%                                                         constructors only, see new_calls/4
+%%%   bare_new(Caller, CallerArity, Constructor, File, Line) — a `new X()` whose value is discarded
+%%%                                                         outright (its own expression_statement)
+%%%   import_decl(Module, File, Line)                    — an import_statement's raw module path
+%%%   export_decl(Name, Kind, File, Line)                — Kind: named/default/wildcard; see exports/4
 %%%   comment(File, Line, Text)                          — every comment, unconditionally
 %%%   doc(Function, Arity, File, Line, Text)             — a comment run immediately
 %%%                                                         preceding a function_declaration
@@ -22,6 +28,20 @@
 %%%   expr_operand(Id, Role, ChildId)                    — Role: left/right/operand
 %%%   literal(Id, Function, Arity, LitKind, Value, File, Line) — a literal used as an operand
 %%%   expr_ref(Id, Function, Arity, Name, File, Line)    — a bare identifier used as an operand
+%%%   scope(ScopeId, Kind, ParentScopeId, File)          — Kind: function/block/module; see
+%%%                                                         scope_facts/3
+%%%   var_decl(Id, Name, Kind, ScopeId, File, Line)      — Kind: var/let/const/param/import (an
+%%%                                                         import binding, scoped at module
+%%%                                                         level — see imports/5)
+%%%   var_ref(Id, Name, ScopeId, RefKind, File, Line)    — RefKind: read/write/read_write
+%%%   resolves_to(RefId, DeclId)                         — DeclId is `undefined` if unresolved
+%%%   var_decl_initialized(Id)                           — that var_decl has a "value" (initializer)
+%%%
+%%% scope/var_decl/var_ref/resolves_to are TypeScript-only (Erlang's
+%%% variable model — single-assignment, pattern-bound, no var/let/const
+%%% distinction — needs its own separate design) and deliberately don't
+%%% handle destructuring (`let {a,b} = x`) or for-in/for-of — see
+%%% scope_facts/3's own doc comment for the full boundary.
 %%%
 %%% Arity/ArgCount/Params come from `function_declaration`'s "parameters"
 %%% field and `call_expression`'s "arguments" field — same technique and
@@ -52,6 +72,9 @@
 -define(MEMBER_CALL_QUERY,
     "(call_expression function: (member_expression "
     "object: (_) @obj property: (property_identifier) @prop))").
+-define(NEW_EXPR_QUERY, "(new_expression) @n").
+-define(IMPORT_QUERY, "(import_statement) @i").
+-define(EXPORT_QUERY, "(export_statement) @e").
 -define(COMMENT_QUERY, "(comment) @c").
 
 %% One query per decision-point construct, for real (McCabe-style)
@@ -100,10 +123,13 @@ text(Path, Src) ->
         defines(Lang, Root, Src, PathAtom) ++
         local_calls(Lang, Root, Src, PathAtom) ++
         member_calls(Lang, Root, Src, PathAtom) ++
+        new_calls(Lang, Root, Src, PathAtom) ++
         comments(Lang, Root, Src, PathAtom) ++
         docs(Lang, Root, Src, PathAtom) ++
         branches(Lang, Root, Src, PathAtom) ++
-        exprs(Lang, Root, Src, PathAtom),
+        exprs(Lang, Root, Src, PathAtom) ++
+        exports(Lang, Root, Src, PathAtom) ++
+        scope_facts(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
 
 defines(Lang, Root, Src, PathAtom) ->
@@ -165,6 +191,209 @@ member_call_fact(PropNode, Src, PathAtom) ->
      {member, to_atom(symbolic_ts:node_text(ObjNode, Src)),
       to_atom(symbolic_ts:node_text(PropNode, Src)), ArgCount},
      PathAtom, line(PropNode)}.
+
+%% `new X(...)` — modeled as one more calls/5 CallSpec shape
+%% (new(Constructor, ArgCount)), not a separate fact family: it's
+%% conceptually a call, just spelled with `new`, the same way a
+%% language-specific CallSpec already varies (local/member/remote) —
+%% see this module's own header. Only a bare-identifier constructor is
+%% tracked (`new foo.Bar()`'s qualified constructor is skipped, not
+%% mis-tracked, same policy as every other "skip the complex case"
+%% choice in this schema).
+%%
+%% `new Baz` (no parens at all — real, legal TS/JS) has a NULL
+%% "arguments" field — confirmed the hard way: calling
+%% node_named_child_count/1 on a null node segfaults the whole BEAM
+%% (not a catchable Erlang error), so this checks node_is_null/1 first
+%% and treats the paren-less form as ArgCount 0, same as `new Baz()`.
+new_calls(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?NEW_EXPR_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"n", N} <- Caps]),
+    lists:flatmap(fun(N) -> new_call_facts(N, Src, PathAtom) end, Nodes).
+
+new_call_facts(N, Src, PathAtom) ->
+    ConsNode = symbolic_ts:node_child_by_field_name(N, "constructor"),
+    case symbolic_ts:node_type(ConsNode) of
+        "identifier" ->
+            Constructor = to_atom(symbolic_ts:node_text(ConsNode, Src)),
+            ArgCount = new_expr_arg_count(N),
+            {Caller, CallerArity} = caller_info(N, Src),
+            CallFact = {calls, Caller, CallerArity, {new, Constructor, ArgCount}, PathAtom, line(N)},
+            [CallFact | bare_new_fact(N, Caller, CallerArity, Constructor, PathAtom)];
+        _ ->
+            []
+    end.
+
+new_expr_arg_count(N) ->
+    Args = symbolic_ts:node_child_by_field_name(N, "arguments"),
+    case symbolic_ts:node_is_null(Args) of
+        true -> 0;
+        false -> symbolic_ts:node_named_child_count(Args)
+    end.
+
+%% bare_new/5: only when a `new X()`'s constructed value is discarded
+%% outright — its immediate parent is an expression_statement, e.g.
+%% `new Logger();` as its own statement, not `const x = new Logger();`
+%% or `if (new Foo())`. Powers no_new/4 specifically; every other
+%% new-expression rule just needs calls/5's new(...) shape above.
+bare_new_fact(N, Caller, CallerArity, Constructor, PathAtom) ->
+    case symbolic_ts:node_type(symbolic_ts:node_parent(N)) of
+        "expression_statement" -> [{bare_new, Caller, CallerArity, Constructor, PathAtom, line(N)}];
+        _ -> []
+    end.
+
+%% import_decl/4 (the raw module path, for no-duplicate-imports/
+%% no-restricted-imports) plus one var_decl/6 (Kind='import') per
+%% binding actually introduced — reusing the existing fact shape rather
+%% than a parallel one, see scope_facts/4's own doc comment.
+imports(Lang, Root, Src, PathAtom, ModuleScope) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?IMPORT_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"i", N} <- Caps]),
+    lists:flatmap(fun(N) -> import_facts(N, Src, PathAtom, ModuleScope) end, Nodes).
+
+import_facts(N, Src, PathAtom, ModuleScope) ->
+    SourceNode = symbolic_ts:node_child_by_field_name(N, "source"),
+    Module = to_atom(string_fragment_text(SourceNode, Src)),
+    DeclFact = {import_decl, Module, PathAtom, line(N)},
+    [DeclFact | import_bindings(N, Src, PathAtom, ModuleScope)].
+
+%% import_statement's own named children besides "source": either
+%% none at all (a side-effect-only `import "./x";`) or exactly one
+%% import_clause — confirmed empirically, the clause (when present) is
+%% always the first named child, "source" always the last.
+import_bindings(N, Src, PathAtom, ModuleScope) ->
+    case symbolic_ts:node_named_child_count(N) of
+        2 -> import_clause_bindings(symbolic_ts:node_named_child(N, 0), Src, PathAtom, ModuleScope);
+        _ -> []
+    end.
+
+%% A clause can hold more than one part at once (`import Foo, { a, b }
+%% from "./x"` is valid) — walk every named child, not just the first.
+import_clause_bindings(ClauseNode, Src, PathAtom, ModuleScope) ->
+    N = symbolic_ts:node_named_child_count(ClauseNode),
+    lists:flatmap(
+        fun(I) -> import_clause_part(symbolic_ts:node_named_child(ClauseNode, I), Src, PathAtom, ModuleScope) end,
+        lists:seq(0, N - 1)).
+
+import_clause_part(Node, Src, PathAtom, ModuleScope) ->
+    case symbolic_ts:node_type(Node) of
+        "identifier" ->
+            [import_binding_fact(Node, Src, PathAtom, ModuleScope)];
+        "namespace_import" ->
+            [import_binding_fact(symbolic_ts:node_named_child(Node, 0), Src, PathAtom, ModuleScope)];
+        "named_imports" ->
+            N = symbolic_ts:node_named_child_count(Node),
+            lists:flatmap(
+                fun(I) -> import_specifier_binding(symbolic_ts:node_named_child(Node, I), Src, PathAtom, ModuleScope) end,
+                lists:seq(0, N - 1));
+        _ -> []
+    end.
+
+%% import_specifier: one child (`{a}` — local name only) or two
+%% (`{b as c}` — original, then alias). Either way the LAST child is
+%% the real local binding this file uses (the alias, if one exists).
+import_specifier_binding(SpecNode, Src, PathAtom, ModuleScope) ->
+    case symbolic_ts:node_type(SpecNode) of
+        "import_specifier" ->
+            N = symbolic_ts:node_named_child_count(SpecNode),
+            LocalNode = symbolic_ts:node_named_child(SpecNode, N - 1),
+            [import_binding_fact(LocalNode, Src, PathAtom, ModuleScope)];
+        _ -> []
+    end.
+
+import_binding_fact(IdNode, Src, PathAtom, ModuleScope) ->
+    {var_decl, node_id(PathAtom, IdNode), to_atom(symbolic_ts:node_text(IdNode, Src)),
+     'import', ModuleScope, PathAtom, line(IdNode)}.
+
+%% export_decl/4: what name (if any) an export_statement makes public,
+%% and under what shape (named/default/wildcard). A wrapped declaration
+%% (`export function f() {}`, `export const x = 1`) needs no special
+%% attribution walk of its own here — its "declaration" field is a real
+%% function_declaration/lexical_declaration node, already walked
+%% normally by walk_scope/5's generic fallthrough (defines/5, var_decl/6
+%% etc. all still get produced exactly as if `export` weren't there).
+exports(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?EXPORT_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"e", N} <- Caps]),
+    lists:flatmap(fun(N) -> export_facts(N, Src, PathAtom) end, Nodes).
+
+export_facts(N, Src, PathAtom) ->
+    DeclNode = symbolic_ts:node_child_by_field_name(N, "declaration"),
+    case symbolic_ts:node_is_null(DeclNode) of
+        false -> exported_declaration_facts(DeclNode, Src, PathAtom);
+        true -> exported_other_facts(N, Src, PathAtom)
+    end.
+
+exported_declaration_facts(DeclNode, Src, PathAtom) ->
+    case symbolic_ts:node_type(DeclNode) of
+        "function_declaration" ->
+            NameNode = symbolic_ts:node_child_by_field_name(DeclNode, "name"),
+            [{export_decl, to_atom(symbolic_ts:node_text(NameNode, Src)), named, PathAtom, line(NameNode)}];
+        "lexical_declaration" -> exported_variable_names(DeclNode, Src, PathAtom);
+        "variable_declaration" -> exported_variable_names(DeclNode, Src, PathAtom);
+        _ -> []
+    end.
+
+%% `export const a = 1, b = 2;` — one export_decl/4 fact per declarator,
+%% same "only a plain identifier name" limit walk_declaration/6 already
+%% has for var_decl/6 (a destructured export name is skipped).
+exported_variable_names(DeclNode, Src, PathAtom) ->
+    N = symbolic_ts:node_named_child_count(DeclNode),
+    lists:flatmap(
+        fun(I) ->
+            Declarator = symbolic_ts:node_named_child(DeclNode, I),
+            case symbolic_ts:node_type(Declarator) of
+                "variable_declarator" ->
+                    NameNode = symbolic_ts:node_child_by_field_name(Declarator, "name"),
+                    case symbolic_ts:node_type(NameNode) of
+                        "identifier" ->
+                            [{export_decl, to_atom(symbolic_ts:node_text(NameNode, Src)),
+                              named, PathAtom, line(NameNode)}];
+                        _ -> []
+                    end;
+                _ -> []
+            end
+        end, lists:seq(0, N - 1)).
+
+%% An export_statement with a null "declaration" field: `export { ... }`
+%% (dispatch to export_clause_facts/4), `export default ...` (Name is
+%% always the literal atom 'default' — the export SLOT's own name in ES
+%% module semantics, not whatever expression fills it), or
+%% `export * from "...";` (Name is `undefined` — no specific name at all).
+exported_other_facts(N, Src, PathAtom) ->
+    case symbolic_ts:node_named_child_count(N) of
+        0 -> [];
+        _ ->
+            Child = symbolic_ts:node_named_child(N, 0),
+            case symbolic_ts:node_type(Child) of
+                "export_clause" -> export_clause_facts(Child, Src, PathAtom, line(N));
+                "string" -> [{export_decl, undefined, wildcard, PathAtom, line(N)}];
+                _ -> [{export_decl, 'default', default, PathAtom, line(N)}]
+            end
+    end.
+
+export_clause_facts(ClauseNode, Src, PathAtom, Line) ->
+    N = symbolic_ts:node_named_child_count(ClauseNode),
+    lists:flatmap(
+        fun(I) -> export_specifier_fact(symbolic_ts:node_named_child(ClauseNode, I), Src, PathAtom, Line) end,
+        lists:seq(0, N - 1)).
+
+%% export_specifier: one child (`{a}` — exported under its own name) or
+%% two (`{b as d}` — local, then the chosen public alias). Either way
+%% the LAST child is the real PUBLIC name consumers of this module see
+%% — the opposite half of import_specifier_binding/4's identical "last
+%% child wins" rule, which cares about the LOCAL name instead.
+export_specifier_fact(SpecNode, Src, PathAtom, Line) ->
+    case symbolic_ts:node_type(SpecNode) of
+        "export_specifier" ->
+            N = symbolic_ts:node_named_child_count(SpecNode),
+            PublicNode = symbolic_ts:node_named_child(SpecNode, N - 1),
+            [{export_decl, to_atom(symbolic_ts:node_text(PublicNode, Src)), named, PathAtom, Line}];
+        _ -> []
+    end.
 
 %% One branch/5 fact per decision point (see ?BRANCH_QUERIES), attributed
 %% to its enclosing function via caller_info/2 — the exact same walk-up
@@ -298,6 +527,313 @@ parse_number(Text) ->
 %% comment).
 node_id(PathAtom, Node) ->
     {PathAtom, symbolic_ts:node_start_byte(Node), symbolic_ts:node_end_byte(Node)}.
+
+%% Variable/scope facts: scope/4, var_decl/6, var_ref/6, resolves_to/2.
+%% Unlike every other fact family in this module, this isn't a flat
+%% query_capture/2 pass — no single query pattern can express "which
+%% scope is this identifier in," so this is a real top-down recursive
+%% walk over the whole tree instead, threading two accumulators:
+%% Scope (the nearest enclosing scope, for let/const/param and for
+%% where a reference starts its lookup) and FuncScope (the nearest
+%% enclosing function-or-module scope, for `var`'s hoisting — a `var`
+%% declared inside a nested block still belongs to the function, not
+%% the block, confirmed against real nested-block/for-loop snippets;
+%% see docs/prolog-schema.md).
+%%
+%% Two passes, not one: walk_scope/5 below only collects scope/var_decl
+%% facts and *raw* references (Name, starting Scope, RefKind — not yet
+%% resolved), then resolve_refs/3 resolves every reference against the
+%% complete declaration set once the whole tree has been walked. A
+%% single combined pass would get this wrong for a reference that
+%% textually precedes its own declaration in the same block.
+%%
+%% Deliberately out of scope (skipped, not mis-tracked): destructured
+%% declarations/assignments (`let {a,b} = x`, `[a,b] = x`) — a
+%% variable_declarator's "name" field or an assignment's "left" field
+%% that isn't a bare identifier is silently not turned into a fact;
+%% for-in/for-of (same mechanism as for_statement, needs its own field
+%% verification); a globals allowlist — resolves_to(Ref, undefined)
+%% means "not declared in anything this walk tracked," which includes
+%% every real global (console, Math, ...), not just genuine bugs.
+%% Lang (unlike everywhere else this walk needs no query) is only here
+%% to hand to imports/5: import bindings are emitted as ordinary
+%% var_decl/6 facts (Kind='import', scoped at module level, since ES
+%% imports are always top-level) rather than a parallel fact family —
+%% unused_var/4, shadowed_var/5, etc. from .symbolic/rules.pl already
+%% apply to an unused/shadowed import for free as a result.
+%%
+%% ImportFacts is computed BEFORE resolve_refs/3, not after — a real
+%% bug found by actually running this against a file with both an
+%% import and a later reference to it: resolve_refs/3 only ever saw
+%% walk_scope/5's own DeclFacts, so an import binding didn't exist yet
+%% as far as the resolver was concerned, and EVERY reference to an
+%% imported name came back resolves_to(_, undefined) — indistinguishable
+%% from a genuinely undeclared name, anywhere in the file, not just
+%% inside an export specifier. resolve_refs/3's DeclIndex builder
+%% already pattern-matches specifically on {var_decl, ...} tuples (a
+%% list comprehension, safe to feed it import_decl/4 facts mixed in too
+%% — they're simply ignored), so folding ImportFacts into the same
+%% DeclFacts list resolve_refs/3 consults is the whole fix.
+scope_facts(Lang, Root, Src, PathAtom) ->
+    ModuleScope = node_id(PathAtom, Root),
+    {DeclFacts, ScopeFacts, RawRefs} = walk_scope(Root, ModuleScope, ModuleScope, Src, PathAtom),
+    AllScopeFacts = [{scope, ModuleScope, module, none, PathAtom} | ScopeFacts],
+    ImportFacts = imports(Lang, Root, Src, PathAtom, ModuleScope),
+    AllDeclFacts = DeclFacts ++ ImportFacts,
+    RefFacts = resolve_refs(RawRefs, AllDeclFacts, AllScopeFacts),
+    AllScopeFacts ++ AllDeclFacts ++ RefFacts.
+
+%% -> {DeclFacts, ScopeFacts, RawRefs}; RawRefs :: [{RefId, Name, Scope, RefKind, Line}]
+walk_scope(Node, Scope, FuncScope, Src, PathAtom) ->
+    case symbolic_ts:node_is_null(Node) of
+        true ->
+            {[], [], []};
+        false ->
+            case symbolic_ts:node_type(Node) of
+                "function_declaration" -> walk_function(Node, Scope, Src, PathAtom);
+                "function_expression" -> walk_function(Node, Scope, Src, PathAtom);
+                "arrow_function" -> walk_function(Node, Scope, Src, PathAtom);
+                "statement_block" -> walk_block(Node, Scope, FuncScope, Src, PathAtom);
+                "for_statement" -> walk_for(Node, Scope, FuncScope, Src, PathAtom);
+                "lexical_declaration" ->
+                    walk_declaration(Node, Scope, FuncScope, Src, PathAtom, decl_kind_of_lexical(Node, Src));
+                "variable_declaration" ->
+                    walk_declaration(Node, Scope, FuncScope, Src, PathAtom, 'var');
+                "assignment_expression" -> walk_assignment(Node, Scope, FuncScope, Src, PathAtom, write);
+                "augmented_assignment_expression" ->
+                    walk_assignment(Node, Scope, FuncScope, Src, PathAtom, read_write);
+                "import_statement" ->
+                    %% Import bindings are handled entirely by imports/5
+                    %% (they're declarations, introduced here, not
+                    %% references) — recursing generically would treat
+                    %% every imported name as a phantom read instead.
+                    {[], [], []};
+                "export_specifier" ->
+                    %% `export { a, b as d }`: child 0 (a/b) is a real
+                    %% reference to an existing local binding, worth
+                    %% walking normally; a second child, if present
+                    %% (d), is only the chosen PUBLIC name — not a
+                    %% reference to anything, so it's deliberately not
+                    %% visited (export_decl/4 in .symbolic/rules.pl
+                    %% captures it directly, via exports/4's own pass).
+                    walk_scope(symbolic_ts:node_named_child(Node, 0), Scope, FuncScope, Src, PathAtom);
+                "identifier" ->
+                    {[], [], [{node_id(PathAtom, Node), to_atom(symbolic_ts:node_text(Node, Src)),
+                               Scope, read, line(Node)}]};
+                _ -> walk_children(Node, Scope, FuncScope, Src, PathAtom)
+            end
+    end.
+
+%% Generic recurse: every named child, same Scope/FuncScope, facts merged.
+walk_children(Node, Scope, FuncScope, Src, PathAtom) ->
+    N = symbolic_ts:node_named_child_count(Node),
+    lists:foldl(
+        fun(I, {Ds, Ss, Rs}) ->
+            {D1, S1, R1} = walk_scope(symbolic_ts:node_named_child(Node, I), Scope, FuncScope, Src, PathAtom),
+            {Ds ++ D1, Ss ++ S1, Rs ++ R1}
+        end, {[], [], []}, lists:seq(0, N - 1)).
+
+%% function_declaration/function_expression/arrow_function all become a
+%% new `function`-kind scope covering both their parameters and body.
+walk_function(Node, ParentScope, Src, PathAtom) ->
+    NewScope = node_id(PathAtom, Node),
+    ScopeFact = {scope, NewScope, function, ParentScope, PathAtom},
+    ParamDecls = param_decls(Node, NewScope, Src, PathAtom),
+    Body = symbolic_ts:node_child_by_field_name(Node, "body"),
+    {BodyDecls, BodyScopes, BodyRefs} = walk_body(Body, NewScope, Src, PathAtom),
+    {ParamDecls ++ BodyDecls, [ScopeFact | BodyScopes], BodyRefs}.
+
+%% The function's own immediate body gets no *extra* block scope of its
+%% own (a param and a body-level `let` of the same name are meant to
+%% collide in the same scope, not shadow across an invisible extra
+%% layer) — recurse into its children directly rather than dispatching
+%% back through walk_scope/5, which would create one via the
+%% "statement_block" -> walk_block/4 case. An arrow function's bare
+%% expression body (`x => x + 1`, no block at all) has no such concern.
+walk_body(Body, FuncScope, Src, PathAtom) ->
+    case symbolic_ts:node_type(Body) of
+        "statement_block" -> walk_children(Body, FuncScope, FuncScope, Src, PathAtom);
+        _ -> walk_scope(Body, FuncScope, FuncScope, Src, PathAtom)
+    end.
+
+%% A function/arrow's parameters: `parameter` (singular) is the bare
+%% identifier of a single unparenthesized arrow param (`x => ...` — no
+%% formal_parameters wrapper at all, confirmed empirically); otherwise
+%% `parameters` wraps one required_parameter/optional_parameter per
+%% param. A destructured parameter (`{a,b}`) has no plain identifier at
+%% its own first named child and is silently skipped — out of scope.
+param_decls(FnNode, Scope, Src, PathAtom) ->
+    Bare = symbolic_ts:node_child_by_field_name(FnNode, "parameter"),
+    case symbolic_ts:node_is_null(Bare) of
+        false ->
+            [param_decl_fact(Bare, Scope, Src, PathAtom)];
+        true ->
+            Params = symbolic_ts:node_child_by_field_name(FnNode, "parameters"),
+            case symbolic_ts:node_is_null(Params) of
+                true -> [];
+                false ->
+                    N = symbolic_ts:node_named_child_count(Params),
+                    lists:filtermap(
+                        fun(I) ->
+                            Wrapper = symbolic_ts:node_named_child(Params, I),
+                            case identifier_of(Wrapper) of
+                                {ok, IdNode} -> {true, param_decl_fact(IdNode, Scope, Src, PathAtom)};
+                                error -> false
+                            end
+                        end, lists:seq(0, N - 1))
+            end
+    end.
+
+%% A parameter wrapper's own bare name — itself if already an
+%% identifier, else its first named child if THAT'S an identifier.
+%% Anything else (a destructured pattern) is out of scope for v1.
+identifier_of(Node) ->
+    case symbolic_ts:node_type(Node) of
+        "identifier" ->
+            {ok, Node};
+        _ ->
+            case symbolic_ts:node_named_child_count(Node) of
+                0 -> error;
+                _ ->
+                    Child = symbolic_ts:node_named_child(Node, 0),
+                    case symbolic_ts:node_type(Child) of
+                        "identifier" -> {ok, Child};
+                        _ -> error
+                    end
+            end
+    end.
+
+param_decl_fact(IdNode, Scope, Src, PathAtom) ->
+    {var_decl, node_id(PathAtom, IdNode), to_atom(symbolic_ts:node_text(IdNode, Src)),
+     param, Scope, PathAtom, line(IdNode)}.
+
+%% Any other statement_block (an if/while/try/bare-block body) — a new
+%% `block`-kind scope, FuncScope unchanged (blocks never host `var`'s
+%% hoisting target).
+walk_block(Node, ParentScope, FuncScope, Src, PathAtom) ->
+    NewScope = node_id(PathAtom, Node),
+    ScopeFact = {scope, NewScope, block, ParentScope, PathAtom},
+    {Ds, Ss, Rs} = walk_children(Node, NewScope, FuncScope, Src, PathAtom),
+    {Ds, [ScopeFact | Ss], Rs}.
+
+%% A for-loop's header (`for (let i = 0; ...)`) is its own block scope,
+%% covering the header's own declarations; its body statement_block, if
+%% present, gets a further nested block scope of its own via the normal
+%% walk_children -> walk_scope dispatch — one extra harmless scope
+%% layer, not a correctness problem (nothing needs to see across it
+%% from outside the loop either way).
+walk_for(Node, ParentScope, FuncScope, Src, PathAtom) ->
+    NewScope = node_id(PathAtom, Node),
+    ScopeFact = {scope, NewScope, block, ParentScope, PathAtom},
+    {Ds, Ss, Rs} = walk_children(Node, NewScope, FuncScope, Src, PathAtom),
+    {Ds, [ScopeFact | Ss], Rs}.
+
+%% lexical_declaration (let/const) or variable_declaration (var) — Kind
+%% decides which scope accumulator the declaration lands in: `var`
+%% hoists to FuncScope, let/const/param stay in the immediate Scope.
+%% Only a plain-identifier "name" becomes a var_decl (destructured names
+%% are skipped, not mis-tracked); the initializer ("value") is walked
+%% normally so identifiers inside it become ordinary references.
+%%
+%% var_decl_initialized/1 is a separate, additive fact (not a wider
+%% var_decl/7) recording whether a declarator actually has a "value" —
+%% `.symbolic/rules.pl`'s prefer_const/4 needs it to avoid ever
+%% suggesting `const x;` for a bare `let x;`, which isn't valid syntax.
+walk_declaration(Node, Scope, FuncScope, Src, PathAtom, Kind) ->
+    DeclScope = case Kind of 'var' -> FuncScope; _ -> Scope end,
+    N = symbolic_ts:node_named_child_count(Node),
+    lists:foldl(
+        fun(I, {Ds, Ss, Rs}) ->
+            Declarator = symbolic_ts:node_named_child(Node, I),
+            case symbolic_ts:node_type(Declarator) of
+                "variable_declarator" ->
+                    NameNode = symbolic_ts:node_child_by_field_name(Declarator, "name"),
+                    ValueNode = symbolic_ts:node_child_by_field_name(Declarator, "value"),
+                    HasValue = not symbolic_ts:node_is_null(ValueNode),
+                    DeclFacts =
+                        case symbolic_ts:node_type(NameNode) of
+                            "identifier" ->
+                                DeclId = node_id(PathAtom, NameNode),
+                                [{var_decl, DeclId, to_atom(symbolic_ts:node_text(NameNode, Src)),
+                                  Kind, DeclScope, PathAtom, line(NameNode)}]
+                                ++ [{var_decl_initialized, DeclId} || HasValue];
+                            _ -> []
+                        end,
+                    {ValDs, ValSs, ValRs} =
+                        case HasValue of
+                            false -> {[], [], []};
+                            true -> walk_scope(ValueNode, Scope, FuncScope, Src, PathAtom)
+                        end,
+                    {Ds ++ DeclFacts ++ ValDs, Ss ++ ValSs, Rs ++ ValRs};
+                _ ->
+                    {Ds, Ss, Rs}
+            end
+        end, {[], [], []}, lists:seq(0, N - 1)).
+
+%% `let`/`const` are the SAME node type (lexical_declaration) — the
+%% grammar doesn't distinguish them structurally, confirmed empirically
+%% (a literal-token query matches either). node_text/2 on the
+%% declaration's own span starts exactly at the keyword (no leading
+%% whitespace), so a prefix check is reliable here — there's no
+%% per-node literal-token query available mid-walk the way there is for
+%% a query_capture/2 pass.
+decl_kind_of_lexical(Node, Src) ->
+    case lists:prefix("const", symbolic_ts:node_text(Node, Src)) of
+        true -> const;
+        false -> 'let'
+    end.
+
+%% assignment_expression (RefKind write) / augmented_assignment_expression
+%% (RefKind read_write, e.g. `+=` — it reads the old value too). Only a
+%% plain-identifier "left" becomes a reference (a destructured target
+%% is skipped); "right" is walked normally.
+walk_assignment(Node, Scope, FuncScope, Src, PathAtom, RefKind) ->
+    LeftNode = symbolic_ts:node_child_by_field_name(Node, "left"),
+    RightNode = symbolic_ts:node_child_by_field_name(Node, "right"),
+    LeftRefs =
+        case symbolic_ts:node_type(LeftNode) of
+            "identifier" ->
+                [{node_id(PathAtom, LeftNode), to_atom(symbolic_ts:node_text(LeftNode, Src)),
+                  Scope, RefKind, line(LeftNode)}];
+            _ -> []
+        end,
+    {RightDs, RightSs, RightRs} = walk_scope(RightNode, Scope, FuncScope, Src, PathAtom),
+    {RightDs, RightSs, LeftRefs ++ RightRs}.
+
+%% Resolves every raw reference against the complete scope/declaration
+%% set built by walk_scope/5 — a plain scope-chain walk (nearest
+%% enclosing scope with a matching Name wins, which is exactly
+%% shadowing precedence), computed once here rather than left for
+%% Prolog to re-walk per query, the same design choice caller_info/2
+%% already makes for call attribution.
+%% DeclFacts also carries var_decl_initialized/1 facts alongside
+%% var_decl/6 ones (walk_declaration/6 emits both from the same
+%% declarator) — the comprehension below picks out only the var_decl
+%% ones building this index, rather than a foldl whose fun only has a
+%% clause for var_decl and crashes on anything else in the same list
+%% (found by actually running this against a real `let x = 1;` snippet,
+%% not assumed).
+resolve_refs(RawRefs, DeclFacts, ScopeFacts) ->
+    ScopeIndex = maps:from_list([{Id, Parent} || {scope, Id, _Kind, Parent, _File} <- ScopeFacts]),
+    DeclIndex = maps:from_list(
+        [{{Scope, Name}, Id} || {var_decl, Id, Name, _Kind, Scope, _File, _Line} <- DeclFacts]),
+    lists:flatmap(
+        fun({RefId, Name, Scope, RefKind, Line}) ->
+            DeclId = resolve_lookup(Name, Scope, ScopeIndex, DeclIndex),
+            {PathAtom, _Start, _End} = RefId,
+            [{var_ref, RefId, Name, Scope, RefKind, PathAtom, Line},
+             {resolves_to, RefId, DeclId}]
+        end, RawRefs).
+
+resolve_lookup(Name, Scope, ScopeIndex, DeclIndex) ->
+    case maps:find({Scope, Name}, DeclIndex) of
+        {ok, DeclId} -> DeclId;
+        error ->
+            case maps:find(Scope, ScopeIndex) of
+                {ok, Parent} when Parent =/= none -> resolve_lookup(Name, Parent, ScopeIndex, DeclIndex);
+                _ -> undefined
+            end
+    end.
 
 comments(Lang, Root, Src, PathAtom) ->
     lists:usort([

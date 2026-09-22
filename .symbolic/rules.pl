@@ -417,3 +417,289 @@ yoda_condition(Id, Fun, Arity, File, Line) :-
 all_yoda_conditions(Triples) :-
     findall(Fun-Arity-File, yoda_condition(_Id, Fun, Arity, File, _Line), Raw),
     sort(Raw, Triples).
+
+%% --- Variables and scope (TypeScript only), on top of scope/4 + var_decl/6 + var_ref/6 + resolves_to/2 ---
+%%
+%% The single biggest gap the ESLint-support review turned up: this
+%% project tracks functions, calls, branches and expressions, never a
+%% variable. Unlike branch/5 or expr/6, this genuinely needed real
+%% scope containment computed at extraction time (ts_extract_typescript.erl's
+%% scope_facts/3), not just one more query — an unused-variable check
+%% that ignored scope would confuse one function's unused `x` with an
+%% unrelated `x` read in a completely different function.
+%%
+%% Same existence_error-on-zero-clauses guard as branch/5 and expr/6.
+scope(none, none, none, none) :- fail.
+var_decl(none, none, none, none, none, 0) :- fail.
+var_ref(none, none, none, none, none, 0) :- fail.
+resolves_to(none, none) :- fail.
+
+%% Declared but never read (or read_write'd, e.g. `+=`) afterward.
+%% Parameters excluded on purpose: an intentionally-unused parameter
+%% (`function(_req, res)`-style) is a much noisier, more debatable
+%% signal than an unused local, and this isn't trying to settle that.
+unused_var(Id, Name, File, Line) :-
+    var_decl(Id, Name, Kind, _Scope, File, Line),
+    Kind \= param,
+    \+ (resolves_to(RefId, Id), var_ref(RefId, _, _, RK, _, _), member(RK, [read, read_write])).
+
+all_unused_vars(Triples) :-
+    findall(Name-File-Line, unused_var(_Id, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% An inner declaration whose own scope is nested inside an outer
+%% declaration's scope, same Name — real shadowing, not a same-scope
+%% redeclaration (that's a different, stricter question this doesn't
+%% ask: two decls sharing one scope exactly, not one nested in the other).
+scope_ancestor(Scope, Ancestor) :- scope(Scope, _Kind, Ancestor, _File).
+scope_ancestor(Scope, Ancestor) :-
+    scope(Scope, _Kind, Parent, _File), Parent \= none, scope_ancestor(Parent, Ancestor).
+
+shadowed_var(InnerId, OuterId, Name, File, Line) :-
+    var_decl(InnerId, Name, _IK, InnerScope, File, Line),
+    var_decl(OuterId, Name, _OK, OuterScope, _, _),
+    InnerId \= OuterId,
+    scope_ancestor(InnerScope, OuterScope).
+
+all_shadowed_vars(Triples) :-
+    findall(Name-File-Line, shadowed_var(_InnerId, _OuterId, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% --- More rules on the same scope facts — no new extraction needed ---
+%%
+%% Same existence_error guard as every other data-derived predicate
+%% above, for the one new fact this batch adds.
+var_decl_initialized(none) :- fail.
+
+%% A `let` never reassigned after its own declaration should be a
+%% `const` — var_decl_initialized/1 guards against ever suggesting
+%% `const x;` for a bare, initializer-less `let x;` (not valid syntax).
+prefer_const(Id, Name, File, Line) :-
+    var_decl(Id, Name, 'let', _Scope, File, Line),
+    var_decl_initialized(Id),
+    \+ (resolves_to(RefId, Id), var_ref(RefId, _, _, RK, _, _), member(RK, [write, read_write])).
+
+all_prefer_const(Triples) :-
+    findall(Name-File-Line, prefer_const(_Id, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% Two declarations of the SAME name in the EXACT same scope — not one
+%% nested inside the other (shadowed_var/5's question). EarlierId is
+%% whichever comes first by line, so the report always names the real
+%% redeclaration site, not an arbitrary one of the two.
+redeclared_var(EarlierId, LaterId, Name, File, LaterLine) :-
+    var_decl(EarlierId, Name, _EK, Scope, File, EarlierLine),
+    var_decl(LaterId, Name, _LK, Scope, File, LaterLine),
+    EarlierId \= LaterId,
+    EarlierLine < LaterLine.
+
+all_redeclared_vars(Triples) :-
+    findall(Name-File-Line, redeclared_var(_E, _L, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% A declaration named after one of JS's own restricted identifiers —
+%% edit this table if this project's own runtime has more to add.
+restricted_name('undefined').
+restricted_name('NaN').
+restricted_name('Infinity').
+restricted_name(arguments).
+restricted_name(eval).
+
+shadows_restricted_name(Id, Name, File, Line) :-
+    var_decl(Id, Name, _Kind, _Scope, File, Line),
+    restricted_name(Name).
+
+all_restricted_name_shadows(Triples) :-
+    findall(Name-File-Line, shadows_restricted_name(_Id, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% A reference that resolves to a declaration textually AFTER it — a
+%% real ReferenceError for let/const (the temporal dead zone), a softer
+%% "silently undefined until reached" bug for var, reported either way.
+use_before_define(RefId, DeclId, Name, File, RefLine) :-
+    resolves_to(RefId, DeclId),
+    DeclId \= undefined,
+    var_ref(RefId, Name, _RefScope, _RK, File, RefLine),
+    var_decl(DeclId, Name, _DK, _DeclScope, File, DeclLine),
+    RefLine < DeclLine.
+
+all_use_before_define(Triples) :-
+    findall(Name-File-Line, use_before_define(_R, _D, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% A small, editable set of ambient/global names common to Node and
+%% browser JS/TS — edit for this project's own runtime. The one thing
+%% that turns resolves_to(_, undefined) (see scope/4's own doc comment
+%% — it means "not declared in anything tracked," not "definitely a
+%% bug") into a real no-undef check: everything in this table is a
+%% real global, not a mistake, so it's excluded rather than flagged.
+known_global(console). known_global('Math'). known_global('JSON').
+known_global('Object'). known_global('Array'). known_global('String').
+known_global('Number'). known_global('Boolean'). known_global('Symbol').
+known_global('Promise'). known_global('Map'). known_global('Set').
+known_global('WeakMap'). known_global('WeakSet'). known_global('Date').
+known_global('RegExp'). known_global('Error'). known_global('TypeError').
+known_global('RangeError'). known_global('SyntaxError'). known_global('Function').
+known_global('Proxy'). known_global('Reflect'). known_global('ArrayBuffer').
+known_global('undefined'). known_global('NaN'). known_global('Infinity').
+known_global('globalThis'). known_global(window). known_global(document).
+known_global(process). known_global(module). known_global(require).
+known_global(exports). known_global('__dirname'). known_global('__filename').
+known_global(setTimeout). known_global(clearTimeout). known_global(setInterval).
+known_global(clearInterval). known_global(fetch). known_global('URL').
+known_global('URLSearchParams'). known_global('Buffer'). known_global(structuredClone).
+
+undeclared_var(RefId, Name, File, Line) :-
+    resolves_to(RefId, undefined),
+    var_ref(RefId, Name, _Scope, _RK, File, Line),
+    \+ known_global(Name).
+
+all_undeclared_vars(Triples) :-
+    findall(Name-File-Line, undeclared_var(_RefId, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% --- `new` expressions, on top of calls/5's new(Constructor, ArgCount) shape + bare_new/5 ---
+%%
+%% `new X(...)` is modeled as one more calls/5 CallSpec, the same way a
+%% call's shape already varies by language (local/member/remote) — see
+%% ts_extract_typescript.erl's new_calls/4. Only bare_new/5 (no_new/4
+%% below) is a genuinely new predicate; everything else here is plain
+%% Prolog over calls/5, same as risky_call/3's own pattern.
+bare_new(none, 0, none, none, 0) :- fail.
+
+%% A constructed value discarded outright (`new Logger();` as its own
+%% statement) — almost always a mistake unless the constructor has a
+%% real side effect, which this can't tell either way; flag and let a
+%% human judge.
+no_new(Caller, Arity, Constructor, File, Line) :-
+    bare_new(Caller, Arity, Constructor, File, Line).
+
+all_no_new(Triples) :-
+    findall(Constructor-File-Line, no_new(_C, _A, Constructor, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% `new String(...)`/`new Number(...)`/`new Boolean(...)` build a boxed
+%% wrapper object, not the primitive — a classic footgun (`new
+%% Boolean(false) == true` in a truthiness check).
+no_new_wrapper(Caller, Arity, Constructor, File, Line) :-
+    calls(Caller, Arity, new(Constructor, _ArgCount), File, Line),
+    member(Constructor, ['String', 'Number', 'Boolean']).
+
+all_no_new_wrappers(Triples) :-
+    findall(Constructor-File-Line, no_new_wrapper(_C, _A, Constructor, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% `new Function(...)` compiles a string as code, the same risk class
+%% as `eval` — already in banned_target/2's spirit, but Function is a
+%% constructor call, not a member call, so it needs its own rule.
+no_new_func(Caller, Arity, File, Line) :-
+    calls(Caller, Arity, new('Function', _ArgCount), File, Line).
+
+all_no_new_func(Triples) :-
+    findall(File-Line, no_new_func(_C, _A, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% `Object()`/`new Object()` with no arguments is always exactly `{}` —
+%% checked with or without `new`, since a bare call works identically
+%% in JS/TS (calls/5's existing local(...) shape already covers the
+%% bare half, no new extraction needed for it).
+no_object_constructor(Caller, Arity, File, Line) :-
+    ( calls(Caller, Arity, new('Object', 0), File, Line)
+    ; calls(Caller, Arity, local('Object', 0), File, Line)
+    ).
+
+all_no_object_constructors(Triples) :-
+    findall(File-Line, no_object_constructor(_C, _A, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% `new RegExp(...)`/`RegExp(...)` — a regex *literal* (`/a+/`) is
+%% preferred when the pattern is static text; this can't tell a static
+%% string apart from a dynamically-built one (that needs literal/7's
+%% Value, a further check this doesn't make), so it flags every call
+%% and leaves the "was the pattern actually static" judgment to a human.
+prefer_regex_literal(Caller, Arity, File, Line) :-
+    ( calls(Caller, Arity, new('RegExp', _), File, Line)
+    ; calls(Caller, Arity, local('RegExp', _), File, Line)
+    ).
+
+all_prefer_regex_literals(Triples) :-
+    findall(File-Line, prefer_regex_literal(_C, _A, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% A constructor name that doesn't start with a capital letter — atom_codes
+%% on the *letters* 'a'/'z' rather than a `0'a`-style char-code literal,
+%% the same safe-derivation technique short_name/4 already uses (erlog's
+%% reader support for that literal syntax was never verified, so this
+%% never needed to rely on it).
+lowercase_constructor(Caller, Arity, Constructor, File, Line) :-
+    calls(Caller, Arity, new(Constructor, _ArgCount), File, Line),
+    atom_codes(Constructor, [C | _]),
+    atom_codes(a, [Lo]), atom_codes(z, [Hi]),
+    C >= Lo, C =< Hi.
+
+all_lowercase_constructors(Triples) :-
+    findall(Constructor-File-Line, lowercase_constructor(_C, _A, Constructor, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% --- Imports and exports, on top of import_decl/4 + export_decl/4 (+ var_decl/6's new 'import' Kind) ---
+%%
+%% Import bindings are ordinary var_decl/6 facts (Kind='import') — see
+%% ts_extract_typescript.erl's imports/5 — so unused_var/4, shadowed_var/5
+%% etc. above already apply to an unused/shadowed import for free; the
+%% two facts here (import_decl/4, export_decl/4) exist for what those
+%% can't answer: which MODULE a name came from, and what a file makes
+%% PUBLIC. sort-imports is deliberately not built here — it needs each
+%% binding tied back to which import STATEMENT introduced it, a
+%% per-statement grouping key this pass doesn't have cheaply (var_decl/6
+%% alone can't tell two same-line bindings from the same import apart
+%% from two coincidentally-same-line bindings from different ones), and
+%% it's the most purely stylistic of this whole group — a reasoned
+%% skip, not an oversight.
+import_decl(none, none, 0) :- fail.
+export_decl(none, none, none, 0) :- fail.
+
+%% The same module path imported in more than one separate
+%% import_statement. EarlierLine/LaterLine ordered the same way
+%% redeclared_var/5 orders its two occurrences, so the report always
+%% names the real second (redundant) import, not an arbitrary one.
+duplicate_import(Module, File, EarlierLine, LaterLine) :-
+    import_decl(Module, File, EarlierLine),
+    import_decl(Module, File, LaterLine),
+    EarlierLine < LaterLine.
+
+all_duplicate_imports(Triples) :-
+    findall(Module-File-Line, duplicate_import(Module, File, _E, Line), Raw),
+    sort(Raw, Triples).
+
+%% A small, editable set of commonly-restricted modules — genuinely
+%% project-specific (unlike known_global/1's list, there's no universal
+%% "always risky" import the way there's a universal set of real
+%% globals), so this ships with a couple of realistic, commonly-cited
+%% examples rather than either an empty table or a false claim of
+%% universality. Edit for this project's own conventions.
+restricted_module(moment).
+restricted_module(lodash).
+
+restricted_import(Module, File, Line) :-
+    import_decl(Module, File, Line),
+    restricted_module(Module).
+
+all_restricted_imports(Triples) :-
+    findall(Module-File-Line, restricted_import(Module, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% Same reasoning as restricted_module/1 — genuinely project-specific,
+%% shipped with one realistic illustrative example (a team that wants
+%% every module to use named exports, banning `export default`
+%% entirely, restricts the literal name 'default' — see export_decl/4's
+%% own doc comment for why that's the real exported name of a default
+%% export, not whatever expression fills it).
+restricted_export_name('default').
+
+restricted_export(Name, Kind, File, Line) :-
+    export_decl(Name, Kind, File, Line),
+    restricted_export_name(Name).
+
+all_restricted_exports(Triples) :-
+    findall(Name-Kind-File-Line, restricted_export(Name, Kind, File, Line), Raw),
+    sort(Raw, Triples).

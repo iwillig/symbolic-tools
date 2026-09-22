@@ -26,6 +26,14 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `expr_operand/3` | Erlang, TypeScript | One operand's role and which node fills it |
 | `literal/7` | Erlang, TypeScript | A literal value used as an operand |
 | `expr_ref/6` | Erlang, TypeScript | A bare identifier used as an operand |
+| `scope/4` | TypeScript | A function/block/module scope exists |
+| `var_decl/6` | TypeScript | A variable/parameter is declared |
+| `var_ref/6` | TypeScript | A variable is read and/or written |
+| `resolves_to/2` | TypeScript | Which declaration a reference actually binds to |
+| `var_decl_initialized/1` | TypeScript | That declaration has a "value" (an initializer) |
+| `bare_new/5` | TypeScript | A `new X()` whose constructed value is discarded outright |
+| `import_decl/4` | TypeScript | An `import` statement's raw module path |
+| `export_decl/4` | TypeScript | A name a file makes public, and how |
 | `heading/4` | Markdown | An ATX (`#`) heading |
 | `code_block/3` | Markdown | A fenced code block and its declared language |
 | `paragraph/3` | Markdown | A paragraph (or list-item) of body text |
@@ -121,7 +129,7 @@ now key on `Fun`+`Arity` to avoid that.
   | Language | `CallSpec` shapes | Example |
   |---|---|---|
   | Erlang | `local(Callee, ArgCount)`, `remote(Module, Function, ArgCount)` | `local(bar, 1)`, `remote(io, format, 2)` |
-  | TypeScript | `local(Callee, ArgCount)`, `member(Object, Method, ArgCount)` | `local(bar, 1)`, `member(console, log, 1)` |
+  | TypeScript | `local(Callee, ArgCount)`, `member(Object, Method, ArgCount)`, `new(Constructor, ArgCount)` | `local(bar, 1)`, `member(console, log, 1)`, `new(RegExp, 1)` |
   | Bash | `local(Command, ArgCount)` only | `local(build, 0)` |
 
   Bash has no qualified-call syntax (nothing like `mod:fun()` or
@@ -133,8 +141,35 @@ now key on `Fun`+`Arity` to avoid that.
   the command name (`scp a b c` → `ArgCount` 3), not anything bash
   itself validates against a declared parameter list — bash functions
   accept any number of arguments always.
+
+  `new(Constructor, ArgCount)` — `new X(...)`, modeled as one more
+  `CallSpec` shape rather than a separate fact family, since it's
+  conceptually a call, just spelled with `new`. Only a bare-identifier
+  `Constructor` is tracked (`new foo.Bar()`'s qualified constructor is
+  skipped, not mis-tracked). `new Baz` (no parens at all — real, legal
+  TypeScript) gets `ArgCount` 0, same as `new Baz()` — its `arguments`
+  field is null, and `symbolic_ts:node_named_child_count/1` on a null
+  node **segfaults the whole BEAM process**, not a catchable Erlang
+  error, confirmed the hard way; `ts_extract_typescript.erl`'s
+  `new_expr_arg_count/1` checks `node_is_null/1` first specifically
+  because of this. A bare call with no `new` at all (`RegExp(...)`)
+  needs no special handling — it's already `local(RegExp, ArgCount)`
+  via the existing `call_expression` query, unchanged.
 - **`File`**, **`Line`** — same meaning as in `defines/5`, `Line` is the
   call site's own line.
+
+### `bare_new(Caller, CallerArity, Constructor, File, Line)`
+
+Only when a `new X()`'s constructed value is discarded outright — its
+immediate parent is an `expression_statement`, e.g. `new Logger();` as
+its own statement, not `const x = new Logger();` or `if (new Foo())`.
+The one thing about a `new` expression that `calls/5`'s `new(...)`
+shape alone can't answer: whether the constructed value goes anywhere.
+Powers `.symbolic/rules.pl`'s `no_new/4` specifically — every other
+`new`-expression rule (`no_new_wrapper/5`, `no_new_func/4`,
+`no_object_constructor/4`, `prefer_regex_literal/4`,
+`lowercase_constructor/5`) needs nothing beyond `calls/5`'s existing
+shape. TypeScript only.
 
 ### `comment(File, Line, Text)`
 
@@ -290,6 +325,125 @@ that section above) applies to all five predicates here — a codebase
 with no expressions of some kind has zero clauses for that predicate,
 and erlog errors rather than failing cleanly. `.symbolic/rules.pl` has
 one sentinel clause per predicate in this family, the same fix.
+
+### `scope/4`, `var_decl/6`, `var_ref/6`, `resolves_to/2`
+
+The biggest structural gap in this schema until now: every other fact
+family is about *functions* — a definition, a call, a decision point,
+an expression inside one. This family is about *variables*, and it's
+**TypeScript-only** — Erlang's variable model (single-assignment,
+pattern-bound, no `var`/`let`/`const` distinction, no mutation) is
+different enough to need its own separate design, not guessed at here.
+
+- **`scope(ScopeId, Kind, ParentScopeId, File)`** — `Kind` is
+  `function` (a `function_declaration`/`function_expression`/arrow
+  function's own parameters + body, as one unit — no extra scope layer
+  for a function's *immediate* body block), `block` (any other
+  `statement_block`, or a `for_statement`'s own header), or `module`
+  (the file's top level). `ParentScopeId` is the atom `none` only for
+  the module scope.
+- **`var_decl(Id, Name, Kind, ScopeId, File, Line)`** — `Kind` is
+  `` 'var' ``, `` 'let' `` (a reserved word in Erlang, so always the
+  quoted atom), `const`, `param`, or `import` (an import binding — see
+  `import_decl/4` below; deliberately the same fact shape, not a
+  parallel one, so `unused_var/4`/`shadowed_var/5`/etc. in
+  `.symbolic/rules.pl` already apply to an unused or shadowed import
+  with no extra rule needed). A `var` declaration's `ScopeId` is
+  the nearest enclosing **function**-or-module scope (hoisting past any
+  block boundaries in between); `` 'let' ``/`const`/`param` stay in the
+  immediate enclosing scope; `import` is always the **module** scope,
+  since ES imports are always top-level. Only a plain-identifier
+  declaration name — a destructured one (`let {a, b} = x`) is silently
+  not tracked, not mis-tracked.
+- **`var_ref(Id, Name, ScopeId, RefKind, File, Line)`** — `RefKind` is
+  `read` (the default — includes a call's own callee identifier, e.g.
+  `foo()`, since that's a legitimate use of a locally-declared `foo`
+  for this purpose, alongside whatever `calls/5` separately records),
+  `write` (a plain assignment's left side), or `read_write` (`+=` and
+  friends — it reads the old value too). Only a plain-identifier
+  assignment target is tracked, same destructuring exclusion as
+  `var_decl/6`.
+- **`resolves_to(RefId, DeclId)`** — which declaration a reference
+  actually binds to, or the atom `undefined` if none does. **Computed
+  once by the extractor at parse time** (a real scope-chain walk over
+  the tree it just built), not left for a query to re-derive — the same
+  design choice `calls/5`'s `caller_info/2` walk-up already makes for
+  attribution, just for a harder question. Verified against a
+  deliberately tricky real snippet (not a toy case): a block-scoped
+  `let x` correctly shadowed by a nested block's own `let x` (a
+  reference *inside* that block resolves to the *inner* one, one
+  *outside* it to the outer one), and a `var`/`` 'let' `` each read from
+  two scope levels down inside a `for`-loop's own nested body block,
+  both correctly walking up through the loop's scope to the declaration
+  beyond it.
+
+**`resolves_to(Ref, undefined)` alone is not proof of a bug.** It means
+"not declared in anything this walk tracked" — which includes every
+real global (`console`, `Math`, `window`, ...), not just a genuine
+undeclared-variable mistake. `.symbolic/rules.pl`'s `undeclared_var/4`
+is what actually turns this into a trustworthy `no-undef`-style check,
+by excluding everything in its own `known_global/1` allowlist first —
+query `resolves_to/2` directly and you'll see every real global listed
+as `undefined` too.
+
+- **`var_decl_initialized(Id)`** — that a `var_decl/6` (of `var`/`` 'let' ``/
+  `const`, never `param`) has a "value" — present only when the
+  declarator was actually initialized (`let x = 1`, not a bare `let x;`).
+  Exists specifically so `.symbolic/rules.pl`'s `prefer_const/4` never
+  suggests `const x;` for a declaration that has no initializer to
+  give it, which isn't valid syntax.
+
+Same `existence_error`-on-zero-clauses guard as `branch/5`/`expr/6` —
+one sentinel clause per predicate in `.symbolic/rules.pl`.
+
+### `import_decl(Module, File, Line)`, `export_decl(Name, Kind, File, Line)`
+
+An import binding itself is a `var_decl/6` (`Kind = import`, above) —
+these two facts exist for what that alone can't answer: which
+**module** a name came from, and what a file makes **public**.
+TypeScript only.
+
+- **`import_decl`** — one fact per `import_statement`, regardless of
+  how many (if any) bindings it introduces: a default import, one or
+  more named imports (with or without an alias), a namespace import
+  (`* as ns`), and a side-effect-only import (`import "./x";`, no
+  binding at all) all still produce exactly one `import_decl/4`.
+  `Module` is the raw source string, as an atom (`lodash`, `./bar`).
+- **`export_decl`** — `Kind` is `named` (a wrapped declaration, e.g.
+  `export const x = 1` — one fact per declarator, so `export const a =
+  1, b = 2;` is two; or a re-export specifier, e.g. `export { a, b as
+  d };` — `Name` is `a` for the first, `d` for the second, since the
+  **alias**, not the original local name, is what's actually made
+  public), `default` (`Name` is always the literal atom `` 'default' ``
+  — the export *slot's* own reserved name in ES module semantics, not
+  whatever expression happens to fill it), or `wildcard`
+  (`export * from "...";` — `Name` is `undefined`, there's no specific
+  name at all). A wrapped declaration (`export function f() {}`)
+  produces no special attribution walk of its own — its `declaration`
+  field is a real `function_declaration`/`lexical_declaration` node,
+  already walked normally, so its `defines/5`/`var_decl/6` facts exist
+  exactly as if `export` weren't there at all.
+
+**A real bug found by actually running this against a file that both
+imports and later references a name, not a hypothetical**: import
+bindings used to be computed *after* `resolve_refs/3` already ran, so
+no reference to an imported name resolved to anything anywhere in the
+file — every one came back `resolves_to(_, undefined)`, indistinguishable
+from a genuinely undeclared name. Fixed by computing import bindings
+first and folding them into the same declaration set the resolver
+consults.
+
+A re-export specifier's alias (`export { b as d }`'s `d`) is
+deliberately never visited as a reference by the scope walk — it isn't
+one; `d` is just the chosen public name, not a local variable named
+`d`. Only the specifier's *first* name (`b`, a real reference to an
+existing local binding) is walked normally.
+
+`sort-imports` is deliberately not built on top of these — it needs
+each binding tied back to *which import statement* introduced it, a
+per-statement grouping key `var_decl/6` alone doesn't give cheaply, and
+it's the most purely stylistic rule in this group. A reasoned skip, not
+an oversight.
 
 ## Markdown structural facts
 
