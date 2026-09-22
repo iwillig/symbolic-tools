@@ -580,7 +580,7 @@ afterward (confirmed by testing: with `dev_mode` on, the release's `lib/`
 entries are symlinks back into the build tree, which breaks the moment
 Homebrew's own temporary build sandbox is cleaned up). `Formula/symbolic-
 tools.rb` is the actual formula, verified end-to-end with a real local
-`brew install --build-from-source`, and builds from the tagged `v0.1.0`
+`brew install --build-from-source`, and builds from the tagged `v0.1.1`
 release.
 
 ### From source
