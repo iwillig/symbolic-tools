@@ -198,15 +198,40 @@ all_mutual_recursion(Pairs) :-
     findall(A-B, mutual_recursion(A, B), Raw),
     sort(Raw, Pairs).
 
+%% --- Entry points ---
+%%
+%% A function nothing in this parse calls but the runtime, a test, or
+%% another module certainly can — so it is NOT dead code. export/4 is the
+%% Erlang `-export([f/1])` family (one fact per list element);
+%% TypeScript's export_decl/4 can't stand in, it has no arity to key on.
+%% OTP callbacks must be exported to be reachable by gen_server, so this
+%% single rule is what keeps the dead-code report honest. The
+%% runtime_entry_point/2 list is the editable remainder — an -on_load hook
+%% is called by name by the loader and is not exported.
+export(none, 0, none, 0) :- fail.
+
+runtime_entry_point(init, 0).
+
+entry_point(Fun, Arity, File) :-
+    export(Fun, Arity, File, _).
+entry_point(Fun, Arity, _) :-
+    runtime_entry_point(Fun, Arity).
+
 %% Never called at all — local OR remote — closing the exact blind spot
 %% no_local_callers/3 has (below): that one only checks local(...) call
 %% sites, so a remotely-called entry point shows up there as a false
-%% positive. Still blind to member(...) calls and callers outside this
-%% same parse — a stronger dead-code signal, not a perfect one.
+%% positive. entry_point/3 (above) closes the other half: a function with
+%% no caller in the parsed tree because its caller is a test, another
+%% module, or gen_server dispatching a behaviour callback. Still blind to
+%% member(...) calls, callers outside this same parse, and `fun N/Arity`
+%% references (their own node types, not `call`) — a much stronger
+%% dead-code signal, not a perfect one. no_local_callers/3 is left
+%% unfiltered on purpose, so the two stay gradations: review vs. delete.
 truly_uncalled(Fun, Arity, File) :-
     defines(Fun, Arity, _, File, _),
     \+ calls(_, _, local(Fun, Arity), _, _),
-    \+ calls(_, _, remote(_, Fun, Arity), _, _).
+    \+ calls(_, _, remote(_, Fun, Arity), _, _),
+    \+ entry_point(Fun, Arity, File).
 
 all_truly_uncalled(Triples) :-
     findall(Fun-Arity-File, truly_uncalled(Fun, Arity, File), Raw),
@@ -370,20 +395,28 @@ new fact-store's DETS file, `os:getenv` for `TMPDIR`,
 looked concerning on inspection — but that last entry,
 `["-",["-","undefined","file"],"filename"]`, is a second real finding:
 
-**`-spec` type annotations get extracted as fake `calls/5` facts.**
-`-spec file(file:filename()) -> [tuple()].` (`src/ts_extract.erl` and
-several others) produces `calls(undefined, undefined, remote(file,
-filename, ArgCount), File, Line)` — `file:filename()` there is a
-**type** reference, not a call, but tree-sitter-erlang's grammar shapes
-a `-spec`'s contents identically to a real function call, and
+**`-spec` type annotations were extracted as fake `calls/5` facts — now
+fixed.** `-spec file(file:filename()) -> [tuple()].` (`src/ts_extract.erl`
+and several others) produced `calls(undefined, undefined, remote(file,
+filename, ArgCount), File, Line)` — `file:filename()` there is a **type**
+reference, not a call, but tree-sitter-erlang's grammar shapes a `-spec`'s
+contents identically to a real function call, and
 `ts_extract_erlang.erl`'s `(call expr: (remote) @call)` query doesn't
-distinguish the two. `Caller = undefined` (and now `CallerArity =
-undefined` too) in every case is the tell — a `-spec` lives outside any
-`function_clause`, so the caller-attribution walk-up finds nothing. Low
-severity (nothing crashes), but real noise in `calls/5` for any
-`-spec`-heavy Erlang code, which is all of it here — a "exclude
-`-spec`/`-type` attribute bodies" fix belongs in
-`ts_extract_erlang.erl`'s query, not in this rule file.
+distinguish the two. `Caller = undefined` (and `CallerArity = undefined`)
+in every case was the tell — a `-spec` lives outside any
+`function_clause`, so the caller-attribution walk-up finds nothing.
+
+The fix is where the note above predicted it would be: in the extractor,
+not this rule file. `ts_extract_erlang`'s `call_site/2` now drops any
+`call` capture with no enclosing `function_clause`, which is exactly this
+set — verified by dumping the parse tree: `-spec f(file:filename())` walks
+`remote <- call <- expr_args <- type_sig <- spec`, while
+`-type t() :: list(integer())` was feeding the *local*-call query two
+phantom callees (`list`, `integer`) as well. `all_risky_calls/1`'s last
+entry above is what that removal bought: a filesystem "risky call" no code
+performs, from a type annotation. Covered by
+`ts_extract_tests:attribute_type_references_are_not_calls_test`, which
+fails if the filter is removed.
 
 ### "No local callers" — mostly false positives, and why
 
@@ -532,6 +565,26 @@ of asking "is there any cycle anywhere" in one shot.
 $ symbolic query -db facts.dets 'all_truly_uncalled(X), length(X, N)'
 N = 30
 ```
+
+**Re-measured after `entry_point/3` was added: `N = 0`, and all 30 of the
+original matches were false positives.** Every one of them was either an
+OTP behaviour callback (`handle_call/3`, `init/1`, `terminate/2`,
+`code_change/3`, `handle_info/2` — 22 facts, exported because gen_server
+and supervisor can only reach an *exported* callback), the escript entry
+point `main/1`, an MCP tool handler reached through a `fun handle_query/1`
+entry in a dispatch table, or a module's own public API called from
+`test/` (which `src/` parsing never sees). Confirmed by the two controls:
+`findall(F-A-Fl, (defines(F,A,_,Fl,_), \+ export(F,A,Fl,_)), P), length(P, N)`
+→ `N = 214` private definitions, and
+`findall(F-A-Fl, (no_local_callers(F,A,Fl), \+ entry_point(F,A,Fl)), P), length(P, N)`
+→ `N = 0` — every one of the 71 `no_local_callers` matches is an entry
+point, so nothing is being hidden behind the exclusion; `src/` genuinely
+has no unreferenced code once the API surface is accounted for.
+
+That `0` is the report working as intended, not a check that stopped
+firing: it means `truly_uncalled/3` can now be used as a delete-this list
+rather than a triage-this list. `all_no_local_callers/1` is deliberately
+left unfiltered (still 71 on this tree) so the two stay gradations.
 
 Compare against `all_no_local_callers/1`'s 59 matches on the same tree
 (above): `truly_uncalled/3` additionally excludes every function that's

@@ -12,13 +12,15 @@
 %% Add a new rule here whenever you'd want to ask the same shape of
 %% question again — don't rebuild it as an inline one-off goal.
 %% See docs/lint-queries.md and docs/agent-examples.md for the source of
-%% most of these, including a known caveat (-spec noise in calls/5) that
-%% also applies here. `calls/4` is now `calls/5`:
+%% most of these. `calls/4` is now `calls/5`:
 %% `calls(Caller, CallerArity, CallSpec, File, Line)` — CallerArity is
 %% unbound (`_`) in most rules below since they key on bare Fun/Object
 %% names by design; only self_recursive/3 binds it, since same-name-and-
 %% arity on BOTH sides is exactly what makes a call site genuinely
-%% self-recursive.
+%% self-recursive. The `-spec` type-reference noise these docs used to warn
+%% about is gone from calls/5 (ts_extract_erlang's call_site/2 drops every
+%% `call` node with no enclosing function_clause), and Erlang `-export`
+%% lists are now export/4 facts — see entry_point/3.
 %%
 %% Names, modules and file paths in facts are atoms (integers for
 %% arities), so `local(caller_name, 1)` matches and
@@ -214,17 +216,64 @@ all_mutual_recursion(Pairs) :-
     findall(A-B, mutual_recursion(A, B), Raw),
     sort(Raw, Pairs).
 
+%% --- Entry points ---
+%%
+%% An Erlang-only tree has export/4 facts and a TypeScript-only tree has
+%% none, so entry_point/3 would reach a predicate with zero clauses and
+%% raise existence_error instead of answering No — sentinel for the same
+%% reason branch/5 carries one (see its full rationale there).
+export(none, 0, none, 0) :- fail.
+
+%% A function nothing in this parse calls but the runtime, a test, or
+%% another module certainly can — so it is NOT dead code.
+%%
+%% export/4 is the Erlang `-export([f/1])` family (one fact per list
+%% element, from ts_extract_erlang). TypeScript's export_decl/4 can't stand
+%% in: it carries a binding *name* and a kind with no arity, and these facts
+%% are keyed Fun+Arity like defines/5 everywhere else.
+%%
+%% This is what closes the dead-code false positives. OTP callbacks
+%% (handle_call/3, init/1, terminate/2, code_change/3, …) must be exported
+%% to be reachable by gen_server/supervisor, and the CLI/serve handlers are
+%% exported for their dispatch table — on this repo's own src/, all 30 of
+%% the original all_truly_uncalled/1 hits were exactly that, 22 of them
+%% behaviour callbacks.
+%%
+%% An export list still can't see an entry point the BEAM reaches for by
+%% name without one, so runtime_entry_point/2 is the editable remainder —
+%% same status as banned_target/2, known_global/1 and friends. Only
+%% -on_load hooks genuinely need to be here: an -on_load function is called
+%% by the code loader and is not itself exported.
+runtime_entry_point(init, 0).
+
+entry_point(Fun, Arity, File) :-
+    export(Fun, Arity, File, _).
+entry_point(Fun, Arity, _) :-
+    runtime_entry_point(Fun, Arity).
+
 %% Never called at all — local OR remote — closing the exact blind spot
 %% no_local_callers/3 has ("mostly false positives" in
 %% docs/lint-queries.md): that one only checks local(...) call sites, so
 %% every remotely-called entry point (a module's own public API, called
-%% from elsewhere) shows up there as a false positive. Still blind to
-%% member(...) (method/dynamic-dispatch) calls and to callers outside
-%% this same parse — a much stronger dead-code signal, not a perfect one.
+%% from elsewhere) shows up there as a false positive. The entry_point/3
+%% check above closes the OTHER half of that same blind spot: a function
+%% that is legitimately uncalled inside the parsed tree because its caller
+%% is a test, another module, or gen_server dispatching a behaviour
+%% callback.
+%%
+%% Still blind to member(...) (method/dynamic-dispatch) calls, to callers
+%% outside this same parse (test/ usually isn't in the tree you point
+%% `parse` at), and to `fun Name/Arity` references — this grammar gives
+%% those their own internal_fun/external_fun nodes rather than a `call`, so
+%% a function referenced ONLY as `fun handle_query/1` would look dead again
+%% if it weren't also exported. A much stronger dead-code signal, not a
+%% perfect one. no_local_callers/3 is deliberately left unfiltered, so the
+%% two stay gradations (review vs. delete) instead of duplicates.
 truly_uncalled(Fun, Arity, File) :-
     defines(Fun, Arity, _, File, _),
     \+ calls(_, _, local(Fun, Arity), _, _),
-    \+ calls(_, _, remote(_, Fun, Arity), _, _).
+    \+ calls(_, _, remote(_, Fun, Arity), _, _),
+    \+ entry_point(Fun, Arity, File).
 
 all_truly_uncalled(Triples) :-
     findall(Fun-Arity-File, truly_uncalled(Fun, Arity, File), Raw),

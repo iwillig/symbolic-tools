@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "symbolic": {
+      "type": "stdio",
+      "command": "/Users/iwillig/dev/symbolic-tools/_build/default/rel/symbolic_tools/bin/symbolic",
+      "args": ["serve"],
+      "env": {}
+    }
+  }
+}

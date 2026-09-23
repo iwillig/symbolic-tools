@@ -17,6 +17,7 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | Predicate | Produced by | Meaning |
 |---|---|---|
 | `defines/5` | Erlang, TypeScript, Bash | A named function/definition exists |
+| `export/4` | Erlang | A function an `-export` list makes callable from outside the file |
 | `calls/5` | Erlang, TypeScript, Bash | A call site, shape varies per language |
 | `comment/3` | Erlang, TypeScript, Bash | Every comment, unconditionally |
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
@@ -71,7 +72,8 @@ and `src/ts_extract_bash.erl` — one query set per language (no shared
 extraction code between them, a deliberate choice explained in each
 module's own header), but the same four predicate names and arities
 across all three, so a query written against one language's facts
-reads the same way against another's.
+reads the same way against another's. The one exception is `export/4`,
+which Erlang has and the other two don't — see below.
 
 ### `defines(Function, Arity, Params, File, Line)`
 
@@ -102,19 +104,52 @@ duplication in any query that only looked at `Function` — `.symbolic/rules.pl`
 `duplicate_name/3`, `self_recursive/3`, `fan_in/3`, `no_local_callers/3`
 now key on `Fun`+`Arity` to avoid that.
 
+### `export(Function, Arity, File, Line)`
+
+Erlang only — the one code fact of this shape the other two extractors
+don't produce, which is why it has its own name instead of extending
+`export_decl/4` (further down), and why it is keyed `Fun`+`Arity` like
+`defines/5` rather than by a bare binding name.
+
+- **`Function`/`Arity`** — one fact per element of every `-export([...])`
+  list: `-export([foo/1, other/0, double/1])` yields three facts, each
+  directly joinable with the matching `defines/5`.
+- **`Line`** — the element's own row, not the attribute's. A long export
+  list wraps across lines, and each `fa` node is anchored separately.
+
+What this is *for*: an exported function has no caller inside the tree you
+parsed, by definition — its caller is a test, another module, or the BEAM
+dispatching a behaviour callback (`handle_call/3` and friends must be
+exported to be reachable at all). Without these facts every one of them
+reads as dead code. `.symbolic/rules.pl`'s `entry_point/3` is what reads
+`export/4`, and `truly_uncalled/3` is what that keeps honest — on this
+repo's own `src/`, all 30 of the original `all_truly_uncalled/1` hits were
+exported API or OTP callbacks. See [`lint-queries.md`](lint-queries.md).
+
+`-export_type([...])` deliberately produces nothing: those name *types*,
+not functions, and the grammar keeps them in a separate
+`export_type_attribute` node — so that is a filter, not a gap.
+
 ### `calls(Caller, CallerArity, CallSpec, File, Line)`
 
 - **`Caller`** — the enclosing definition's name, found by walking
   `node_parent/1` up from the call site to the nearest recognized
-  definition node. The atom `undefined` if the call isn't inside any
-  recognized definition (e.g. a bare top-level statement, or — a real
-  quirk found via dogfooding — Erlang's `-spec` attributes: their type
-  references parse identically to real calls, and always come back with
-  `Caller = undefined` since a `-spec` lives outside any function
-  clause; see `docs/lint-queries.md`).
+  definition node. A call site with **no** enclosing definition produces
+  no fact at all. In Erlang that set is exactly the type references inside
+  `-spec`/`-callback`/`-type` attributes, which the grammar gives the same
+  `call` node as a real call: `file:filename()` in
+  `-spec f(file:filename())` parses as `remote <- call <- expr_args <-
+  type_sig <- spec`, indistinguishable from a genuine `file:read_file(X)`
+  to a query on `(call expr: (remote) @call)`. `ts_extract_erlang`'s
+  `call_site/2` drops them. They used to be emitted with
+  `Caller = undefined`, which is why `all_risky_calls/1` once reported 25
+  filesystem hits across this repo's own `src/` that no code performs:
+  `Caller`/`CallerArity` *are* calls/5's first two fields, so an
+  unattributed fact can never answer `callers/3` or `callees/2` — it can
+  only pollute them.
 - **`CallerArity`** — that same enclosing clause's arity (same source and
   same semantics as `defines/5`'s `Arity`, including `undefined` for
-  Bash and wherever `Caller` itself is `undefined`). This is what a call
+  Bash). This is what a call
   site inside `query/1`'s body (which calls `query/2`) needs to stop
   being indistinguishable from a call site genuinely inside `query/2` —
   the other half of the arity-conflation gap `defines/5` alone didn't
@@ -644,9 +679,11 @@ since this pass doesn't do numeric array indexing.
 - [`agent-examples.md`](agent-examples.md) — narrative worked examples
   of an agent using several of these predicates together.
 - [`lint-queries.md`](lint-queries.md) — a reusable rule library over
-  `defines`/`calls`/`comment`/`doc`, including a real quirk (`-spec`
-  noise in `calls/5`) found by running it against this project's own
-  `src/` — the arity-conflation false positive that doc also used to
-  describe is fixed now that `defines`/`doc` carry `Arity`.
+  `defines`/`calls`/`comment`/`doc`/`export`, including the two real
+  quirks found by running it against this project's own `src/` and since
+  fixed there: `-spec` type references polluting `calls/5` (now dropped by
+  `call_site/2`), and exported API reading as dead code (now `export/4` →
+  `entry_point/3`). The arity-conflation false positive that doc also used
+  to describe is fixed now that `defines`/`doc` carry `Arity`.
 - [`../readme.md`](../readme.md) — the CLI-level introduction to all of
   the above, with one real worked example per language.

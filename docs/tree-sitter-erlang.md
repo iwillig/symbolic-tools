@@ -293,6 +293,29 @@ alongside the languages already there.
   duration. Single-file parses are fast (tree-sitter is ~100s of MB/s), so
   this is usually a non-issue; for very large files consider `enif_thread_fork`
   or capping per-parse input size.
+- **A tree-sitter query selects by node *type*, and this grammar reuses
+  the code node types inside attributes.** Verified by dumping the parse
+  tree: `-spec f(file:filename())` puts a `remote` under
+  `call <- expr_args <- type_sig <- spec`, and `-type t() ::
+  list(integer())` puts `list` and `integer` under plain `call` nodes —
+  byte-for-byte the same shapes `(call expr: (remote) @call)` and
+  `(call expr: (atom) @callee)` match real call sites on. So a
+  calls-extracting query over-matches every type reference in every
+  `-spec`/`-callback`/`-type` in the file (25 sites across 12 of this
+  repo's own 19 `.erl` files), and the only tell is that the
+  `node_parent/1` walk-up finds no `function_clause` above them.
+  `ts_extract_erlang`'s `call_site/2` drops exactly those. The general
+  rule for a new language: decide what a fact *means* before trusting a
+  query's node type, and check what an attribute body parses as.
+- **The same grammar keeps `-export` lists in nodes no call query sees —
+  which is a fact worth extracting, not noise.** `export_attribute` holds
+  one `fa` child per entry, each `fa` positional (`atom`, then `arity`
+  wrapping an `integer`) with no addressable fields, so reading it is a
+  `node_named_child/2` walk. Those become `export/4` facts — without them
+  an exported function or an OTP behaviour callback is indistinguishable
+  from dead code in a per-directory parse, because its caller is a test,
+  another module, or the BEAM. Note `-export_type([...])` is a *different*
+  node (`export_type_attribute`): it names types, not functions.
 - **Nodes need the source.** `node_text/2` slices the source string by byte
   range, so the source must live as long as the tree.
 - **Sibling navigation returns `undefined`, not a null resource.**

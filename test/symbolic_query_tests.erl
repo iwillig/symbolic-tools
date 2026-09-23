@@ -288,8 +288,53 @@ truly_uncalled_ignores_remote_callers_test() ->
             symbolic_query:run_result(?DB, real_rules(), "all_truly_uncalled(Triples)"))
     end).
 
-banned_call_flags_a_console_log_call_test() ->
-    with_db([{defines, noisy, 0, <<"()">>, 's.ts', 1},
+%% An `-export` entry point is uncalled from inside the parse BY DEFINITION
+%% — its caller is a test, another module, or gen_server dispatching a
+%% behaviour callback — which is the whole reason entry_point/3 exists.
+%% Three separate exemptions are checked here, plus the one case that must
+%% NOT be exempt: `ghost` is exported, but from q.erl, and entry_point/3
+%% keys on the export's own File, so p.erl's ghost/0 stays on the list.
+%% `init/0` has no export at all — an -on_load hook is called by the loader
+%% by name — and is covered by the editable runtime_entry_point/2 fact.
+truly_uncalled_ignores_entry_points_test() ->
+    with_db([{defines, exported, 0, <<"()">>, 'p.erl', 1},
+             {defines, handle_call, 3, <<"()">>, 'p.erl', 2},
+             {defines, init, 0, <<"()">>, 'p.erl', 3},
+             {defines, ghost, 0, <<"()">>, 'p.erl', 4},
+             {defines, dead, 0, <<"()">>, 'p.erl', 5},
+             {export, exported, 0, 'p.erl', 1},
+             {export, handle_call, 3, 'p.erl', 2},
+             {export, ghost, 0, 'q.erl', 1},
+             %% A calls/5 fact is needed to reach truly_uncalled/3 at all:
+             %% unlike export/4, calls/5 carries no zero-clause sentinel (a
+             %% real parse always has calls in it), so an all-calls-free
+             %% fixture makes erlog raise existence_error on it rather than
+             %% answer No. init/0 calling handle_call/3 is a plausible
+             %% gen_server shape and changes no expected binding — init/0 is
+             %% exempt either way, handle_call/3 stays exempt via export/4.
+             {calls, init, 0, {local, handle_call, 3}, 'p.erl', 6}], fun() ->
+        ?assertEqual({solutions, [{'Triples',
+            [dash(dead, 0, 'p.erl'), dash(ghost, 0, 'p.erl')]}]},
+            symbolic_query:run_result(?DB, real_rules(), "all_truly_uncalled(Triples)"))
+    end).
+
+%% export/4 has zero clauses for a tree with no Erlang in it (TypeScript,
+%% Bash, or this library's own fixture), and erlog raises existence_error
+%% on a predicate with no clauses rather than failing — which is why
+%% entry_point/3's sentinel exists. Re-running the remote-callers case with
+%% NO export facts loaded is what proves the sentinel, not the new goal,
+%% answers.
+entry_point_without_export_facts_fails_cleanly_test() ->
+    with_db([{defines, plain, 0, <<"()">>, 's.ts', 1},
+             {defines, exported_anyway, 0, <<"()">>, 's.ts', 2},
+             {calls, caller, 0, {local, plain, 0}, 's.ts', 3}], fun() ->
+        ?assertEqual({solutions, [{'Triples', [dash(exported_anyway, 0, 's.ts')]}]},
+            symbolic_query:run_result(?DB, real_rules(), "all_truly_uncalled(Triples)")),
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "entry_point(plain, 0, 's.ts')"))
+    end).
+
+banned_call_flags_a_console_log_call_test() ->    with_db([{defines, noisy, 0, <<"()">>, 's.ts', 1},
              {calls, noisy, 0, {member, console, log, 1}, 's.ts', 2},
              {calls, noisy, 0, {member, console, info, 1}, 's.ts', 3}], fun() ->
         ?assertEqual({solutions, [{'Triples', [dash(noisy, log, 's.ts')]}]},

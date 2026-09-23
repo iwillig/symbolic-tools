@@ -4,6 +4,11 @@
 %%% Facts (deliberately simpler than the original design sketch — no
 %%% module name yet, see the Phase 1 plan notes):
 %%%   defines(Function, Arity, Params, File, Line)
+%%%   export(Function, Arity, File, Line)          — a `-export([f/1])` entry point,
+%%%                                                       one fact per list element; what
+%%%                                                       .symbolic/rules.pl's entry_point/3
+%%%                                                       reads to keep exported API out of
+%%%                                                       the dead-code report
 %%%   calls(Caller, CallerArity, local(Callee, ArgCount), File, Line)
 %%%   calls(Caller, CallerArity, remote(Module, Function, ArgCount), File, Line)
 %%%   comment(File, Line, Text)                       — every comment, unconditionally
@@ -36,9 +41,14 @@
 %%% walk-up (below) now grabs the enclosing function_clause's own arity
 %%% too, not just its name, so a call site inside `query/1`'s body (which
 %%% calls `query/2`) is no longer indistinguishable from a call site
-%%% genuinely inside `query/2` itself. `{undefined, undefined}` when the
-%%% call isn't inside any recognized definition (a bare top-level
-%%% statement, or a `-spec` attribute's type references).
+%%% genuinely inside `query/2` itself.
+%%%
+%%% A `call` node with NO enclosing `function_clause` is not emitted as a
+%%% calls/5 fact at all (see `call_site/4`). That is the whole set of
+%%% `-spec`/`-type`/`-callback` type references, which this grammar parses
+%%% with the same `call` node type as real calls — see call_site/4's own
+%%% comment for the verified node paths and the concrete damage they did
+%%% before they were dropped.
 %%%
 %%% Caller/callee attribution walks up node_parent/1 to the nearest
 %%% enclosing function_clause, rather than a single combined query —
@@ -75,6 +85,13 @@
 -define(LOCAL_CALL_QUERY, "(call expr: (atom) @callee)").
 -define(REMOTE_CALL_QUERY, "(call expr: (remote) @call)").
 -define(COMMENT_QUERY, "(comment) @c").
+
+%% One fact per element of every `-export([...])` list — the query binds
+%% the whole attribute and `export_facts/3` reads its `fa` children, so a
+%% 5-function list yields 5 facts and the two node-walk conventions
+%% (multi-capture queries double their matches; `fa` has no addressable
+%% fields) never have to be fought. See ?DEF_QUERY's module header.
+-define(EXPORT_QUERY, "(export_attribute) @e").
 
 %% One query per decision-point construct, for real (McCabe-style)
 %% complexity instead of the fan_out/3-based proxy too_complex/3 uses.
@@ -143,6 +160,7 @@ text(Path, Src) ->
     PathAtom = list_to_atom(Path),
     Facts =
         defines(Lang, Root, Src, PathAtom) ++
+        exports(Lang, Root, Src, PathAtom) ++
         local_calls(Lang, Root, Src, PathAtom) ++
         remote_calls(Lang, Root, Src, PathAtom) ++
         comments(Lang, Root, Src, PathAtom) ++
@@ -150,6 +168,45 @@ text(Path, Src) ->
         branches(Lang, Root, Src, PathAtom) ++
         exprs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
+
+%% A `-export([f/1, g/0])` attribute is `export_attribute` with one `fa`
+%% child per entry, and each `fa` is positional: named child 0 is the
+%% function's `atom`, named child 1 is `arity`, whose own single named
+%% child is the `integer` (all four node types confirmed by dumping the
+%% tree — `fa` exposes no fields, unlike `function_clause`'s "name").
+%% Line is the `fa`'s own row, not the attribute's: a long export list
+%% wraps across lines, and the element's row is the anchor worth having.
+exports(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?EXPORT_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    lists:usort(lists:flatmap(
+        fun(Attr) -> export_facts(Attr, Src, PathAtom) end,
+        lists:usort([N || {"e", N} <- Caps]))).
+
+export_facts(Attr, Src, PathAtom) ->
+    [export_fact(Fa, Src, PathAtom) || Fa <- fa_children(Attr, 0)].
+
+export_fact(Fa, Src, PathAtom) ->
+    NameNode = symbolic_ts:node_named_child(Fa, 0),
+    ArityNode = symbolic_ts:node_named_child(
+        symbolic_ts:node_named_child(Fa, 1), 0),
+    {export,
+        to_atom(symbolic_ts:node_text(NameNode, Src)),
+        parse_number(symbolic_ts:node_text(ArityNode, Src)), PathAtom, line(Fa)}.
+
+%% Collect an attribute's `fa` children by index — node_named_child/2 is
+%% the only child accessor this grammar needs here, and an
+%% `export_attribute` holds nothing else.
+fa_children(Attr, I) ->
+    case I >= symbolic_ts:node_named_child_count(Attr) of
+        true -> [];
+        false ->
+            Node = symbolic_ts:node_named_child(Attr, I),
+            case symbolic_ts:node_type(Node) of
+                "fa" -> [Node | fa_children(Attr, I + 1)];
+                _ -> fa_children(Attr, I + 1)
+            end
+    end.
 
 defines(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?DEF_QUERY),
@@ -175,42 +232,68 @@ args_shape(Node, FieldName, Src) ->
 local_calls(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?LOCAL_CALL_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
-    lists:usort([
-        local_call_fact(N, Src, PathAtom)
-     || {"callee", N} <- Caps
-    ]).
+    lists:usort(lists:filtermap(
+        fun(N) -> local_call_fact(N, Src, PathAtom) end,
+        [N || {"callee", N} <- Caps])).
 
 local_call_fact(N, Src, PathAtom) ->
-    CallNode = symbolic_ts:node_parent(N),
-    {ArgCount, _Params} = args_shape(CallNode, "args", Src),
-    {Caller, CallerArity} = caller_info(N, Src),
-    {calls, Caller, CallerArity,
-     {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
-     PathAtom, line(N)}.
+    case call_site(N, Src) of
+        false ->
+            false;
+        {true, {Caller, CallerArity}} ->
+            CallNode = symbolic_ts:node_parent(N),
+            {ArgCount, _Params} = args_shape(CallNode, "args", Src),
+            {true, {calls, Caller, CallerArity,
+                {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
+                PathAtom, line(N)}}
+    end.
 
 remote_calls(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?REMOTE_CALL_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
-    lists:usort([
-        remote_call_fact(N, Src, PathAtom)
-     || {"call", N} <- Caps
-    ]).
+    lists:usort(lists:filtermap(
+        fun(N) -> remote_call_fact(N, Src, PathAtom) end,
+        [N || {"call", N} <- Caps])).
 
 %% The @call capture binds to the `remote` node itself (the `expr` field's
 %% value, e.g. `io:format`), not the enclosing `call` node — its "args"
 %% field lives one level up, on the parent (confirmed empirically: "args"
 %% on the captured node is null).
 remote_call_fact(RemoteNode, Src, PathAtom) ->
-    ModNode = symbolic_ts:node_child_by_field_name(RemoteNode, "module"),
-    ModAtomNode = symbolic_ts:node_child_by_field_name(ModNode, "module"),
-    FunNode = symbolic_ts:node_child_by_field_name(RemoteNode, "fun"),
-    CallNode = symbolic_ts:node_parent(RemoteNode),
-    {ArgCount, _Params} = args_shape(CallNode, "args", Src),
-    {Caller, CallerArity} = caller_info(RemoteNode, Src),
-    {calls, Caller, CallerArity,
-     {remote, to_atom(symbolic_ts:node_text(ModAtomNode, Src)),
-      to_atom(symbolic_ts:node_text(FunNode, Src)), ArgCount},
-     PathAtom, line(RemoteNode)}.
+    case call_site(RemoteNode, Src) of
+        false ->
+            false;
+        {true, {Caller, CallerArity}} ->
+            ModNode = symbolic_ts:node_child_by_field_name(RemoteNode, "module"),
+            ModAtomNode = symbolic_ts:node_child_by_field_name(ModNode, "module"),
+            FunNode = symbolic_ts:node_child_by_field_name(RemoteNode, "fun"),
+            CallNode = symbolic_ts:node_parent(RemoteNode),
+            {ArgCount, _Params} = args_shape(CallNode, "args", Src),
+            {true, {calls, Caller, CallerArity,
+                {remote, to_atom(symbolic_ts:node_text(ModAtomNode, Src)),
+                    to_atom(symbolic_ts:node_text(FunNode, Src)), ArgCount},
+                PathAtom, line(RemoteNode)}}
+    end.
+
+%% A `call` node with no enclosing `function_clause` is not a call site, so
+%% it gets no calls/5 fact. That set is exactly the type references in
+%% `-spec`/`-callback`/`-type` attributes, which this grammar gives the SAME
+%% node shape as a real call — verified by dumping the tree: `file:filename()`
+%% in `-spec f(file:filename())` walks `remote <- call <- expr_args <-
+%% type_sig <- spec` and matches ?REMOTE_CALL_QUERY, and `list(integer())`
+%% in `-type t() :: list(integer())` matches ?LOCAL_CALL_QUERY twice (`list`
+%% and `integer`). Before this filter those references were facts — 25 sites
+%% across 12 of this repo's own 19 .erl files — which is why all_risky_calls/1
+%% reported filesystem access no code performs and module_dependency/2 claimed
+%% a `file` dependency from a -spec alone. Drop rather than re-attribute:
+%% calls/5's first two fields ARE the attribution, so a fact with
+%% Caller=undefined can never answer callers/3 or callees/2 — it can only
+%% pollute them.
+call_site(Node, Src) ->
+    case caller_info(Node, Src) of
+        {undefined, undefined} -> false;
+        Info -> {true, Info}
+    end.
 
 %% One branch/5 fact per decision point (see ?BRANCH_QUERIES), attributed
 %% to its enclosing function_clause via caller_info/2 — the exact same
@@ -387,8 +470,9 @@ definition_name(Node, Src) ->
 %% Walk up to the nearest enclosing function_clause to attribute a call
 %% site to the function it appears in — {Name, Arity}, or
 %% {undefined, undefined} if the call isn't inside any recognized
-%% definition. Arity comes from that same clause's "args" field, same
-%% technique as define_fact/3.
+%% definition (a bare top-level statement, or a -spec attribute's type
+%% references — the set call_site/2 exists to drop). Arity comes from that
+%% same clause's "args" field, same technique as define_fact/3.
 caller_info(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_clause" ->

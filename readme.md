@@ -89,8 +89,11 @@ Inspired by the [Chiasmus MCP Server](https://github.com/yogthos/chiasmus).
 TypeScript, local from remote calls in Erlang, and just `local` calls
 in Bash, which has no qualified-call syntax to tell apart from a bare
 one), `comment`, and `doc` facts (every comment, plus which ones
-document a specific function), dogfooded against this repo's own
-source and a real-world-style `.ts` file. **Markdown** is real too, for
+document a specific function), plus Erlang's `export` facts (every
+`-export([f/1])` entry, which is what keeps an exported API function or
+an OTP callback from reading as dead code — see
+`docs/lint-queries.md`'s `entry_point/3`), dogfooded against this repo's
+own source and a real-world-style `.ts` file. **Markdown** is real too, for
 `.md` files — `heading`, `code_block`, and `paragraph` facts, so
 `readme.md`/`docs/*.md` become queryable the same way; a fenced
 `erlang`/`ts`/`typescript`/`sh`/`bash` block also gets re-parsed into
