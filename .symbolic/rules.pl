@@ -1,35 +1,8 @@
-%% Default rule library for this project — the reusable half of the
-%% query vocabulary, on top of the raw facts `symbolic parse` writes.
-%%
-%% `symbolic query` auto-consults this file when no `-rules` is given, so
-%% the goals below work with no extra flag:
-%%   symbolic query -db .pi/facts.dets 'self_recursive(F, A, Fl)'
-%% Discovery walks up from the fact database's directory, then from the
-%% current directory, looking for `.symbolic/rules.pl` — the same
-%% "find the project root" shape git uses for `.git`. `-rules <path>`
-%% overrides discovery entirely; `-no-rules` turns it off.
-%%
-%% Add a new rule here whenever you'd want to ask the same shape of
-%% question again — don't rebuild it as an inline one-off goal.
-%% See docs/lint-queries.md and docs/agent-examples.md for the source of
-%% most of these. `calls/4` is now `calls/5`:
-%% `calls(Caller, CallerArity, CallSpec, File, Line)` — CallerArity is
-%% unbound (`_`) in most rules below since they key on bare Fun/Object
-%% names by design; only self_recursive/3 binds it, since same-name-and-
-%% arity on BOTH sides is exactly what makes a call site genuinely
-%% self-recursive. The `-spec` type-reference noise these docs used to warn
-%% about is gone from calls/5 (ts_extract_erlang's call_site/2 drops every
-%% `call` node with no enclosing function_clause), and Erlang `-export`
-%% lists are now export/4 facts — see entry_point/3.
-%%
-%% Names, modules and file paths in facts are atoms (integers for
-%% arities), so `local(caller_name, 1)` matches and
-%% `local("caller_name", 1)` does not.
+%% Default derived-predicate library — auto-consulted by `symbolic query`
+%% (override with -rules/-no-rules). calls/5 = calls(Caller, CallerArity,
+%% CallSpec, File, Line); most rules below leave CallerArity unbound.
 
-%% Everything a function calls, deduplicated. Fun here is still
-%% bare-name, so this merges call sites from same-named functions of
-%% different arity — use self_recursive/3 or a direct calls/5 query when
-%% that distinction matters.
+%% Everything Fun calls, deduplicated (bare name, arity-blind).
 callees(Fun, Callees) :-
     findall(C, calls(Fun, _CallerArity, C, _, _), Raw),
     sort(Raw, Callees).
@@ -66,16 +39,7 @@ all_duplicate_names(Triples) :-
     findall(Fun-Arity-Files, duplicate_name(Fun, Arity, Files), Raw),
     sort(Raw, Triples).
 
-%% A function that calls itself directly by name AND arity — fixed from
-%% the old bare-name version, which conflated e.g. query/2 calling
-%% query/3 with real recursion. Now fully precise on BOTH sides: binding
-%% CallerArity = Arity requires the call site to be textually inside
-%% THIS exact clause (not merely inside some same-named overload), and
-%% local(Fun, Arity) requires the call target to be this exact arity too.
-%% This is what finally closes the query/1-calls-query/2 false positive:
-%% that call site's CallerArity is 1 (it's inside query/1's body), so it
-%% no longer unifies with query/2's Arity=2 check, and its own target
-%% arity (2) doesn't match query/1's own Arity=1 either.
+%% Direct self-call, precise on both Fun AND Arity (not just the bare name).
 self_recursive(Fun, Arity, File) :-
     defines(Fun, Arity, _, File, _),
     calls(Fun, Arity, local(Fun, Arity), File, _).
@@ -87,8 +51,7 @@ fan_out(Fun, File, Count) :-
     sort(Callees, Unique),
     length(Unique, Count).
 
-%% Top N by fan-out — rank first (sort ascending, reverse, take/3) so the
-%% busiest orchestrators come back first.
+%% Top N by fan-out, busiest first.
 top_fan_out(N, Top) :-
     findall(Count-Fun-File, fan_out(Fun, File, Count), Raw),
     sort(Raw, Sorted),
@@ -109,10 +72,8 @@ top_fan_in(N, Top) :-
     reverse(Sorted, Ranked),
     take(N, Ranked, Top).
 
-%% Defined but never called locally (by name+arity) within this same
-%% parse. Caveat: a real caller in another directory, or a remote/
-%% qualified call, won't show up here — see docs/lint-queries.md's
-%% "mostly false positives" note before treating a match as dead code.
+%% Defined but never called locally — blind to remote/external callers,
+%% see truly_uncalled/3 for the fuller check.
 no_local_callers(Fun, Arity, File) :-
     defines(Fun, Arity, _, File, _),
     \+ calls(_, _, local(Fun, Arity), _, _).
@@ -121,8 +82,7 @@ all_no_local_callers(Triples) :-
     findall(Fun-Arity-File, no_local_callers(Fun, Arity, File), Raw),
     sort(Raw, Triples).
 
-%% A comment not immediately followed by a recognized definition —
-%% section headers, module-doc headers, inline explanations, etc.
+%% A comment not immediately followed by a recognized definition.
 undocumented_comment(File, Line, Text) :-
     comment(File, Line, Text),
     \+ doc(_, _, File, Line, _).
@@ -137,36 +97,23 @@ all_risky_calls(Triples) :-
     findall(Caller-Module-Fun, risky_call(Caller, Module, Fun), Raw),
     sort(Raw, Triples).
 
-%% First N elements of a list — for ranking results (sort a Count-Key list,
-%% reverse, take/3) into a readable top-N.
+%% First N elements of a list, for ranking a sorted Count-Key list into a top-N.
 take(0, _, []) :- !.
 take(_, [], []) :- !.
 take(N, [H|T], [H|Rest]) :- N > 0, N1 is N - 1, take(N1, T, Rest).
 
-%% Reachability over the local call graph, guarded against cycles — erlog
-%% has no tabling, so an unguarded version of this can hang forever on a
-%% cyclic call graph. See docs/erlang-mcp-design.md §5.
+%% Reachability with a Visited-list cycle guard (erlog has no tabling).
+%% Arity-blind on both ends.
 reaches(A, B) :- reaches(A, B, []).
 
-%% Any arity of A/B/M reaches — deliberately arity-blind on both ends,
-%% unlike self_recursive/3 above: reachability asks "can A's call chain
-%% ever get to B at all," not "to this exact overload, from this exact
-%% overload."
 reaches(A, B, _) :- calls(A, _CallerArity, local(B, _), _, _).
 reaches(A, B, Visited) :-
     calls(A, _CallerArity, local(M, _), _, _),
     \+ member(M, Visited),
     reaches(M, B, [M|Visited]).
 
-%% Component-level (C4 L3) dependency edges: which file (component)
-%% calls into which named module (component). Deliberately only
-%% remote(...) calls — local(...) is same-file, intra-component detail
-%% (C4 Code/L4), not a component boundary. See docs/lint-queries.md's
-%% "Module dependency graph" section for the internal-vs-stdlib/library
-%% filtering this needs on top, and a real gap: a dependency reached
-%% only through a `fun Mod:Fun/Arity` reference (not a direct
-%% `Mod:Fun(Args)` call) is invisible here — ts_extract_markdown's real
-%% calls into ts_extract_erlang/typescript/bash are exactly this case.
+%% C4-L3 file-to-module edges via remote/3 calls only — local/3 is
+%% intra-file detail, not a component boundary.
 module_dependency(CallerFile, CalleeModule) :-
     calls(_, _, remote(CalleeModule, _, _), CallerFile, _).
 
@@ -176,10 +123,8 @@ all_module_dependencies(Edges) :-
 
 %% --- ESLint-style structural checks, on top of the library above ---
 
-%% More parameters than a human can comfortably track at a call site.
-%% Arity already *is* the parameter count (the same field self_recursive/3
-%% and duplicate_name/3 key on), so this needs no new fact — just a
-%% threshold, matching ESLint's `max-params` default (4).
+%% ESLint max-params: https://eslint.org/docs/latest/rules/max-params
+%% Default threshold (4) — Arity already is the parameter count.
 too_many_params(Fun, Arity, File, Line) :-
     defines(Fun, Arity, _Params, File, Line),
     Arity > 4.
@@ -188,10 +133,8 @@ all_too_many_params(Triples) :-
     findall(Fun-Arity-File, too_many_params(Fun, Arity, File, _Line), Raw),
     sort(Raw, Triples).
 
-%% A rough complexity signal on top of fan_out/3 — not real branch
-%% counting (no control-flow facts exist to count), just "this function
-%% orchestrates a lot of distinct calls," the same shape of concern
-%% ESLint's `complexity` rule flags via cyclomatic branch count instead.
+%% Fan-out-based complexity proxy — not real branch counting, see
+%% too_complex_real/4 for that.
 too_complex(Fun, File, Count) :-
     fan_out(Fun, File, Count),
     Count > 10.
@@ -201,49 +144,81 @@ all_too_complex(Ranked) :-
     sort(Raw, Sorted),
     reverse(Sorted, Ranked).
 
-%% Two functions each reachable from the other's call chain — the
-%% function-level analogue of eslint-plugin-import's `no-cycle`. Built on
-%% reaches/2, which already guards against infinite loops on a cyclic
-%% call graph (docs/erlang-mcp-design.md §5). `A @< B` keeps each pair to
-%% one entry: reaches both ways is symmetric, so without it A-B and B-A
-%% would both match as separate solutions.
+%% Two functions each reachable from the other's call chain. Fine when at
+%% least one side is bound — NOT what all_mutual_recursion/1 below uses.
 mutual_recursion(A, B) :-
     reaches(A, B),
     reaches(B, A),
     A @< B.
 
+%% all_mutual_recursion/1's own path: findall(A-B, mutual_recursion(A,B), _)
+%% with both sides unbound re-derives the whole search per candidate and
+%% times out on a real codebase (no tabling in erlog). Instead compute the
+%% full reachability relation once via a semi-naive fixpoint join, then
+%% read mutual pairs off it with a sorted-list merge (not `member/2` scans
+%% — both shapes of naive filtering were independently confirmed to be the
+%% quadratic bottleneck here).
+call_edge(A, B) :- calls(A, _CallerArity, local(B, _), _, _).
+
+all_call_edges(Edges) :-
+    findall(A-B, call_edge(A, B), Raw),
+    sort(Raw, Edges).
+
+%% One fixpoint round: extend last round's new pairs (Frontier) by one edge.
+join_step(Frontier, Edges, New) :-
+    findall(A-C, ( member(A-B, Frontier), member(B-C, Edges) ), Raw),
+    sort(Raw, New).
+
+%% Ordered set difference over two sorted, duplicate-free lists (New \ Known).
+ordered_diff([], _Known, []) :- !.
+ordered_diff(New, [], New) :- !.
+ordered_diff([X|New], [X|Known], Diff) :- !, ordered_diff(New, Known, Diff).
+ordered_diff([X|New], [Y|Known], [X|Diff]) :- X @< Y, !, ordered_diff(New, [Y|Known], Diff).
+ordered_diff([X|New], [Y|Known], Diff) :- X @> Y, ordered_diff([X|New], Known, Diff).
+
+%% Fixpoint: stop once a round's Frontier produces nothing new. Terminates
+%% because Known only grows and is bounded by the finite Fun-Fun pair count.
+closure(_Edges, [], Known, Known) :- !.
+closure(Edges, Frontier, Known, Closed) :-
+    join_step(Frontier, Edges, Joined),
+    ordered_diff(Joined, Known, Fresh),
+    append(Known, Fresh, All),
+    sort(All, NextKnown),
+    closure(Edges, Fresh, NextKnown, Closed).
+
+%% Every A-B pair such that A's call chain reaches B, computed once.
+all_reaches_pairs(Closed) :-
+    all_call_edges(Edges),
+    closure(Edges, Edges, Edges, Closed).
+
+%% Closed with every pair swapped end-for-end.
+swap_pairs(Pairs, Swapped) :-
+    findall(B-A, member(A-B, Pairs), Raw),
+    sort(Raw, Swapped).
+
+%% Ordered set intersection over two sorted, duplicate-free lists.
+ordered_intersect([], _, []) :- !.
+ordered_intersect(_, [], []) :- !.
+ordered_intersect([X|Xs], [X|Ys], [X|Zs]) :- !, ordered_intersect(Xs, Ys, Zs).
+ordered_intersect([X|Xs], [Y|Ys], Zs) :- X @< Y, !, ordered_intersect(Xs, [Y|Ys], Zs).
+ordered_intersect(Xs, [_Y|Ys], Zs) :- ordered_intersect(Xs, Ys, Zs).
+
+%% Mutual pairs = Closed ∩ reverse(Closed), canonicalized via A @< B.
 all_mutual_recursion(Pairs) :-
-    findall(A-B, mutual_recursion(A, B), Raw),
+    all_reaches_pairs(Closed),
+    swap_pairs(Closed, Swapped),
+    ordered_intersect(Closed, Swapped, Mutual),
+    findall(A-B, ( member(A-B, Mutual), A @< B ), Raw),
     sort(Raw, Pairs).
 
 %% --- Entry points ---
-%%
-%% An Erlang-only tree has export/4 facts and a TypeScript-only tree has
-%% none, so entry_point/3 would reach a predicate with zero clauses and
-%% raise existence_error instead of answering No — sentinel for the same
-%% reason branch/5 carries one (see its full rationale there).
+
+%% Sentinel: keeps export/4 defined so a TS-only tree (no -export lists)
+%% fails cleanly instead of raising existence_error.
 export(none, 0, none, 0) :- fail.
 
-%% A function nothing in this parse calls but the runtime, a test, or
-%% another module certainly can — so it is NOT dead code.
-%%
-%% export/4 is the Erlang `-export([f/1])` family (one fact per list
-%% element, from ts_extract_erlang). TypeScript's export_decl/4 can't stand
-%% in: it carries a binding *name* and a kind with no arity, and these facts
-%% are keyed Fun+Arity like defines/5 everywhere else.
-%%
-%% This is what closes the dead-code false positives. OTP callbacks
-%% (handle_call/3, init/1, terminate/2, code_change/3, …) must be exported
-%% to be reachable by gen_server/supervisor, and the CLI/serve handlers are
-%% exported for their dispatch table — on this repo's own src/, all 30 of
-%% the original all_truly_uncalled/1 hits were exactly that, 22 of them
-%% behaviour callbacks.
-%%
-%% An export list still can't see an entry point the BEAM reaches for by
-%% name without one, so runtime_entry_point/2 is the editable remainder —
-%% same status as banned_target/2, known_global/1 and friends. Only
-%% -on_load hooks genuinely need to be here: an -on_load function is called
-%% by the code loader and is not itself exported.
+%% Entry points the BEAM reaches without an export — only -on_load hooks
+%% genuinely need an entry here.
 runtime_entry_point(init, 0).
 
 entry_point(Fun, Arity, File) :-
@@ -251,24 +226,9 @@ entry_point(Fun, Arity, File) :-
 entry_point(Fun, Arity, _) :-
     runtime_entry_point(Fun, Arity).
 
-%% Never called at all — local OR remote — closing the exact blind spot
-%% no_local_callers/3 has ("mostly false positives" in
-%% docs/lint-queries.md): that one only checks local(...) call sites, so
-%% every remotely-called entry point (a module's own public API, called
-%% from elsewhere) shows up there as a false positive. The entry_point/3
-%% check above closes the OTHER half of that same blind spot: a function
-%% that is legitimately uncalled inside the parsed tree because its caller
-%% is a test, another module, or gen_server dispatching a behaviour
-%% callback.
-%%
-%% Still blind to member(...) (method/dynamic-dispatch) calls, to callers
-%% outside this same parse (test/ usually isn't in the tree you point
-%% `parse` at), and to `fun Name/Arity` references — this grammar gives
-%% those their own internal_fun/external_fun nodes rather than a `call`, so
-%% a function referenced ONLY as `fun handle_query/1` would look dead again
-%% if it weren't also exported. A much stronger dead-code signal, not a
-%% perfect one. no_local_callers/3 is deliberately left unfiltered, so the
-%% two stay gradations (review vs. delete) instead of duplicates.
+%% Never called at all, local OR remote, and not an entry point — closes
+%% no_local_callers/3's false positives (remote callers, OTP callbacks).
+%% Still blind to member(...) dynamic dispatch and `fun Name/Arity` refs.
 truly_uncalled(Fun, Arity, File) :-
     defines(Fun, Arity, _, File, _),
     \+ calls(_, _, local(Fun, Arity), _, _),
@@ -279,9 +239,10 @@ all_truly_uncalled(Triples) :-
     findall(Fun-Arity-File, truly_uncalled(Fun, Arity, File), Raw),
     sort(Raw, Triples).
 
-%% A method call worth flagging outright, the shape ESLint's `no-console`
-%% (or `no-restricted-properties`) checks — edit banned_target/2 for this
-%% project's own conventions; shown here with a common JS/TS default.
+%% ESLint no-console: https://eslint.org/docs/latest/rules/no-console
+%% (the default banned_target/2 table below is exactly console.log/debug/warn)
+%% ESLint no-restricted-properties: https://eslint.org/docs/latest/rules/no-restricted-properties
+%% (the generalized form — edit banned_target/2 for this project's own conventions)
 banned_target(console, log).
 banned_target(console, debug).
 banned_target(console, warn).
@@ -294,16 +255,8 @@ all_banned_calls(Triples) :-
     findall(Caller-Method-File, banned_call(Caller, Method, File, _Line), Raw),
     sort(Raw, Triples).
 
-%% Too many functions crammed into one file — max-lines-per-file's shape,
-%% approximated by function count since line spans aren't tracked (only
-%% each definition's own start Line). The distinct-files findall/member
-%% step (rather than leaving File unbound going into the inner findall)
-%% matters: File isn't in that findall's own template, so with nothing
-%% grounding it first, backtracking would let it vary freely across every
-%% defines/5 fact instead of grouping by one file — silently counting
-%% every function in the whole codebase under an unbound File, not per
-%% file. See docs/lint-queries.md's "god_file" section for what that
-%% looked like when this file_define_count/2 body had that bug.
+%% Function count per file — groups by File via findall+sort+member first
+%% so it doesn't drift unbound across the whole codebase.
 file_define_count(File, Count) :-
     findall(F, defines(_, _, _, F, _), AllFiles),
     sort(AllFiles, Files),
@@ -320,55 +273,16 @@ all_god_files(Ranked) :-
     sort(Raw, Sorted),
     reverse(Sorted, Ranked).
 
-%% A branch/5 fact only gets asserted when a real decision point exists
-%% (ts_extract_typescript.erl/ts_extract_erlang.erl/ts_extract_bash.erl's
-%% own ?BRANCH_QUERIES) — so a codebase (or a single .erl/.ts file) with
-%% no if/for/case/etc. anywhere has ZERO branch/5 clauses, and erlog
-%% raises existence_error for a predicate with no clauses at all rather
-%% than failing cleanly (confirmed: the exact same issue already hits
-%% stale_doc_example/4 below, whenever example_defines/5 has zero clauses
-%% too — e.g. an Erlang-only tree with no Markdown parsed alongside it —
-%% pre-existing, not introduced here). erlog has neither catch/3 nor
-%% dynamic/1 to work around this from the querying side, so the fix has
-%% to make branch/5 "exist" outright: a clause whose body can never
-%% succeed. Its arguments are the sentinel atom `none`/integer `0`, which
-%% can only unify with a real query if some codebase genuinely named a
-%% function `none` — even then, `fail` makes it categorically
-%% unsatisfiable, so it can never contribute a real solution.
+%% Sentinel: keeps branch/5 defined for a tree with zero decision points.
 branch(none, 0, none, none, 0) :- fail.
 
 %% --- Real cyclomatic complexity, on top of branch/5 ---
-%%
-%% too_complex/3 above is fan-out (distinct callees), not real branch
-%% counting, and says so in its own doc comment. branch/5 (one fact per
-%% if/for/while/switch_case/ternary/catch/and/or — see each
-%% ts_extract_*.erl's own ?BRANCH_QUERIES for the exact node types per
-%% language) makes McCabe's actual "decision points + 1" computable.
-%%
-%% Erlang's multi-clause functions already give this the "+1" for free:
-%% a 3-clause `foo(0) -> ...; foo(N) -> ...; foo(_) -> ...` produces
-%% THREE defines/5 facts (one per clause, confirmed empirically), so
-%% counting defines/5 rows for one Fun/Arity/File generalizes the "+1"
-%% across languages — it's 1 for TypeScript/Bash (one function, one
-%% clause) and Clauses for Erlang (each extra clause already IS an
-%% extra decision point, same as a switch case).
-%%
-%% Caveat, not a bug: two decision points sharing the exact same source
-%% line collapse into one branch/5 fact, same as any other same-shape
-%% fact on the same line in this schema (facts dedupe by tuple equality,
-%% keyed on Line, not on a per-node byte offset) — undercounts in that
-%% case. Rare in normally-formatted code; a real limitation worth
-%% knowing before trusting a number here to the last integer.
-%% Distinct (Fun, Arity, File) groups are generated FIRST (findall+sort,
-%% backtracked via member/2) before either inner findall runs — the same
-%% fix file_define_count/2 above needed for the identical reason: Fun/
-%% Arity/File aren't in the inner findalls' own templates, so with
-%% nothing grounding them first, calling this with all three unbound
-%% (exactly what all_too_complex_real/1 does) would let them vary freely
-%% across every defines/5 fact in the whole database instead of grouping
-%% by one function — found the same way, by actually running
-%% all_too_complex_real(X) against a real codebase rather than trusting
-%% the bound-arguments test cases alone.
+
+%% ESLint complexity: https://eslint.org/docs/latest/rules/complexity
+%% McCabe complexity: clause count + branch count per (Fun,Arity,File) —
+%% groups are bound first (findall+sort+member), same reason as
+%% file_define_count/2. Caveat: two decision points on the same source
+%% line collapse into one branch/5 fact (undercounts).
 real_complexity(Fun, Arity, File, Count) :-
     findall(F-A-Fl, defines(F, A, _, Fl, _), AllDefs),
     sort(AllDefs, Defs),
@@ -389,17 +303,10 @@ all_too_complex_real(Ranked) :-
     reverse(Sorted, Ranked).
 
 %% --- Naming convention: id-length ---
-%%
-%% ESLint's `id-length` — a name so short it's likely to hurt
-%% readability (`f`, `x1`) rather than a deliberate, idiomatic
-%% abbreviation. erlog has no atom_concat/sub_atom (docs/erlang-mcp-
-%% design.md §6), but atom_length/2 works directly on the Fun atoms
-%% defines/5 already gives us — no new fact needed, unlike branch/5.
-%%
-%% Bare length alone is noisy without an escape hatch: `ok`, `id` are
-%% fine in most codebases. allow_short_name/1 is that escape hatch —
-%% edit it for this project's own conventions, same pattern as
-%% banned_target/2 above.
+
+%% ESLint id-length: https://eslint.org/docs/latest/rules/id-length
+%% Fun atoms shorter than 3 chars, minus an escape
+%% hatch (allow_short_name/1, edit for this project's own conventions).
 allow_short_name(ok).
 allow_short_name(id).
 
@@ -414,35 +321,17 @@ all_short_names(Triples) :-
     sort(Raw, Triples).
 
 %% --- Expression content, on top of expr/6 + literal/7 + expr_operand/3 + expr_ref/6 ---
-%%
-%% branch/5 says a decision point exists; these say what it actually
-%% compares — the "==" in an `if`, not just that an `if` is there. `Id`
-%% (a {File, StartByte, EndByte} byte span — see each ts_extract_*.erl's
-%% own node_id/2) is the first fact family in this schema keyed on real
-%% node identity rather than (Fun, Arity, File, Line) alone: a byte
-%% *span*, not start-byte alone, because a binary expression and its own
-%% leftmost operand routinely start at the same byte (`x == x`) — found
-%% empirically, by running this against a real snippet and seeing a
-%% collision, the same way file_define_count/2's and real_complexity/4's
-%% bugs above were found by actually running queries rather than trusting
-%% hand-built fixtures alone.
-%%
-%% Same existence_error caveat as branch/5 above (a codebase with zero
-%% expressions of some kind has zero clauses for that predicate, and
-%% erlog errors rather than failing cleanly) — one sentinel clause per
-%% new predicate, same reasoning as branch/5's.
+%% (byte-span Id; Erlang/TypeScript only)
+
 expr(none, none, 0, none, none, 0) :- fail.
 expr_operator(none, none) :- fail.
 expr_operand(none, none, none) :- fail.
 literal(none, none, 0, none, none, none, 0) :- fail.
 expr_ref(none, none, 0, none, none, 0) :- fail.
 
-%% x == x / x === x (or Erlang's X == X) — the "no-self-compare" shape.
-%% Scoped to the simple case: both operands are a bare reference to the
-%% same name. Not full structural equality of two arbitrary
-%% sub-expressions (e.g. `f(x) == f(x)`) — that would need recursive
-%% term comparison across the whole operand tree, a real simplification,
-%% not hidden.
+%% ESLint no-self-compare: https://eslint.org/docs/latest/rules/no-self-compare
+%% x == x / x === x — bare-reference self-comparison only, not deep
+%% structural equality of two arbitrary sub-expressions.
 self_compare(Id, Fun, Arity, File, Line) :-
     expr(Id, Fun, Arity, binary, File, Line),
     expr_operator(Id, Op),
@@ -454,8 +343,9 @@ all_self_compares(Triples) :-
     findall(Fun-Arity-File, self_compare(_Id, Fun, Arity, File, _Line), Raw),
     sort(Raw, Triples).
 
-%% A literal on the left of a comparison, a non-literal on the right —
-%% "Yoda" condition order (`0 === x` instead of `x === 0`).
+%% ESLint yoda: https://eslint.org/docs/latest/rules/yoda
+%% A literal on the left, non-literal on the right of a comparison —
+%% "Yoda" condition order.
 yoda_condition(Id, Fun, Arity, File, Line) :-
     expr(Id, Fun, Arity, binary, File, Line),
     expr_operator(Id, Op),
@@ -468,25 +358,14 @@ all_yoda_conditions(Triples) :-
     sort(Raw, Triples).
 
 %% --- Variables and scope (TypeScript only), on top of scope/4 + var_decl/6 + var_ref/6 + resolves_to/2 ---
-%%
-%% The single biggest gap the ESLint-support review turned up: this
-%% project tracks functions, calls, branches and expressions, never a
-%% variable. Unlike branch/5 or expr/6, this genuinely needed real
-%% scope containment computed at extraction time (ts_extract_typescript.erl's
-%% scope_facts/3), not just one more query — an unused-variable check
-%% that ignored scope would confuse one function's unused `x` with an
-%% unrelated `x` read in a completely different function.
-%%
-%% Same existence_error-on-zero-clauses guard as branch/5 and expr/6.
+
 scope(none, none, none, none) :- fail.
 var_decl(none, none, none, none, none, 0) :- fail.
 var_ref(none, none, none, none, none, 0) :- fail.
 resolves_to(none, none) :- fail.
 
-%% Declared but never read (or read_write'd, e.g. `+=`) afterward.
-%% Parameters excluded on purpose: an intentionally-unused parameter
-%% (`function(_req, res)`-style) is a much noisier, more debatable
-%% signal than an unused local, and this isn't trying to settle that.
+%% ESLint no-unused-vars: https://eslint.org/docs/latest/rules/no-unused-vars
+%% Declared (non-param) but never read/read_write'd afterward.
 unused_var(Id, Name, File, Line) :-
     var_decl(Id, Name, Kind, _Scope, File, Line),
     Kind \= param,
@@ -496,10 +375,8 @@ all_unused_vars(Triples) :-
     findall(Name-File-Line, unused_var(_Id, Name, File, Line), Raw),
     sort(Raw, Triples).
 
-%% An inner declaration whose own scope is nested inside an outer
-%% declaration's scope, same Name — real shadowing, not a same-scope
-%% redeclaration (that's a different, stricter question this doesn't
-%% ask: two decls sharing one scope exactly, not one nested in the other).
+%% ESLint no-shadow: https://eslint.org/docs/latest/rules/no-shadow
+%% Shadowing: an inner decl nested inside an outer decl's scope, same name.
 scope_ancestor(Scope, Ancestor) :- scope(Scope, _Kind, Ancestor, _File).
 scope_ancestor(Scope, Ancestor) :-
     scope(Scope, _Kind, Parent, _File), Parent \= none, scope_ancestor(Parent, Ancestor).
@@ -514,15 +391,11 @@ all_shadowed_vars(Triples) :-
     findall(Name-File-Line, shadowed_var(_InnerId, _OuterId, Name, File, Line), Raw),
     sort(Raw, Triples).
 
-%% --- More rules on the same scope facts — no new extraction needed ---
-%%
-%% Same existence_error guard as every other data-derived predicate
-%% above, for the one new fact this batch adds.
 var_decl_initialized(none) :- fail.
 
-%% A `let` never reassigned after its own declaration should be a
-%% `const` — var_decl_initialized/1 guards against ever suggesting
-%% `const x;` for a bare, initializer-less `let x;` (not valid syntax).
+%% ESLint prefer-const: https://eslint.org/docs/latest/rules/prefer-const
+%% A never-reassigned `let` should be a `const` (var_decl_initialized/1
+%% excludes a bare, initializer-less `let x;`).
 prefer_const(Id, Name, File, Line) :-
     var_decl(Id, Name, 'let', _Scope, File, Line),
     var_decl_initialized(Id),
@@ -532,10 +405,9 @@ all_prefer_const(Triples) :-
     findall(Name-File-Line, prefer_const(_Id, Name, File, Line), Raw),
     sort(Raw, Triples).
 
-%% Two declarations of the SAME name in the EXACT same scope — not one
-%% nested inside the other (shadowed_var/5's question). EarlierId is
-%% whichever comes first by line, so the report always names the real
-%% redeclaration site, not an arbitrary one of the two.
+%% ESLint no-redeclare: https://eslint.org/docs/latest/rules/no-redeclare
+%% Same name declared twice in the exact same scope (not shadowed_var/5's
+%% nested-scope question).
 redeclared_var(EarlierId, LaterId, Name, File, LaterLine) :-
     var_decl(EarlierId, Name, _EK, Scope, File, EarlierLine),
     var_decl(LaterId, Name, _LK, Scope, File, LaterLine),
@@ -546,8 +418,9 @@ all_redeclared_vars(Triples) :-
     findall(Name-File-Line, redeclared_var(_E, _L, Name, File, Line), Raw),
     sort(Raw, Triples).
 
-%% A declaration named after one of JS's own restricted identifiers —
-%% edit this table if this project's own runtime has more to add.
+%% ESLint no-shadow-restricted-names: https://eslint.org/docs/latest/rules/no-shadow-restricted-names
+%% A declaration named after a JS restricted identifier — edit
+%% restricted_name/1 for this project's own runtime.
 restricted_name('undefined').
 restricted_name('NaN').
 restricted_name('Infinity').
@@ -562,9 +435,8 @@ all_restricted_name_shadows(Triples) :-
     findall(Name-File-Line, shadows_restricted_name(_Id, Name, File, Line), Raw),
     sort(Raw, Triples).
 
-%% A reference that resolves to a declaration textually AFTER it — a
-%% real ReferenceError for let/const (the temporal dead zone), a softer
-%% "silently undefined until reached" bug for var, reported either way.
+%% ESLint no-use-before-define: https://eslint.org/docs/latest/rules/no-use-before-define
+%% A reference resolving to a declaration that comes later in the file.
 use_before_define(RefId, DeclId, Name, File, RefLine) :-
     resolves_to(RefId, DeclId),
     DeclId \= undefined,
@@ -576,12 +448,8 @@ all_use_before_define(Triples) :-
     findall(Name-File-Line, use_before_define(_R, _D, Name, File, Line), Raw),
     sort(Raw, Triples).
 
-%% A small, editable set of ambient/global names common to Node and
-%% browser JS/TS — edit for this project's own runtime. The one thing
-%% that turns resolves_to(_, undefined) (see scope/4's own doc comment
-%% — it means "not declared in anything tracked," not "definitely a
-%% bug") into a real no-undef check: everything in this table is a
-%% real global, not a mistake, so it's excluded rather than flagged.
+%% Ambient/global names common to Node and browser JS/TS — edit for this
+%% project's own runtime.
 known_global(console). known_global('Math'). known_global('JSON').
 known_global('Object'). known_global('Array'). known_global('String').
 known_global('Number'). known_global('Boolean'). known_global('Symbol').
@@ -598,6 +466,8 @@ known_global(setTimeout). known_global(clearTimeout). known_global(setInterval).
 known_global(clearInterval). known_global(fetch). known_global('URL').
 known_global('URLSearchParams'). known_global('Buffer'). known_global(structuredClone).
 
+%% ESLint no-undef: https://eslint.org/docs/latest/rules/no-undef
+%% A reference with no tracked declaration and not a known global.
 undeclared_var(RefId, Name, File, Line) :-
     resolves_to(RefId, undefined),
     var_ref(RefId, Name, _Scope, _RK, File, Line),
@@ -608,18 +478,11 @@ all_undeclared_vars(Triples) :-
     sort(Raw, Triples).
 
 %% --- `new` expressions, on top of calls/5's new(Constructor, ArgCount) shape + bare_new/5 ---
-%%
-%% `new X(...)` is modeled as one more calls/5 CallSpec, the same way a
-%% call's shape already varies by language (local/member/remote) — see
-%% ts_extract_typescript.erl's new_calls/4. Only bare_new/5 (no_new/4
-%% below) is a genuinely new predicate; everything else here is plain
-%% Prolog over calls/5, same as risky_call/3's own pattern.
+
 bare_new(none, 0, none, none, 0) :- fail.
 
-%% A constructed value discarded outright (`new Logger();` as its own
-%% statement) — almost always a mistake unless the constructor has a
-%% real side effect, which this can't tell either way; flag and let a
-%% human judge.
+%% ESLint no-new: https://eslint.org/docs/latest/rules/no-new
+%% A constructed value discarded outright (`new Logger();` as its own statement).
 no_new(Caller, Arity, Constructor, File, Line) :-
     bare_new(Caller, Arity, Constructor, File, Line).
 
@@ -627,9 +490,8 @@ all_no_new(Triples) :-
     findall(Constructor-File-Line, no_new(_C, _A, Constructor, File, Line), Raw),
     sort(Raw, Triples).
 
-%% `new String(...)`/`new Number(...)`/`new Boolean(...)` build a boxed
-%% wrapper object, not the primitive — a classic footgun (`new
-%% Boolean(false) == true` in a truthiness check).
+%% ESLint no-new-wrappers: https://eslint.org/docs/latest/rules/no-new-wrappers
+%% new String/Number/Boolean — a boxed wrapper, not the primitive.
 no_new_wrapper(Caller, Arity, Constructor, File, Line) :-
     calls(Caller, Arity, new(Constructor, _ArgCount), File, Line),
     member(Constructor, ['String', 'Number', 'Boolean']).
@@ -638,9 +500,8 @@ all_no_new_wrappers(Triples) :-
     findall(Constructor-File-Line, no_new_wrapper(_C, _A, Constructor, File, Line), Raw),
     sort(Raw, Triples).
 
-%% `new Function(...)` compiles a string as code, the same risk class
-%% as `eval` — already in banned_target/2's spirit, but Function is a
-%% constructor call, not a member call, so it needs its own rule.
+%% ESLint no-new-func: https://eslint.org/docs/latest/rules/no-new-func
+%% new Function(...) compiles a string as code — same risk class as eval.
 no_new_func(Caller, Arity, File, Line) :-
     calls(Caller, Arity, new('Function', _ArgCount), File, Line).
 
@@ -648,10 +509,8 @@ all_no_new_func(Triples) :-
     findall(File-Line, no_new_func(_C, _A, File, Line), Raw),
     sort(Raw, Triples).
 
-%% `Object()`/`new Object()` with no arguments is always exactly `{}` —
-%% checked with or without `new`, since a bare call works identically
-%% in JS/TS (calls/5's existing local(...) shape already covers the
-%% bare half, no new extraction needed for it).
+%% ESLint no-object-constructor: https://eslint.org/docs/latest/rules/no-object-constructor
+%% Object()/new Object() with no arguments is always exactly {}.
 no_object_constructor(Caller, Arity, File, Line) :-
     ( calls(Caller, Arity, new('Object', 0), File, Line)
     ; calls(Caller, Arity, local('Object', 0), File, Line)
@@ -661,11 +520,8 @@ all_no_object_constructors(Triples) :-
     findall(File-Line, no_object_constructor(_C, _A, File, Line), Raw),
     sort(Raw, Triples).
 
-%% `new RegExp(...)`/`RegExp(...)` — a regex *literal* (`/a+/`) is
-%% preferred when the pattern is static text; this can't tell a static
-%% string apart from a dynamically-built one (that needs literal/7's
-%% Value, a further check this doesn't make), so it flags every call
-%% and leaves the "was the pattern actually static" judgment to a human.
+%% ESLint prefer-regex-literals: https://eslint.org/docs/latest/rules/prefer-regex-literals
+%% new RegExp(...)/RegExp(...) — prefer a literal /pattern/ when static.
 prefer_regex_literal(Caller, Arity, File, Line) :-
     ( calls(Caller, Arity, new('RegExp', _), File, Line)
     ; calls(Caller, Arity, local('RegExp', _), File, Line)
@@ -675,11 +531,8 @@ all_prefer_regex_literals(Triples) :-
     findall(File-Line, prefer_regex_literal(_C, _A, File, Line), Raw),
     sort(Raw, Triples).
 
-%% A constructor name that doesn't start with a capital letter — atom_codes
-%% on the *letters* 'a'/'z' rather than a `0'a`-style char-code literal,
-%% the same safe-derivation technique short_name/4 already uses (erlog's
-%% reader support for that literal syntax was never verified, so this
-%% never needed to rely on it).
+%% ESLint new-cap: https://eslint.org/docs/latest/rules/new-cap
+%% A constructor name that doesn't start with a capital letter.
 lowercase_constructor(Caller, Arity, Constructor, File, Line) :-
     calls(Caller, Arity, new(Constructor, _ArgCount), File, Line),
     atom_codes(Constructor, [C | _]),
@@ -691,26 +544,12 @@ all_lowercase_constructors(Triples) :-
     sort(Raw, Triples).
 
 %% --- Imports and exports, on top of import_decl/4 + export_decl/4 (+ var_decl/6's new 'import' Kind) ---
-%%
-%% Import bindings are ordinary var_decl/6 facts (Kind='import') — see
-%% ts_extract_typescript.erl's imports/5 — so unused_var/4, shadowed_var/5
-%% etc. above already apply to an unused/shadowed import for free; the
-%% two facts here (import_decl/4, export_decl/4) exist for what those
-%% can't answer: which MODULE a name came from, and what a file makes
-%% PUBLIC. sort-imports is deliberately not built here — it needs each
-%% binding tied back to which import STATEMENT introduced it, a
-%% per-statement grouping key this pass doesn't have cheaply (var_decl/6
-%% alone can't tell two same-line bindings from the same import apart
-%% from two coincidentally-same-line bindings from different ones), and
-%% it's the most purely stylistic of this whole group — a reasoned
-%% skip, not an oversight.
+
 import_decl(none, none, 0) :- fail.
 export_decl(none, none, none, 0) :- fail.
 
-%% The same module path imported in more than one separate
-%% import_statement. EarlierLine/LaterLine ordered the same way
-%% redeclared_var/5 orders its two occurrences, so the report always
-%% names the real second (redundant) import, not an arbitrary one.
+%% ESLint no-duplicate-imports: https://eslint.org/docs/latest/rules/no-duplicate-imports
+%% The same module path imported more than once in a file.
 duplicate_import(Module, File, EarlierLine, LaterLine) :-
     import_decl(Module, File, EarlierLine),
     import_decl(Module, File, LaterLine),
@@ -720,12 +559,9 @@ all_duplicate_imports(Triples) :-
     findall(Module-File-Line, duplicate_import(Module, File, _E, Line), Raw),
     sort(Raw, Triples).
 
-%% A small, editable set of commonly-restricted modules — genuinely
-%% project-specific (unlike known_global/1's list, there's no universal
-%% "always risky" import the way there's a universal set of real
-%% globals), so this ships with a couple of realistic, commonly-cited
-%% examples rather than either an empty table or a false claim of
-%% universality. Edit for this project's own conventions.
+%% ESLint no-restricted-imports: https://eslint.org/docs/latest/rules/no-restricted-imports
+%% A project-banned import — edit restricted_module/1 for this project's
+%% own conventions.
 restricted_module(moment).
 restricted_module(lodash).
 
@@ -737,12 +573,8 @@ all_restricted_imports(Triples) :-
     findall(Module-File-Line, restricted_import(Module, File, Line), Raw),
     sort(Raw, Triples).
 
-%% Same reasoning as restricted_module/1 — genuinely project-specific,
-%% shipped with one realistic illustrative example (a team that wants
-%% every module to use named exports, banning `export default`
-%% entirely, restricts the literal name 'default' — see export_decl/4's
-%% own doc comment for why that's the real exported name of a default
-%% export, not whatever expression fills it).
+%% ESLint no-restricted-exports: https://eslint.org/docs/latest/rules/no-restricted-exports
+%% A project-banned export name — edit restricted_export_name/1.
 restricted_export_name('default').
 
 restricted_export(Name, Kind, File, Line) :-
@@ -754,15 +586,8 @@ all_restricted_exports(Triples) :-
     sort(Raw, Triples).
 
 %% --- Statement/block structure, on top of stmt_block/6 + stmt/6 + last_switch_case/1 + braceless_body/5 + return_stmt/5 ---
-%%
-%% The last unbuilt bucket from the ESLint review, and less uniform
-%% than it looked: curly/consistent_return needed nothing beyond a flat
-%% per-node fact each (braceless_body/5, return_stmt/5); no_empty_block,
-%% unreachable_stmt, no_fallthrough_case needed the one genuinely new
-%% capability nothing before this had — a statement's *position* within
-%% its block, not just that it exists. TypeScript only (Erlang has no
-%% brace-optional if/for/while and no separate `return` statement at
-%% all — every rule here is a JS/TS-specific concept).
+%% (TypeScript only)
+
 stmt_block(none, none, 0, none, none, 0) :- fail.
 stmt(none, none, 0, none, none, 0) :- fail.
 last_switch_case(none) :- fail.
@@ -774,11 +599,9 @@ terminator_kind('throw_statement').
 terminator_kind('break_statement').
 terminator_kind('continue_statement').
 
-%% A real {} block with zero statements — switch_case/switch_default
-%% deliberately excluded: an empty case immediately followed by another
-%% (`case 1: case 2: ...`) is idiomatic stacking, not this rule's
-%% concern (no_fallthrough_case/5 below is the one that cares, and
-%% explicitly allows it).
+%% ESLint no-empty: https://eslint.org/docs/latest/rules/no-empty
+%% A real {} block with zero statements (switch cases excluded — see
+%% no_fallthrough_case/5, which allows an empty case to stack).
 no_empty_block(BlockId, Fun, Arity, File, Line) :-
     stmt_block(BlockId, Fun, Arity, block, File, Line),
     \+ stmt(_, BlockId, _, _, _, _).
@@ -787,11 +610,8 @@ all_no_empty_blocks(Triples) :-
     findall(Fun-Arity-File-Line, no_empty_block(_BlockId, Fun, Arity, File, Line), Raw),
     sort(Raw, Triples).
 
-%% Any statement whose Index comes after some terminator statement's
-%% Index in the SAME block — stmt/6's Index can have gaps (a filtered-
-%% out comment leaves its own slot empty), which is harmless here since
-%% this only ever compares Index values with `>`, never assumes they're
-%% contiguous.
+%% ESLint no-unreachable: https://eslint.org/docs/latest/rules/no-unreachable
+%% A statement after a terminator (return/throw/break/continue) in the same block.
 unreachable_stmt(Id, BlockId, File, Line) :-
     stmt(_TermId, BlockId, TermIndex, TermKind, _, _),
     terminator_kind(TermKind),
@@ -802,10 +622,8 @@ all_unreachable_stmts(Triples) :-
     findall(File-Line, unreachable_stmt(_Id, _BlockId, File, Line), Raw),
     sort(Raw, Triples).
 
-%% A switch_case/switch_default that (a) isn't the last one in its
-%% switch, (b) has at least one statement (an empty case is allowed to
-%% stack into the next — the ONLY exemption this rule has), and (c)
-%% whose last statement isn't a terminator.
+%% ESLint no-fallthrough: https://eslint.org/docs/latest/rules/no-fallthrough
+%% A non-last, non-empty switch case whose last statement isn't a terminator.
 no_fallthrough_case(BlockId, Fun, Arity, File, Line) :-
     stmt_block(BlockId, Fun, Arity, Kind, File, Line),
     member(Kind, [switch_case, switch_default]),
@@ -820,8 +638,8 @@ all_no_fallthrough_cases(Triples) :-
     findall(Fun-Arity-File-Line, no_fallthrough_case(_BlockId, Fun, Arity, File, Line), Raw),
     sort(Raw, Triples).
 
-%% An if/else/for/while whose body is a single bare statement, not a
-%% real {} block.
+%% ESLint curly: https://eslint.org/docs/latest/rules/curly
+%% An if/else/for/while whose body is a single bare statement, not a real block.
 curly_violation(Fun, Arity, Kind, File, Line) :-
     braceless_body(Fun, Arity, Kind, File, Line).
 
@@ -829,10 +647,8 @@ all_curly_violations(Triples) :-
     findall(Fun-Arity-Kind-File-Line, curly_violation(Fun, Arity, Kind, File, Line), Raw),
     sort(Raw, Triples).
 
-%% A function with at least one `return` that specifies a value AND at
-%% least one that doesn't — no control-flow-path analysis needed at
-%% all, real ESLint semantics just check the whole function's returns
-%% for consistency.
+%% ESLint consistent-return: https://eslint.org/docs/latest/rules/consistent-return
+%% A function with at least one value-returning `return` and at least one bare one.
 inconsistent_return(Fun, Arity, File) :-
     return_stmt(Fun, Arity, true, File, _),
     return_stmt(Fun, Arity, false, File, _).
@@ -840,3 +656,168 @@ inconsistent_return(Fun, Arity, File) :-
 all_inconsistent_returns(Triples) :-
     findall(Fun-Arity-File, inconsistent_return(Fun, Arity, File), Raw),
     sort(Raw, Triples).
+
+%% --- Newly-provable ESLint rules, on top of the fact families above (no new extraction) ---
+
+%% ESLint no-const-assign: https://eslint.org/docs/latest/rules/no-const-assign
+%% A `const` with a later write/read_write reference resolving to it.
+%% Reported at the offending reference's own site, not the declaration's.
+no_const_assign(RefId, Name, File, Line) :-
+    var_decl(DeclId, Name, const, _Scope, _DeclFile, _DeclLine),
+    resolves_to(RefId, DeclId),
+    var_ref(RefId, _, _, RK, File, Line),
+    member(RK, [write, read_write]).
+
+all_no_const_assigns(Triples) :-
+    findall(Name-File-Line, no_const_assign(_RefId, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-unassigned-vars: https://eslint.org/docs/latest/rules/no-unassigned-vars
+%% A var/let with no initializer, read somewhere, but never written
+%% anywhere (stays undefined forever).
+unassigned_var(Id, Name, File, Line) :-
+    var_decl(Id, Name, Kind, _Scope, File, Line),
+    member(Kind, [var, 'let']),
+    \+ var_decl_initialized(Id),
+    resolves_to(RefId, Id),
+    var_ref(RefId, _, _, read, _, _),
+    \+ (resolves_to(RefId2, Id), var_ref(RefId2, _, _, RK2, _, _), member(RK2, [write, read_write])).
+
+all_unassigned_vars(Triples) :-
+    findall(Name-File-Line, unassigned_var(_Id, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-case-declarations: https://eslint.org/docs/latest/rules/no-case-declarations
+%% A lexical/function/class declaration directly inside a
+%% switch_case/switch_default (no block of its own).
+case_declaration(StmtId, Fun, Arity, File, Line) :-
+    stmt_block(BlockId, Fun, Arity, Kind, File, _BLine),
+    member(Kind, [switch_case, switch_default]),
+    stmt(StmtId, BlockId, _Index, DeclKind, File, Line),
+    member(DeclKind, ['lexical_declaration', 'function_declaration', 'class_declaration']).
+
+all_case_declarations(Triples) :-
+    findall(Fun-Arity-File-Line, case_declaration(_StmtId, Fun, Arity, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-debugger: https://eslint.org/docs/latest/rules/no-debugger
+%% A `debugger;` statement.
+no_debugger(Id, File, Line) :- stmt(Id, _BlockId, _Index, 'debugger_statement', File, Line).
+
+all_no_debuggers(Pairs) :-
+    findall(File-Line, no_debugger(_Id, File, Line), Raw),
+    sort(Raw, Pairs).
+
+%% ESLint no-continue: https://eslint.org/docs/latest/rules/no-continue
+%% A `continue` statement.
+no_continue(Id, File, Line) :- stmt(Id, _BlockId, _Index, 'continue_statement', File, Line).
+
+all_no_continues(Pairs) :-
+    findall(File-Line, no_continue(_Id, File, Line), Raw),
+    sort(Raw, Pairs).
+
+%% ESLint no-with: https://eslint.org/docs/latest/rules/no-with
+%% A `with (...) { ... }` statement.
+no_with(Id, File, Line) :- stmt(Id, _BlockId, _Index, 'with_statement', File, Line).
+
+all_no_withs(Pairs) :-
+    findall(File-Line, no_with(_Id, File, Line), Raw),
+    sort(Raw, Pairs).
+
+%% ESLint no-new-native-nonconstructor: https://eslint.org/docs/latest/rules/no-new-native-nonconstructor
+%% `new Symbol(...)`/`new BigInt(...)`, both callable but not constructible.
+%% Same banned-constructor-list shape as no_new_wrapper/5.
+no_new_native_nonconstructor(Caller, Arity, Constructor, File, Line) :-
+    calls(Caller, Arity, new(Constructor, _ArgCount), File, Line),
+    member(Constructor, ['Symbol', 'BigInt']).
+
+all_no_new_native_nonconstructors(Triples) :-
+    findall(Constructor-File-Line, no_new_native_nonconstructor(_C, _A, Constructor, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint init-declarations: https://eslint.org/docs/latest/rules/init-declarations
+%% (default "always" mode) — a var/let with no initializer.
+uninitialized_declaration(Id, Name, Kind, File, Line) :-
+    var_decl(Id, Name, Kind, _Scope, File, Line),
+    member(Kind, [var, 'let']),
+    \+ var_decl_initialized(Id).
+
+all_uninitialized_declarations(Triples) :-
+    findall(Name-Kind-File-Line, uninitialized_declaration(_Id, Name, Kind, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-param-reassign: https://eslint.org/docs/latest/rules/no-param-reassign
+%% A parameter with a later write/read_write reference resolving to it.
+%% Reported at the offending reference's own site.
+param_reassign(RefId, Name, File, Line) :-
+    var_decl(DeclId, Name, param, _Scope, _DeclFile, _DeclLine),
+    resolves_to(RefId, DeclId),
+    var_ref(RefId, _, _, RK, File, Line),
+    member(RK, [write, read_write]).
+
+all_param_reassigns(Triples) :-
+    findall(Name-File-Line, param_reassign(_RefId, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-var: https://eslint.org/docs/latest/rules/no-var
+%% A `var` declaration.
+no_var(Id, Name, File, Line) :- var_decl(Id, Name, var, _Scope, File, Line).
+
+all_no_vars(Triples) :-
+    findall(Name-File-Line, no_var(_Id, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-void: https://eslint.org/docs/latest/rules/no-void
+%% A `void` unary operator.
+void_operator(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, unary, File, Line),
+    expr_operator(Id, 'void').
+
+all_void_operators(Triples) :-
+    findall(Fun-Arity-File, void_operator(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-delete-var: https://eslint.org/docs/latest/rules/no-delete-var
+%% `delete` on a bare identifier (not a property: expr_operand's ChildId
+%% only unifies with expr_ref/6 for a bare name).
+delete_var(Id, Name, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, unary, File, Line),
+    expr_operator(Id, 'delete'),
+    expr_operand(Id, operand, R),
+    expr_ref(R, _, _, Name, _, _).
+
+all_delete_vars(Triples) :-
+    findall(Name-Fun-Arity-File, delete_var(_Id, Name, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint max-statements: https://eslint.org/docs/latest/rules/max-statements
+%% stmt/6 has no Fun/Arity of its own, so groups are found by joining
+%% through stmt_block/6 (the same "bind the grouping key first" fix
+%% file_define_count/2 and real_complexity/4 already need).
+%% Fun \= undefined excludes the caller-attribution fallback (code with no
+%% named enclosing function — an anonymous `describe`/`it` callback body,
+%% top-level module statements): every such block in one file shares the
+%% same undefined/undefined "group," so without this guard they'd all get
+%% merged into one bogus, wildly inflated count instead of being left out
+%% (the same coverage gap real_complexity/4 already has for the same
+%% functions, since they have no defines/5 fact either — not a new
+%% limitation, just one this predicate would otherwise mask as a false
+%% violation instead of a silent omission).
+statement_count(Fun, Arity, File, Count) :-
+    findall(F-A-Fl, ( stmt_block(_, F, A, _, Fl, _), F \= undefined ), AllGroupsRaw),
+    sort(AllGroupsRaw, Groups),
+    member(Fun-Arity-File, Groups),
+    findall(Id,
+        ( stmt_block(BlockId, Fun, Arity, _, File, _),
+          stmt(Id, BlockId, _, _, _, _) ),
+        Ids),
+    length(Ids, Count).
+
+too_many_statements(Fun, Arity, File, Count) :-
+    statement_count(Fun, Arity, File, Count),
+    Count > 10.
+
+all_too_many_statements(Ranked) :-
+    findall(Count-Fun-Arity-File, too_many_statements(Fun, Arity, File, Count), Raw),
+    sort(Raw, Sorted),
+    reverse(Sorted, Ranked).
