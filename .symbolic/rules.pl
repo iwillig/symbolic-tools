@@ -2,6 +2,18 @@
 %% (override with -rules/-no-rules). calls/5 = calls(Caller, CallerArity,
 %% CallSpec, File, Line); most rules below leave CallerArity unbound.
 
+%% Sentinel: keeps calls/5 defined so a tree with zero function-call sites
+%% at all fails cleanly instead of raising existence_error, same
+%% convention as branch/5, export/4, comment/3, etc. below. This project's
+%% own prior assumption ("a real parse always has calls in it" — see
+%% test/symbolic_query_tests.erl's truly_uncalled fixture comments) turned
+%% out to be false: a real TS file containing only expressions and no
+%% actual invocations (verified live) produces zero calls/5 facts, and
+%% every predicate built directly on calls/5 with no other guard —
+%% callees/2, no_new_wrapper/5, banned_call/4, and more, all below —
+%% shared this same latent crash until now.
+calls(none, 0, none, none, 0) :- fail.
+
 %% Everything Fun calls, deduplicated (bare name, arity-blind).
 callees(Fun, Callees) :-
     findall(C, calls(Fun, _CallerArity, C, _, _), Raw),
@@ -895,3 +907,401 @@ all_too_many_statements(Ranked) :-
     findall(Count-Fun-Arity-File, too_many_statements(Fun, Arity, File, Count), Raw),
     sort(Raw, Sorted),
     reverse(Sorted, Ranked).
+
+%% --- Round 2 of previously-"feasible" ESLint rules, now written ---
+%%
+%% Two of these (invalid_typeof/5, no_implicit_coercion/5) are narrower
+%% than ESLint's own rule: erlog's Prolog reader has NO literal syntax for
+%% a binary at all — confirmed empirically, `X = <<"">>` is a hard parse
+%% error (`{1,erlog_parse,{operator_expected,[]}}`), and neither `''` nor
+%% `""` unifies with a real string-literal Value (which the extractor
+%% stores as an Erlang binary — see docs/prolog-schema.md and the
+%% dialect notes in this project's own agent-facing docs). So a rule that
+%% needs to compare a literal's actual string CONTENT against a fixed
+%% constant (a type-name set, an empty string) cannot be written here at
+%% all — each such case below is scoped down to what's left provable
+%% rather than papered over with a wrong match.
+
+%% Sentinel: keeps comment/3 defined so a tree with zero comments (proven
+%% live: a real TS file with no `//`/`/* */` at all) fails cleanly instead
+%% of raising existence_error, same convention as branch/5, export/4, etc.
+%% above. This was a LATENT gap in undocumented_comment/3 too (already in
+%% this library, above) — it just never hit a fixture with zero comment
+%% facts until inline_comment/3 below did.
+comment(none, 0, none) :- fail.
+
+%% ESLint no-compare-neg-zero: https://eslint.org/docs/latest/rules/no-compare-neg-zero
+%% `x === -0` (or ==/!=/!==) — a negative literal is a unary '-' wrapping a
+%% positive literal.number 0 (confirmed against a real TS parse: `x===-0`
+%% is expr(unary,'-') -> expr_operand(operand,_) -> literal(number,0)),
+%% exactly the shape yoda_condition/5 already establishes. LitKind varies
+%% by language — TS/JS use 'number' for everything, Erlang splits it into
+%% 'integer'/'float' (confirmed against a real Erlang parse) — so all
+%% three are checked, with `=:=` for numeric (not term) equality to 0.
+no_compare_neg_zero(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, binary, File, Line),
+    expr_operator(Id, Op),
+    member(Op, ['==', '===', '!=', '!==']),
+    ( expr_operand(Id, left, Side) ; expr_operand(Id, right, Side) ),
+    expr(Side, _, _, unary, _, _),
+    expr_operator(Side, '-'),
+    expr_operand(Side, operand, LitId),
+    literal(LitId, _, _, LitKind, Value, _, _),
+    member(LitKind, [number, integer, float]),
+    Value =:= 0.
+
+all_no_compare_neg_zeros(Triples) :-
+    findall(Fun-Arity-File, no_compare_neg_zero(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-prototype-builtins: https://eslint.org/docs/latest/rules/no-prototype-builtins
+%% obj.hasOwnProperty(...)/isPrototypeOf(...)/propertyIsEnumerable(...)
+%% called directly on an arbitrary object — Method-only match (unlike
+%% banned_call/4, this isn't tied to one specific Object, since any object
+%% can carry these inherited Object.prototype methods).
+no_prototype_builtin(Caller, Method, File, Line) :-
+    calls(Caller, _CallerArity, member(_Object, Method, _ArgCount), File, Line),
+    member(Method, [hasOwnProperty, isPrototypeOf, propertyIsEnumerable]).
+
+all_no_prototype_builtins(Triples) :-
+    findall(Caller-Method-File, no_prototype_builtin(Caller, Method, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-unsafe-negation: https://eslint.org/docs/latest/rules/no-unsafe-negation
+%% `!x < y` (parses as `(!x) < y`, almost always a typo for `!(x < y)`) —
+%% the left operand of a relational comparison is itself a `!` unary expr.
+%% Scoped to the numeric relational operators actually in this vocabulary
+%% (in/instanceof aren't extracted as expr_operator values).
+no_unsafe_negation(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, binary, File, Line),
+    expr_operator(Id, Op),
+    member(Op, ['<', '>', '<=', '>=', '=<']),
+    expr_operand(Id, left, Side),
+    expr(Side, _, _, unary, _, _),
+    expr_operator(Side, '!').
+
+all_no_unsafe_negations(Triples) :-
+    findall(Fun-Arity-File, no_unsafe_negation(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint use-isnan: https://eslint.org/docs/latest/rules/use-isnan
+%% `x == NaN` / `x === NaN` — NaN is a bare global, so it comes back as an
+%% expr_ref/6 (not a literal/7) on one side of the comparison; a direct
+%% comparison against NaN is always wrong (NaN is never == itself).
+use_isnan(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, binary, File, Line),
+    expr_operator(Id, Op),
+    member(Op, ['==', '===', '!=', '!==']),
+    ( expr_operand(Id, left, Side) ; expr_operand(Id, right, Side) ),
+    expr_ref(Side, _, _, 'NaN', _, _).
+
+all_use_isnans(Triples) :-
+    findall(Fun-Arity-File, use_isnan(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint valid-typeof: https://eslint.org/docs/latest/rules/valid-typeof
+%% `typeof x === <something not a string>` — e.g. `typeof x === 42` or
+%% `typeof x === true`. See the binary-literal note at the top of this
+%% section: this catches the always-wrong case (a non-string literal on
+%% the other side) but NOT a misspelled valid type name
+%% (`typeof x === "strnig"`), which needs string-content comparison this
+%% dialect cannot express.
+invalid_typeof(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, binary, File, Line),
+    expr_operator(Id, Op),
+    member(Op, ['==', '===', '!=', '!==']),
+    ( expr_operand(Id, left, TSide), expr_operand(Id, right, LitSide)
+    ; expr_operand(Id, right, TSide), expr_operand(Id, left, LitSide)
+    ),
+    expr(TSide, _, _, unary, _, _),
+    expr_operator(TSide, typeof),
+    literal(LitSide, _, _, LitKind, _, _, _),
+    LitKind \= string.
+
+all_invalid_typeofs(Triples) :-
+    findall(Fun-Arity-File, invalid_typeof(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint camelcase: https://eslint.org/docs/latest/rules/camelcase
+%% A defines/5 name containing an underscore — same atom_codes technique as
+%% short_name/4. NOTE: this is a JS/TS style convention; Erlang's own
+%% idiomatic naming is snake_case, so running this over a mixed-language
+%% tree flags every ordinary Erlang function name too — scope the query to
+%% specific Files yourself if mixing languages.
+not_camel_case(Fun, Arity, File, Line) :-
+    defines(Fun, Arity, _, File, Line),
+    atom_codes(Fun, Codes),
+    atom_codes('_', [U]),
+    member(U, Codes).
+
+all_not_camel_cases(Triples) :-
+    findall(Fun-Arity-File, not_camel_case(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint eqeqeq: https://eslint.org/docs/latest/rules/eqeqeq
+%% Require `===`/`!==` over `==`/`!=`. NOTE: expr_operator/2's '==' is
+%% shared vocabulary with Erlang's own (semantically different, often
+%% idiomatic) `==` — `!=` alone is unambiguous (Erlang's inequality
+%% operator is `/=`, never `!=`), but including `==` will over-flag
+%% ordinary Erlang comparisons on a mixed-language tree; scope by File
+%% yourself if mixing languages.
+loose_equality(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, binary, File, Line),
+    expr_operator(Id, Op),
+    member(Op, ['==', '!=']).
+
+all_loose_equalities(Triples) :-
+    findall(Fun-Arity-File, loose_equality(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint id-denylist: https://eslint.org/docs/latest/rules/id-denylist
+%% A defines/5 name on a project-specific denylist — edit
+%% denylisted_identifier/1 for this project's own conventions, same shape
+%% as allow_short_name/1 and restricted_module/1.
+denylisted_identifier(data).
+denylisted_identifier(e).
+denylisted_identifier(err).
+denylisted_identifier(cb).
+
+id_denylisted(Fun, Arity, File, Line) :-
+    defines(Fun, Arity, _, File, Line),
+    denylisted_identifier(Fun).
+
+all_id_denylisted(Triples) :-
+    findall(Fun-Arity-File, id_denylisted(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint max-lines: https://eslint.org/docs/latest/rules/max-lines
+%% Approximated via the highest defines/5 or calls/5 Line seen in a file —
+%% same count-based-proxy spirit as god_file/2, not an exact source line
+%% count (doc/comment/branch lines aren't included, so a file whose tail is
+%% pure comments is slightly undercounted). Default ESLint threshold (300).
+file_max_line(File, MaxLine) :-
+    findall(F, defines(_, _, _, F, _), DFiles),
+    findall(F2, calls(_, _, _, F2, _), CFiles),
+    append(DFiles, CFiles, AllFiles),
+    sort(AllFiles, Files),
+    member(File, Files),
+    findall(L, defines(_, _, _, File, L), DLines),
+    findall(L2, calls(_, _, _, File, L2), CLines),
+    append(DLines, CLines, AllLines),
+    sort(AllLines, SortedLines),
+    reverse(SortedLines, [MaxLine | _]).
+
+too_many_lines(File, MaxLine) :-
+    file_max_line(File, MaxLine),
+    MaxLine > 300.
+
+all_too_many_lines(Ranked) :-
+    findall(MaxLine-File, too_many_lines(File, MaxLine), Raw),
+    sort(Raw, Sorted),
+    reverse(Sorted, Ranked).
+
+%% ESLint no-alert: https://eslint.org/docs/latest/rules/no-alert
+%% A direct call to alert/confirm/prompt — the banned-local-call sibling to
+%% banned_call/4 (which only matches member(...) calls).
+no_alert(Caller, Arity, Name, File, Line) :-
+    calls(Caller, Arity, local(Name, _ArgCount), File, Line),
+    member(Name, [alert, confirm, prompt]).
+
+all_no_alerts(Triples) :-
+    findall(Name-File-Line, no_alert(_C, _A, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-array-constructor: https://eslint.org/docs/latest/rules/no-array-constructor
+%% `Array(...)`/`new Array(...)` with 0 or 2+ args — ArgCount is already
+%% tracked, so the one-arg "array of length N" idiom (`new Array(5)`) is
+%% correctly exempted, the same precision ESLint's own rule has.
+no_array_constructor(Caller, Arity, File, Line) :-
+    ( calls(Caller, Arity, new('Array', ArgCount), File, Line)
+    ; calls(Caller, Arity, local('Array', ArgCount), File, Line)
+    ),
+    ArgCount \= 1.
+
+all_no_array_constructors(Triples) :-
+    findall(File-Line, no_array_constructor(_C, _A, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-bitwise: https://eslint.org/docs/latest/rules/no-bitwise
+%% Verified against a real TS parse: &,|,^,~,<<,>>,>>> are exactly the
+%% expr_operator/2 atoms produced (no new extraction needed for TS/JS).
+%% Erlang's own bitwise operators (band/bor/bxor/bsl/bsr/bnot) are NOT
+%% covered — a tree-sitter query addition, out of scope for a rules-only
+%% change.
+no_bitwise(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, Kind, File, Line),
+    member(Kind, [binary, unary]),
+    expr_operator(Id, Op),
+    member(Op, ['&', '|', '^', '~', '<<', '>>', '>>>']).
+
+all_no_bitwises(Triples) :-
+    findall(Fun-Arity-File, no_bitwise(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-eq-null: https://eslint.org/docs/latest/rules/no-eq-null
+%% `x == null` / `x != null` — verified against a real TS parse: a `null`
+%% literal is literal(Id,_,_,null,null,_,_); LitKind alone (not Value) is
+%% enough to identify it, so this needs no binary-content comparison at all.
+no_eq_null(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, binary, File, Line),
+    expr_operator(Id, Op),
+    member(Op, ['==', '!=']),
+    ( expr_operand(Id, left, Side) ; expr_operand(Id, right, Side) ),
+    literal(Side, _, _, null, _, _, _).
+
+all_no_eq_nulls(Triples) :-
+    findall(Fun-Arity-File, no_eq_null(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-eval: https://eslint.org/docs/latest/rules/no-eval
+%% A direct call to `eval(...)`.
+no_eval(Caller, Arity, File, Line) :-
+    calls(Caller, Arity, local(eval, _ArgCount), File, Line).
+
+all_no_evals(Pairs) :-
+    findall(File-Line, no_eval(_C, _A, File, Line), Raw),
+    sort(Raw, Pairs).
+
+%% ESLint no-implicit-coercion: https://eslint.org/docs/latest/rules/no-implicit-coercion
+%% `!!x` (double negation), `~~x` (double bitwise-not), and a bare unary
+%% `+x` used for numeric coercion. NARROWER than ESLint's own rule: the
+%% `"" + x` string-coercion shape needs comparing a literal's Value against
+%% an empty-string constant, which this dialect cannot express (see the
+%% binary-literal note at the top of this section) — omitted rather than
+%% approximated into false positives on ordinary string concatenation.
+no_implicit_coercion(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, unary, File, Line),
+    expr_operator(Id, '!'),
+    expr_operand(Id, operand, Inner),
+    expr(Inner, _, _, unary, _, _),
+    expr_operator(Inner, '!').
+no_implicit_coercion(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, unary, File, Line),
+    expr_operator(Id, '~'),
+    expr_operand(Id, operand, Inner),
+    expr(Inner, _, _, unary, _, _),
+    expr_operator(Inner, '~').
+no_implicit_coercion(Id, Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, unary, File, Line),
+    expr_operator(Id, '+').
+
+all_no_implicit_coercions(Triples) :-
+    findall(Fun-Arity-File, no_implicit_coercion(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-implied-eval: https://eslint.org/docs/latest/rules/no-implied-eval
+%% A direct call to setTimeout/setInterval — ESLint's real rule only flags
+%% these when given a string argument (compiled as code, same risk as
+%% eval); ArgCount alone can't distinguish a string arg from a function
+%% arg, so this over-approximates by flagging every call regardless of
+%% argument type.
+no_implied_eval(Caller, Arity, Name, File, Line) :-
+    calls(Caller, Arity, local(Name, _ArgCount), File, Line),
+    member(Name, [setTimeout, setInterval]).
+
+all_no_implied_evals(Triples) :-
+    findall(Name-File-Line, no_implied_eval(_C, _A, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-inline-comments: https://eslint.org/docs/latest/rules/no-inline-comments
+%% Approximated: a comment/3 sharing its exact File+Line with a calls/5 or
+%% defines/5 fact — a real inline (same-line) comment almost always sits on
+%% a line that also has code creating one of those two fact kinds.
+inline_comment(File, Line, Text) :-
+    comment(File, Line, Text),
+    ( calls(_, _, _, File, Line) ; defines(_, _, _, File, Line) ).
+
+all_inline_comments(Triples) :-
+    findall(File-Line-Text, inline_comment(File, Line, Text), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-magic-numbers: https://eslint.org/docs/latest/rules/no-magic-numbers
+%% A numeric literal not in a small allowlist — edit magic_number_allowed/1
+%% for this project's own conventions (ESLint's own default allowlist is
+%% just 0 and 1; -1 added here as a second common sentinel value). LitKind
+%% varies by language — TS/JS use 'number' for everything, Erlang splits
+%% it into 'integer'/'float' (confirmed against a real Erlang parse: a
+%% source file with zero LitKind=number facts nonetheless had `42` as
+%% LitKind=integer and `3.5` as LitKind=float) — all three are checked,
+%% with both integer and float allowlist spellings so 1 and 1.0 are each
+%% recognized on their own representation (Prolog's exact-term match
+%% doesn't unify them with each other).
+magic_number_allowed(0).
+magic_number_allowed(1).
+magic_number_allowed(-1).
+magic_number_allowed(0.0).
+magic_number_allowed(1.0).
+magic_number_allowed(-1.0).
+
+magic_number(Id, Fun, Arity, File, Line) :-
+    literal(Id, Fun, Arity, LitKind, Value, File, Line),
+    member(LitKind, [number, integer, float]),
+    \+ magic_number_allowed(Value).
+
+all_magic_numbers(Triples) :-
+    findall(Fun-Arity-File, magic_number(_Id, Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-restricted-globals: https://eslint.org/docs/latest/rules/no-restricted-globals
+%% A direct call to a project-banned global function — edit
+%% restricted_global/1 for this project's own conventions, same
+%% banned-local-call shape as no_alert/5.
+restricted_global(event).
+restricted_global(name).
+restricted_global(history).
+
+no_restricted_global(Caller, Arity, Name, File, Line) :-
+    calls(Caller, Arity, local(Name, _ArgCount), File, Line),
+    restricted_global(Name).
+
+all_no_restricted_globals(Triples) :-
+    findall(Name-File-Line, no_restricted_global(_C, _A, Name, File, Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-ternary: https://eslint.org/docs/latest/rules/no-ternary
+%% branch/5 already has Kind=ternary for every conditional expression —
+%% this just names that existing fact as its own rule.
+no_ternary(Fun, Arity, File, Line) :-
+    branch(Fun, Arity, ternary, File, Line).
+
+all_no_ternaries(Triples) :-
+    findall(Fun-Arity-File, no_ternary(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-underscore-dangle: https://eslint.org/docs/latest/rules/no-underscore-dangle
+%% A defines/5 name starting or ending with `_` — same atom_codes
+%% technique as short_name/4 and not_camel_case/4.
+dangling_underscore(Fun) :-
+    atom_codes(Fun, Codes),
+    Codes \= [],
+    atom_codes('_', [U]),
+    ( Codes = [U | _]
+    ; reverse(Codes, [U | _])
+    ).
+
+no_underscore_dangle(Fun, Arity, File, Line) :-
+    defines(Fun, Arity, _, File, Line),
+    dangling_underscore(Fun).
+
+all_no_underscore_dangles(Triples) :-
+    findall(Fun-Arity-File, no_underscore_dangle(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint radix: https://eslint.org/docs/latest/rules/radix
+%% `parseInt(x)` with no radix argument — ArgCount already tracked.
+radix_missing(Caller, Arity, File, Line) :-
+    calls(Caller, Arity, local(parseInt, 1), File, Line).
+
+all_radix_missings(Pairs) :-
+    findall(File-Line, radix_missing(_C, _A, File, Line), Raw),
+    sort(Raw, Pairs).
+
+%% ESLint symbol-description: https://eslint.org/docs/latest/rules/symbol-description
+%% `Symbol()` with no description argument — ArgCount already tracked, the
+%% same shape as radix_missing/4.
+symbol_description_missing(Caller, Arity, File, Line) :-
+    calls(Caller, Arity, local('Symbol', 0), File, Line).
+
+all_symbol_description_missings(Pairs) :-
+    findall(File-Line, symbol_description_missing(_C, _A, File, Line), Raw),
+    sort(Raw, Pairs).

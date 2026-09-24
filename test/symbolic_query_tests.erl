@@ -1080,3 +1080,471 @@ stop_session(Pid) ->
     after 1000 ->
         ok
     end.
+
+%% --- Round 2 of previously-"feasible" ESLint rules ---
+%%
+%% Facts hand-built here, same reasoning as every other section above:
+%% isolates the Prolog rule from the extraction layer. Two sentinel
+%% regressions first — both found live, against a real TS parse with zero
+%% calls/5 and zero comment/3 facts, while building this round.
+
+calls_is_clean_with_zero_call_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "calls(_, _, _, _, _)"))
+    end).
+
+comment_is_clean_with_zero_comment_facts_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.erl', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "comment(_, _, _)"))
+    end).
+
+no_compare_neg_zero_flags_a_negated_zero_literal_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, cmp1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '==='},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 1, x, 'p.ts', 2},
+             {expr_operand, cmp1, right, neg1},
+             {expr, neg1, f, 1, unary, 'p.ts', 2},
+             {expr_operator, neg1, '-'},
+             {expr_operand, neg1, operand, lit1}, {literal, lit1, f, 1, number, 0, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_compare_neg_zero(_, f, 1, File, _)"))
+    end).
+
+%% Erlang's LitKind for whole numbers is 'integer', not TS/JS's 'number' —
+%% confirmed against a real Erlang parse. A regression for the fix: this
+%% used to be silently invisible to the rule. Uses Erlang's plain `==`
+%% (in the checked Op list) rather than `=:=`/`=/=` — this rule stays
+%% scoped to the JS/TS comparison vocabulary by design, same choice
+%% loose_equality/5 documents for the same reason.
+no_compare_neg_zero_flags_a_negated_zero_on_an_erlang_integer_literal_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.erl', 1},
+             {expr, cmp1, f, 1, binary, 'p.erl', 2},
+             {expr_operator, cmp1, '=='},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 1, x, 'p.erl', 2},
+             {expr_operand, cmp1, right, neg1},
+             {expr, neg1, f, 1, unary, 'p.erl', 2},
+             {expr_operator, neg1, '-'},
+             {expr_operand, neg1, operand, lit1}, {literal, lit1, f, 1, integer, 0, 'p.erl', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.erl'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_compare_neg_zero(_, f, 1, File, _)"))
+    end).
+
+%% Same fix, the float spelling (Erlang's `-0.0`).
+no_compare_neg_zero_flags_a_negated_zero_on_an_erlang_float_literal_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.erl', 1},
+             {expr, cmp1, f, 1, binary, 'p.erl', 2},
+             {expr_operator, cmp1, '=='},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 1, x, 'p.erl', 2},
+             {expr_operand, cmp1, right, neg1},
+             {expr, neg1, f, 1, unary, 'p.erl', 2},
+             {expr_operator, neg1, '-'},
+             {expr_operand, neg1, operand, lit1}, {literal, lit1, f, 1, float, 0.0, 'p.erl', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.erl'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_compare_neg_zero(_, f, 1, File, _)"))
+    end).
+
+%% A plain `x === 0` (not negated) must not match.
+no_compare_neg_zero_does_not_flag_a_plain_zero_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, cmp1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '==='},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 1, x, 'p.ts', 2},
+             {expr_operand, cmp1, right, lit1}, {literal, lit1, f, 1, number, 0, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_compare_neg_zero(_, f, 1, _, _)"))
+    end).
+
+no_prototype_builtin_flags_has_own_property_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {member, obj, hasOwnProperty, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_prototype_builtin(f, hasOwnProperty, File, _)"))
+    end).
+
+no_prototype_builtin_does_not_flag_an_ordinary_method_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {member, obj, toString, 0}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_prototype_builtin(f, toString, _, _)"))
+    end).
+
+no_unsafe_negation_flags_a_negated_left_operand_test() ->
+    with_db([{defines, f, 2, <<"(x,y)">>, 'p.ts', 1},
+             {expr, cmp1, f, 2, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '<'},
+             {expr_operand, cmp1, left, neg1},
+             {expr, neg1, f, 2, unary, 'p.ts', 2},
+             {expr_operator, neg1, '!'}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_unsafe_negation(_, f, 2, File, _)"))
+    end).
+
+no_unsafe_negation_does_not_flag_a_plain_left_operand_test() ->
+    with_db([{defines, f, 2, <<"(x,y)">>, 'p.ts', 1},
+             {expr, cmp1, f, 2, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '<'},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 2, x, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_unsafe_negation(_, f, 2, _, _)"))
+    end).
+
+use_isnan_flags_a_direct_nan_comparison_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, cmp1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '==='},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 1, x, 'p.ts', 2},
+             {expr_operand, cmp1, right, ref2}, {expr_ref, ref2, f, 1, 'NaN', 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "use_isnan(_, f, 1, File, _)"))
+    end).
+
+use_isnan_does_not_flag_an_ordinary_comparison_test() ->
+    with_db([{defines, f, 2, <<"(x,y)">>, 'p.ts', 1},
+             {expr, cmp1, f, 2, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '==='},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 2, x, 'p.ts', 2},
+             {expr_operand, cmp1, right, ref2}, {expr_ref, ref2, f, 2, y, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "use_isnan(_, f, 2, _, _)"))
+    end).
+
+invalid_typeof_flags_a_non_string_comparison_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, cmp1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '==='},
+             {expr_operand, cmp1, left, tof1},
+             {expr, tof1, f, 1, unary, 'p.ts', 2}, {expr_operator, tof1, typeof},
+             {expr_operand, cmp1, right, lit1}, {literal, lit1, f, 1, number, 42, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "invalid_typeof(_, f, 1, File, _)"))
+    end).
+
+%% A real (binary-valued) string literal, whatever its content, is not
+%% flagged by the narrowed rule — see this predicate's own doc comment in
+%% .symbolic/rules.pl for why exact content can't be checked here.
+invalid_typeof_does_not_flag_a_string_literal_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, cmp1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '==='},
+             {expr_operand, cmp1, left, tof1},
+             {expr, tof1, f, 1, unary, 'p.ts', 2}, {expr_operator, tof1, typeof},
+             {expr_operand, cmp1, right, lit1}, {literal, lit1, f, 1, string, <<"string">>, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "invalid_typeof(_, f, 1, _, _)"))
+    end).
+
+not_camel_case_flags_a_snake_case_name_test() ->
+    with_db([{defines, my_function, 0, <<"()">>, 'p.ts', 1}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "not_camel_case(my_function, 0, File, _)"))
+    end).
+
+not_camel_case_does_not_flag_a_camel_case_name_test() ->
+    with_db([{defines, myFunction, 0, <<"()">>, 'p.ts', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "not_camel_case(myFunction, 0, _, _)"))
+    end).
+
+loose_equality_flags_double_equals_test() ->
+    with_db([{defines, f, 2, <<"(x,y)">>, 'p.ts', 1},
+             {expr, cmp1, f, 2, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '=='}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "loose_equality(_, f, 2, File, _)"))
+    end).
+
+loose_equality_does_not_flag_triple_equals_test() ->
+    with_db([{defines, f, 2, <<"(x,y)">>, 'p.ts', 1},
+             {expr, cmp1, f, 2, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '==='}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "loose_equality(_, f, 2, _, _)"))
+    end).
+
+id_denylisted_flags_a_listed_name_test() ->
+    with_db([{defines, data, 0, <<"()">>, 'p.ts', 1}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "id_denylisted(data, 0, File, _)"))
+    end).
+
+id_denylisted_does_not_flag_an_unlisted_name_test() ->
+    with_db([{defines, myVar, 0, <<"()">>, 'p.ts', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "id_denylisted(myVar, 0, _, _)"))
+    end).
+
+too_many_lines_flags_a_file_over_the_threshold_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'big.ts', 400}], fun() ->
+        ?assertEqual({solutions, [{'MaxLine', 400}]},
+            symbolic_query:run_result(?DB, real_rules(), "too_many_lines('big.ts', MaxLine)"))
+    end).
+
+too_many_lines_does_not_flag_a_small_file_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'small.ts', 50}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "too_many_lines('small.ts', _)"))
+    end).
+
+%% File left unbound (the shape all_too_many_lines/1 actually uses) — the
+%% same "bind the grouping key first" regression file_define_count/2 and
+%% real_complexity/4 both needed.
+too_many_lines_groups_by_file_when_unbound_test() ->
+    with_db([{defines, f1, 0, <<"()">>, 'big.ts', 400},
+             {defines, f2, 0, <<"()">>, 'small.ts', 10}], fun() ->
+        ?assertEqual({solutions, [{'File', 'big.ts'}, {'MaxLine', 400}]},
+            symbolic_query:run_result(?DB, real_rules(), "too_many_lines(File, MaxLine)"))
+    end).
+
+no_alert_flags_a_direct_alert_call_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, alert, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_alert(_, _, alert, File, _)"))
+    end).
+
+no_alert_does_not_flag_an_ordinary_call_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, log, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_alert(_, _, log, _, _)"))
+    end).
+
+no_array_constructor_flags_zero_args_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, 'Array', 0}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_array_constructor(_, _, File, _)"))
+    end).
+
+%% `new Array(5)` (exactly one arg) is the legitimate array-of-length-N
+%% idiom — must not be flagged, the whole point of the ArgCount \= 1 guard.
+no_array_constructor_does_not_flag_a_single_length_arg_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {new, 'Array', 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_array_constructor(_, _, _, _)"))
+    end).
+
+no_bitwise_flags_a_bitwise_and_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, e1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, e1, '&'}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_bitwise(_, f, 1, File, _)"))
+    end).
+
+%% Logical `&&` must not be confused with bitwise `&`.
+no_bitwise_does_not_flag_logical_and_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, e1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, e1, '&&'}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_bitwise(_, f, 1, _, _)"))
+    end).
+
+no_eq_null_flags_loose_equality_with_null_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, cmp1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '=='},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 1, x, 'p.ts', 2},
+             {expr_operand, cmp1, right, lit1}, {literal, lit1, f, 1, null, null, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_eq_null(_, f, 1, File, _)"))
+    end).
+
+%% `x === null` (strict, the recommended alternative) must not be flagged.
+no_eq_null_does_not_flag_strict_equality_with_null_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, cmp1, f, 1, binary, 'p.ts', 2},
+             {expr_operator, cmp1, '==='},
+             {expr_operand, cmp1, left, ref1}, {expr_ref, ref1, f, 1, x, 'p.ts', 2},
+             {expr_operand, cmp1, right, lit1}, {literal, lit1, f, 1, null, null, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_eq_null(_, f, 1, _, _)"))
+    end).
+
+no_eval_flags_a_direct_eval_call_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, eval, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_eval(_, _, File, _)"))
+    end).
+
+no_eval_does_not_flag_an_ordinary_call_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, parse, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_eval(_, _, _, _)"))
+    end).
+
+no_implicit_coercion_flags_double_negation_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, outer1, f, 1, unary, 'p.ts', 2}, {expr_operator, outer1, '!'},
+             {expr_operand, outer1, operand, inner1},
+             {expr, inner1, f, 1, unary, 'p.ts', 2}, {expr_operator, inner1, '!'}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_implicit_coercion(_, f, 1, File, _)"))
+    end).
+
+no_implicit_coercion_flags_a_bare_unary_plus_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, outer1, f, 1, unary, 'p.ts', 2}, {expr_operator, outer1, '+'}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_implicit_coercion(_, f, 1, File, _)"))
+    end).
+
+%% A single `!x` (not doubled) must not be flagged as coercion.
+no_implicit_coercion_does_not_flag_a_single_negation_test() ->
+    with_db([{defines, f, 1, <<"(x)">>, 'p.ts', 1},
+             {expr, outer1, f, 1, unary, 'p.ts', 2}, {expr_operator, outer1, '!'},
+             {expr_operand, outer1, operand, ref1}, {expr_ref, ref1, f, 1, x, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_implicit_coercion(_, f, 1, _, _)"))
+    end).
+
+no_implied_eval_flags_set_timeout_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, setTimeout, 2}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_implied_eval(_, _, setTimeout, File, _)"))
+    end).
+
+no_implied_eval_does_not_flag_set_immediate_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, setImmediate, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_implied_eval(_, _, setImmediate, _, _)"))
+    end).
+
+inline_comment_flags_a_comment_sharing_a_call_line_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, g, 0}, 'p.ts', 3},
+             {comment, 'p.ts', 3, <<"inline">>}], fun() ->
+        ?assertEqual({solutions, [{'Text', <<"inline">>}]},
+            symbolic_query:run_result(?DB, real_rules(), "inline_comment('p.ts', 3, Text)"))
+    end).
+
+inline_comment_does_not_flag_a_standalone_comment_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {comment, 'p.ts', 5, <<"standalone">>}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "inline_comment('p.ts', 5, _)"))
+    end).
+
+magic_number_flags_an_unlisted_value_test() ->
+    with_db([{literal, lit1, f, 0, number, 42, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "magic_number(_, f, 0, File, _)"))
+    end).
+
+magic_number_does_not_flag_an_allowed_value_test() ->
+    with_db([{literal, lit1, f, 0, number, 1, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "magic_number(_, f, 0, _, _)"))
+    end).
+
+%% Erlang's LitKind for whole numbers is 'integer' and for floats is
+%% 'float', not TS/JS's unified 'number' — confirmed against a real Erlang
+%% parse. A regression for the fix: this used to be silently invisible to
+%% the rule (0 hits over 281 real integer/float literals in this
+%% project's own source before the fix).
+magic_number_flags_an_erlang_integer_literal_test() ->
+    with_db([{literal, lit1, f, 0, integer, 42, 'p.erl', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.erl'}]},
+            symbolic_query:run_result(?DB, real_rules(), "magic_number(_, f, 0, File, _)"))
+    end).
+
+magic_number_flags_an_erlang_float_literal_test() ->
+    with_db([{literal, lit1, f, 0, float, 3.5, 'p.erl', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.erl'}]},
+            symbolic_query:run_result(?DB, real_rules(), "magic_number(_, f, 0, File, _)"))
+    end).
+
+magic_number_does_not_flag_an_allowed_erlang_integer_test() ->
+    with_db([{literal, lit1, f, 0, integer, 1, 'p.erl', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "magic_number(_, f, 0, _, _)"))
+    end).
+
+magic_number_does_not_flag_an_allowed_erlang_float_test() ->
+    with_db([{literal, lit1, f, 0, float, 1.0, 'p.erl', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "magic_number(_, f, 0, _, _)"))
+    end).
+
+no_restricted_global_flags_a_listed_global_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, event, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_restricted_global(_, _, event, File, _)"))
+    end).
+
+no_restricted_global_does_not_flag_an_unlisted_global_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, myFunc, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_restricted_global(_, _, myFunc, _, _)"))
+    end).
+
+no_ternary_flags_a_ternary_branch_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {branch, f, 0, ternary, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_ternary(f, 0, File, _)"))
+    end).
+
+no_ternary_does_not_flag_an_if_branch_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {branch, f, 0, 'if', 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_ternary(f, 0, _, _)"))
+    end).
+
+no_underscore_dangle_flags_a_leading_underscore_test() ->
+    with_db([{defines, '_private', 0, <<"()">>, 'p.ts', 1}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_underscore_dangle('_private', 0, File, _)"))
+    end).
+
+no_underscore_dangle_flags_a_trailing_underscore_test() ->
+    with_db([{defines, 'trailing_', 0, <<"()">>, 'p.ts', 1}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "no_underscore_dangle('trailing_', 0, File, _)"))
+    end).
+
+no_underscore_dangle_does_not_flag_an_ordinary_name_test() ->
+    with_db([{defines, ordinary, 0, <<"()">>, 'p.ts', 1}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "no_underscore_dangle(ordinary, 0, _, _)"))
+    end).
+
+radix_missing_flags_a_single_arg_call_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, parseInt, 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "radix_missing(_, _, File, _)"))
+    end).
+
+radix_missing_does_not_flag_a_call_with_a_radix_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, parseInt, 2}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "radix_missing(_, _, _, _)"))
+    end).
+
+symbol_description_missing_flags_a_zero_arg_call_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, 'Symbol', 0}, 'p.ts', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.ts'}]},
+            symbolic_query:run_result(?DB, real_rules(), "symbol_description_missing(_, _, File, _)"))
+    end).
+
+symbol_description_missing_does_not_flag_a_call_with_a_description_test() ->
+    with_db([{defines, f, 0, <<"()">>, 'p.ts', 1},
+             {calls, f, 0, {local, 'Symbol', 1}, 'p.ts', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "symbol_description_missing(_, _, _, _)"))
+    end).
