@@ -10,6 +10,23 @@ encodes_integer_test() ->
 encodes_binary_as_is_test() ->
     ?assertEqual(<<"hello">>, symbolic_term_json:encode_term(<<"hello">>)).
 
+%% Issue #2: encode_term/1 had no clause for a bare float, so a
+%% literal/7 fact carrying a non-integer numeric value (a coordinate, a
+%% percentage, a threshold) raised function_clause and took the whole
+%% `parse` down. A negative float is Value = -82.9371 by the time it
+%% reaches here (the extractor already applied unary minus), matching
+%% the repro in the issue.
+encodes_float_test() ->
+    ?assertEqual(3.5, symbolic_term_json:encode_term(3.5)),
+    ?assertEqual(-82.9371, symbolic_term_json:encode_term(-82.9371)).
+
+%% Same crash, reached through the compound-term recursion path a real
+%% literal/7 fact takes.
+encodes_compound_term_with_float_field_test() ->
+    ?assertEqual(
+        [<<"literal">>, <<"lng">>, -82.9371],
+        symbolic_term_json:encode_term({literal, lng, -82.9371})).
+
 encodes_compound_term_as_array_test() ->
     ?assertEqual(
         [<<"defines">>, <<"foo">>, <<"file.erl">>, 3],
