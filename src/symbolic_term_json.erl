@@ -20,8 +20,8 @@
 %%% way, recursively. An atom becomes a JSON string. A binary (the free
 %%% text produced by ts_extract_text:to_text/1 — comment/doc bodies,
 %%% headings, paragraphs, config values) becomes a JSON string directly,
-%%% with no length limit and no quoting ambiguity. An integer stays a
-%%% An integer stays a JSON number.
+%%% with no length limit and no quoting ambiguity. An integer or float
+%%% stays a JSON number.
 %%%
 %%% An *unbound* variable is the one term shape here that is neither data
 %%% nor a name. `erlog_int:dderef/2` returns a free variable as the
@@ -52,4 +52,5 @@ encode_term(T) when is_tuple(T) ->
 encode_term(A) when is_atom(A) -> atom_to_binary(A, utf8);
 encode_term(B) when is_binary(B) -> B;
 encode_term(N) when is_integer(N) -> N;
+encode_term(N) when is_float(N) -> N;
 encode_term(L) when is_list(L) -> [encode_term(E) || E <- L].
