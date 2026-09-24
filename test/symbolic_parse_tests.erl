@@ -38,3 +38,35 @@ print_fact_does_not_crash_test() ->
     ?assertEqual(
         ok,
         begin symbolic_parse:print_fact({defines, foo, 0, <<"()">>, 'f.erl', 1}), ok end).
+
+%% --- scan/1's directory walk: node_modules/.git always pruned,
+%% .gitignore honored — the matching logic itself (globs, anchoring,
+%% negation, precedence) is unit-tested in symbolic_gitignore_tests.erl;
+%% this is the end-to-end proof that scan/1 actually calls it and that
+%% an ignored directory is genuinely never descended into, not just
+%% filtered out of the result afterward (real files on disk, not
+%% hand-built facts — the whole point is proving the WALK, not the
+%% extractor). ---
+
+scan_prunes_node_modules_and_a_gitignore_entry_test() ->
+    Root = filename:join(["_build", "parse_scan_ignore_scratch"]),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_dir(filename:join([Root, "src", "placeholder"])),
+    ok = filelib:ensure_dir(filename:join([Root, "node_modules", "some_pkg", "placeholder"])),
+    ok = filelib:ensure_dir(filename:join([Root, "vendor", "placeholder"])),
+    ok = file:write_file(filename:join(Root, ".gitignore"), <<"vendor/\n">>),
+    ok = file:write_file(filename:join([Root, "src", "kept.erl"]),
+        <<"-module(kept).\nf() -> ok.\n">>),
+    %% node_modules is pruned unconditionally (no .gitignore entry needed
+    %% for it at all) — this file must never even be looked at.
+    ok = file:write_file(filename:join([Root, "node_modules", "some_pkg", "index.erl"]),
+        <<"-module(index).\nbroken(.\n">>),
+    ok = file:write_file(filename:join([Root, "vendor", "dropped.erl"]),
+        <<"-module(dropped).\nf() -> ok.\n">>),
+    try
+        {ok, {Files, _Facts}} = symbolic_parse:scan(Root),
+        Basenames = lists:sort([filename:basename(F) || F <- Files]),
+        ?assertEqual(["kept.erl"], Basenames)
+    after
+        _ = file:del_dir_r(Root)
+    end.

@@ -62,14 +62,52 @@ extract_file_timed(File) ->
     ?LOG_INFO("parse: ~s - ~p facts, ~p ms", [File, length(Facts), ElapsedMs]),
     Facts.
 
+%% Extensions matcher below to a language ts_extract:file/1 knows how to
+%% handle. Kept as a list (not a set) — 7 entries, checked once per file.
+-define(SCAN_EXTENSIONS, [".erl", ".ts", ".md", ".toml", ".json", ".sh", ".bash"]).
+
+%% A real recursive walk, not filelib:wildcard's flat "**" glob — the
+%% previous form had no way to skip a directory before descending into
+%% it, so `symbolic parse` at a repo root always paid the cost of
+%% listing every file under node_modules/_build/etc. even though every
+%% one of them was certain to be discarded afterward. This prunes an
+%% ignored directory the moment it's found, using
+%% symbolic_gitignore:load/1 (that project's own top-level `.gitignore`,
+%% plus node_modules/.git unconditionally — see that module's own
+%% header for exactly what is and isn't supported).
 scan_files(Dir) ->
-    filelib:wildcard(filename:join(Dir, "**/*.erl")) ++
-    filelib:wildcard(filename:join(Dir, "**/*.ts")) ++
-    filelib:wildcard(filename:join(Dir, "**/*.md")) ++
-    filelib:wildcard(filename:join(Dir, "**/*.toml")) ++
-    filelib:wildcard(filename:join(Dir, "**/*.json")) ++
-    filelib:wildcard(filename:join(Dir, "**/*.sh")) ++
-    filelib:wildcard(filename:join(Dir, "**/*.bash")).
+    Rules = symbolic_gitignore:load(Dir),
+    walk(Dir, "", Rules).
+
+walk(AbsDir, RelDir, Rules) ->
+    case file:list_dir(AbsDir) of
+        {ok, Entries} ->
+            lists:flatmap(
+                fun(Entry) -> walk_entry(AbsDir, RelDir, Entry, Rules) end,
+                lists:sort(Entries));
+        {error, _Reason} ->
+            []
+    end.
+
+walk_entry(AbsDir, RelDir, Entry, Rules) ->
+    AbsPath = filename:join(AbsDir, Entry),
+    RelPath = case RelDir of
+        "" -> Entry;
+        _ -> RelDir ++ "/" ++ Entry
+    end,
+    case filelib:is_dir(AbsPath) of
+        true ->
+            case symbolic_gitignore:ignored(RelPath, true, Rules) of
+                true -> [];
+                false -> walk(AbsPath, RelPath, Rules)
+            end;
+        false ->
+            case symbolic_gitignore:ignored(RelPath, false, Rules)
+                orelse not lists:member(filename:extension(Entry), ?SCAN_EXTENSIONS) of
+                true -> [];
+                false -> [AbsPath]
+            end
+    end.
 
 run(Dir) ->
     run(Dir, undefined).
