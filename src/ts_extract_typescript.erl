@@ -28,12 +28,31 @@
 %%%                                                         ternary/switch_case/catch/and/or)
 %%%                                                         inside Function; see ?BRANCH_QUERIES
 %%%                                                         and .symbolic/rules.pl's real_complexity/4
-%%%   expr(Id, Function, Arity, Kind, File, Line)        — a binary/unary expression, Id keyed
-%%%                                                         on node_start_byte/1 (see exprs/4)
-%%%   expr_operator(Id, Op)                              — that expression's operator, e.g. '==', '&&'
-%%%   expr_operand(Id, Role, ChildId)                    — Role: left/right/operand
-%%%   literal(Id, Function, Arity, LitKind, Value, File, Line) — a literal used as an operand
+%%%   expr(Id, Function, Arity, Kind, File, Line)        — a binary/unary expression OR a call
+%%%                                                         site, Id keyed on a byte span (see
+%%%                                                         exprs/4 and call_arg_facts/6)
+%%%   expr_operator(Id, Op)                              — that expression's operator, e.g.
+%%%                                                         '==', '&&'; for Kind=call, Op is the
+%%%                                                         SAME CallSpec term calls/5's own
+%%%                                                         third field carries — local(F,ArgCount),
+%%%                                                         member(Obj,M,ArgCount) or
+%%%                                                         new(C,ArgCount) — not a new vocabulary
+%%%   expr_operand(Id, Role, ChildId)                    — Role: left/right/operand for a
+%%%                                                         binary/unary expr, or a 0-based
+%%%                                                         argument index for a call
+%%%   literal(Id, Function, Arity, LitKind, Value, File, Line) — a literal value: an operand of a
+%%%                                                         binary/unary expr, OR a call argument
 %%%   expr_ref(Id, Function, Arity, Name, File, Line)    — a bare identifier used as an operand
+%%%                                                         or passed as a call argument
+%%%
+%%% Every calls/5 fact site (local, member, and new) ALSO gets a Kind=call
+%%% expr/6 fact for its own call node plus one expr_operand/3 per
+%%% argument, indexed 0.. — the same operand-walk machinery
+%%% ?BINARY_EXPR_QUERY/?UNARY_EXPR_QUERY already use (see operand_facts/7),
+%%% just with an integer Role instead of left/right. calls/5 alone only
+%%% ever carries ArgCount, never argument VALUES; this is what lets a
+%%% query recover, say, the literal path string a plain `fs.writeFileSync(
+%%% path, "out.log")` call was made with. See call_arg_facts/6.
 %%%   scope(ScopeId, Kind, ParentScopeId, File)          — Kind: function/block/module; see
 %%%                                                         scope_facts/3
 %%%   var_decl(Id, Name, Kind, ScopeId, File, Line)      — Kind: var/let/const/param/import (an
@@ -195,21 +214,50 @@ args_shape(Node, FieldName, Src) ->
     {symbolic_ts:node_named_child_count(ArgsNode),
      to_text(symbolic_ts:node_text(ArgsNode, Src))}.
 
+%% Give a call-shaped node (call_expression via local/member, or
+%% new_expression) the same Id-keyed expr/expr_operator/expr_operand
+%% treatment binary_expr_facts/3 and unary_expr_facts/3 already give a
+%% comparison — Id is the call node's own byte span. expr_operator's Op
+%% is the EXACT SAME CallSpec term calls/5's own third field carries
+%% (local(F,ArgCount)/member(Obj,M,ArgCount)/new(C,ArgCount)), not a new
+%% vocabulary — see ts_extract_erlang.erl's identical design for its own
+%% local/remote CallSpec shapes. `new Foo` (no parens) has a NULL
+%% "arguments" field — same segfault risk new_expr_arg_count/1 already
+%% guards against (node_named_child_count/1 on a null node crashes the
+%% whole BEAM) — so this checks node_is_null/1 first and emits nothing
+%% for it: an absent arg list has no arguments to walk.
+call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom) ->
+    ArgsNode = symbolic_ts:node_child_by_field_name(CallNode, "arguments"),
+    case symbolic_ts:node_is_null(ArgsNode) of
+        true ->
+            [];
+        false ->
+            Id = node_id(PathAtom, CallNode),
+            N = symbolic_ts:node_named_child_count(ArgsNode),
+            ExprFact = {expr, Id, Caller, CallerArity, call, PathAtom, line(CallNode)},
+            OpFact = {expr_operator, Id, CallSpec},
+            ArgFacts = lists:flatmap(
+                fun(I) ->
+                    ArgNode = symbolic_ts:node_named_child(ArgsNode, I),
+                    operand_facts(Id, I, ArgNode, Caller, CallerArity, Src, PathAtom)
+                end, lists:seq(0, N - 1)),
+            [ExprFact, OpFact | ArgFacts]
+    end.
+
 local_calls(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?LOCAL_CALL_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
-    lists:usort([
-        local_call_fact(N, Src, PathAtom)
-     || {"callee", N} <- Caps
-    ]).
+    lists:usort(lists:flatmap(
+        fun(N) -> local_call_facts(N, Src, PathAtom) end,
+        [N || {"callee", N} <- Caps])).
 
-local_call_fact(N, Src, PathAtom) ->
+local_call_facts(N, Src, PathAtom) ->
     CallNode = symbolic_ts:node_parent(N),
     {ArgCount, _Params} = args_shape(CallNode, "arguments", Src),
     {Caller, CallerArity} = caller_info(N, Src),
-    {calls, Caller, CallerArity,
-     {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
-     PathAtom, line(N)}.
+    CallSpec = {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
+    [{calls, Caller, CallerArity, CallSpec, PathAtom, line(N)}
+     | call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom)].
 
 %% Query returns each match's two captures (@obj, @prop) as separate
 %% entries, not paired — find each unique property_identifier's own
@@ -220,18 +268,18 @@ member_calls(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?MEMBER_CALL_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
     PropNodes = lists:usort([N || {"prop", N} <- Caps]),
-    lists:usort([member_call_fact(N, Src, PathAtom) || N <- PropNodes]).
+    lists:usort(lists:flatmap(fun(N) -> member_call_facts(N, Src, PathAtom) end, PropNodes)).
 
-member_call_fact(PropNode, Src, PathAtom) ->
+member_call_facts(PropNode, Src, PathAtom) ->
     MemberNode = symbolic_ts:node_parent(PropNode),
     ObjNode = symbolic_ts:node_child_by_field_name(MemberNode, "object"),
     CallNode = symbolic_ts:node_parent(MemberNode),
     {ArgCount, _Params} = args_shape(CallNode, "arguments", Src),
     {Caller, CallerArity} = caller_info(CallNode, Src),
-    {calls, Caller, CallerArity,
-     {member, to_atom(symbolic_ts:node_text(ObjNode, Src)),
-      to_atom(symbolic_ts:node_text(PropNode, Src)), ArgCount},
-     PathAtom, line(PropNode)}.
+    CallSpec = {member, to_atom(symbolic_ts:node_text(ObjNode, Src)),
+        to_atom(symbolic_ts:node_text(PropNode, Src)), ArgCount},
+    [{calls, Caller, CallerArity, CallSpec, PathAtom, line(PropNode)}
+     | call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom)].
 
 %% `new X(...)` — modeled as one more calls/5 CallSpec shape
 %% (new(Constructor, ArgCount)), not a separate fact family: it's
@@ -260,8 +308,10 @@ new_call_facts(N, Src, PathAtom) ->
             Constructor = to_atom(symbolic_ts:node_text(ConsNode, Src)),
             ArgCount = new_expr_arg_count(N),
             {Caller, CallerArity} = caller_info(N, Src),
-            CallFact = {calls, Caller, CallerArity, {new, Constructor, ArgCount}, PathAtom, line(N)},
-            [CallFact | bare_new_fact(N, Caller, CallerArity, Constructor, PathAtom)];
+            CallSpec = {new, Constructor, ArgCount},
+            CallFact = {calls, Caller, CallerArity, CallSpec, PathAtom, line(N)},
+            [CallFact | bare_new_fact(N, Caller, CallerArity, Constructor, PathAtom)]
+                ++ call_arg_facts(N, CallSpec, Caller, CallerArity, Src, PathAtom);
         _ ->
             []
     end.

@@ -23,11 +23,11 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
 | `doc_tag/8` | TypeScript | One structured `@`-tag from inside a `doc/5` comment |
 | `branch/5` | Erlang, TypeScript, Bash | A decision point inside a definition, for real complexity |
-| `expr/6` | Erlang, TypeScript | A binary/unary expression, keyed on real node identity |
-| `expr_operator/2` | Erlang, TypeScript | That expression's operator |
-| `expr_operand/3` | Erlang, TypeScript | One operand's role and which node fills it |
-| `literal/7` | Erlang, TypeScript | A literal value used as an operand |
-| `expr_ref/6` | Erlang, TypeScript | A bare identifier used as an operand |
+| `expr/6` | Erlang, TypeScript | A binary/unary expression, or a call site — keyed on real node identity |
+| `expr_operator/2` | Erlang, TypeScript | That expression's operator, or (for a call) its `calls/5`-shaped `CallSpec` |
+| `expr_operand/3` | Erlang, TypeScript | One operand's role/argument-index and which node fills it |
+| `literal/7` | Erlang, TypeScript | A literal value used as an operand or passed as a call argument |
+| `expr_ref/6` | Erlang, TypeScript | A bare identifier used as an operand or passed as a call argument |
 | `scope/4` | TypeScript | A function/block/module scope exists |
 | `var_decl/6` | TypeScript | A variable/parameter is declared |
 | `var_ref/6` | TypeScript | A variable is read and/or written |
@@ -360,7 +360,19 @@ in this schema (found via the same caller-attribution walk-up
 `branch/5`, needs its own research pass).
 
 - **`expr(Id, Function, Arity, Kind, File, Line)`** — `Kind` is
-  `binary` or `unary`.
+  `binary` or `unary`, or `call`: every `calls/5` site — Erlang's local
+  and remote, TypeScript's local/member/new — also gets a `Kind = call`
+  `expr/6` fact for its own call node, so a call's arguments can be
+  walked the same way a comparison's operands are. `calls/5` alone only
+  ever carries `ArgCount` (an integer), never the argument *values* —
+  this is what closes that gap, e.g. recovering the literal path string
+  a plain `filename:join(Dir, "serve.log")` (Erlang) or
+  `fs.writeFileSync(path, "out.log")` (TypeScript) call was made with.
+  TypeScript's paren-less `new Foo` has no "arguments" node at all
+  (confirmed empirically, same guard `new_expr_arg_count/1` already
+  needed for `ArgCount`) — no `Kind=call` fact is emitted for it, same
+  as for zero arguments there's simply no `expr_operand/3` to walk. See
+  `.symbolic/rules.pl`'s `call_arg_literal/8` and `call_arg_ref/7`.
 - **`expr_operator(Id, Op)`** — the actual operator, an atom
   (`'=='`, `'&&'`, `'-'`, `'andalso'`, ...). TypeScript reads this
   directly off `binary_expression`'s addressable `operator` field —
@@ -371,23 +383,35 @@ in this schema (found via the same caller-attribution walk-up
   `(binary_op_expr "andalso") @b` matches correctly), scoped today to
   comparisons (`==`, `/=`, `=:=`, `=/=`, `<`, `>`, `>=`, `=<`) and
   logical operators (`and`, `or`, `andalso`, `orelse`) — arithmetic is
-  the same mechanism, just unbuilt.
+  the same mechanism, just unbuilt. For a `Kind = call` `expr/6`, `Op`
+  is **not** an atom — it's the exact same `CallSpec` term `calls/5`'s
+  own third field carries (Erlang: `{local, Callee, ArgCount}` or
+  `{remote, Module, Function, ArgCount}`; TypeScript: those same shapes
+  plus `{member, Object, Method, ArgCount}` and `{new, Constructor,
+  ArgCount}`), deliberately reused rather than inventing a second
+  vocabulary for "which call was this."
 - **`expr_operand(Id, Role, ChildId)`** — `Role` is `left`/`right` for
-  a binary expression, `operand` for a unary one. `ChildId` may itself
+  a binary expression, `operand` for a unary one, or (for a `Kind = call`
+  `expr/6`) a **0-based integer argument index** — `ChildId` may itself
   be another `expr/6`'s `Id` (a nested expression — no special handling
   needed, since the top-level query already matches every occurrence
   regardless of nesting depth), a `literal/7`'s `Id`, or an
   `expr_ref/6`'s `Id`.
 - **`literal(Id, Function, Arity, LitKind, Value, File, Line)`** —
   `LitKind` is `number`/`string`/`boolean`/`null` for TypeScript,
-  `integer`/`float`/`atom` for Erlang (Erlang's `true`/`false` are
-  ordinary atoms, not a distinct boolean type, so they come back as
+  `integer`/`float`/`atom`/`string` for Erlang (Erlang's `true`/`false`
+  are ordinary atoms, not a distinct boolean type, so they come back as
   `LitKind = atom`, not invented as `boolean`). `Value` for a number is
   a real Erlang number (arithmetic-ready in Prolog); for a string it's
-  a binary, same reasoning as `comment/3`'s `Text` — no prefix/pattern
-  matching on a string literal's content yet, a real, deliberate limit,
-  not an oversight (revisiting it means reopening the atom-truncation
-  risk this project already resolved once for identifiers).
+  a binary, same reasoning as `comment/3`'s `Text`. Erlang's `string`
+  node text includes the surrounding quotes (confirmed empirically);
+  the extractor strips exactly the outer pair (`strip_quotes/1` in
+  `ts_extract_erlang.erl`) but does **not** unescape `\"`/`\n`/etc.
+  inside — a real, deliberate limit, not an oversight, same status as
+  `parse_number/1`'s own open numeric edge cases. No prefix/pattern
+  matching on a string literal's content is possible yet either way
+  (revisiting that means reopening the atom-truncation risk this
+  project already resolved once for identifiers).
 - **`expr_ref(Id, Function, Arity, Name, File, Line)`** — a bare
   identifier (`identifier` in TypeScript, `var` in Erlang) used as an
   operand. Not scope/binding resolution — just "this position holds a

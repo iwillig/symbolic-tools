@@ -357,6 +357,38 @@ all_yoda_conditions(Triples) :-
     findall(Fun-Arity-File, yoda_condition(_Id, Fun, Arity, File, _Line), Raw),
     sort(Raw, Triples).
 
+%% A call site (Kind=call) gets the same Id-keyed expr/expr_operator/
+%% expr_operand treatment a binary/unary comparison does — expr_operator's
+%% Op is the exact same CallSpec term calls/5's own third field carries
+%% (Erlang: local(F,ArgCount) / remote(M,F,ArgCount); TypeScript: those
+%% same shapes plus member(Obj,M,ArgCount) / new(C,ArgCount)), and
+%% expr_operand's Role is a 0-based argument index rather than left/right.
+%% These two wrappers pull out the concrete VALUE calls/5 alone never
+%% carries (it only has ArgCount) — e.g. what literal string a
+%% `filename:join(Dir, "x.log")` (Erlang) or `fs.writeFileSync(path,
+%% "x.log")` (TypeScript) call was actually made with. One goal, not two
+%% lookups joined in prose — see this project's own rule on composing
+%% chains.
+call_arg_literal(Fun, Arity, CallSpec, ArgIndex, LitKind, Value, File, Line) :-
+    expr(Id, Fun, Arity, call, File, Line),
+    expr_operator(Id, CallSpec),
+    expr_operand(Id, ArgIndex, ArgId),
+    literal(ArgId, Fun, Arity, LitKind, Value, File, Line).
+
+all_call_arg_literals(Rows) :-
+    findall(Fun-Arity-CallSpec-ArgIndex-LitKind-Value-File-Line,
+        call_arg_literal(Fun, Arity, CallSpec, ArgIndex, LitKind, Value, File, Line),
+        Raw),
+    sort(Raw, Rows).
+
+%% Same shape, for a call argument that's a bare variable rather than a
+%% literal (e.g. the `Dir` in `filename:join(Dir, "x.log")`).
+call_arg_ref(Fun, Arity, CallSpec, ArgIndex, Name, File, Line) :-
+    expr(Id, Fun, Arity, call, File, Line),
+    expr_operator(Id, CallSpec),
+    expr_operand(Id, ArgIndex, ArgId),
+    expr_ref(ArgId, Fun, Arity, Name, File, Line).
+
 %% --- Variables and scope (TypeScript only), on top of scope/4 + var_decl/6 + var_ref/6 + resolves_to/2 ---
 
 scope(none, none, none, none) :- fail.

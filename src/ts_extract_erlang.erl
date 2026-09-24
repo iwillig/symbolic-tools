@@ -18,12 +18,34 @@
 %%%                                                       if_clause/receive_after) inside
 %%%                                                       Function; see ?BRANCH_QUERIES and
 %%%                                                       .symbolic/rules.pl's real_complexity/4
-%%%   expr(Id, Function, Arity, Kind, File, Line)      — a binary/unary expression, Id keyed
-%%%                                                       on a byte span (see exprs/4)
-%%%   expr_operator(Id, Op)                            — that expression's operator, e.g. '==', 'andalso'
-%%%   expr_operand(Id, Role, ChildId)                  — Role: left/right/operand
-%%%   literal(Id, Function, Arity, LitKind, Value, File, Line) — a literal used as an operand
-%%%   expr_ref(Id, Function, Arity, Name, File, Line)  — a bare `var` used as an operand
+%%%   expr(Id, Function, Arity, Kind, File, Line)      — a binary/unary expression OR a call
+%%%                                                       site, Id keyed on a byte span (see
+%%%                                                       exprs/4 and call_arg_facts/6)
+%%%   expr_operator(Id, Op)                            — that expression's operator, e.g.
+%%%                                                       '==', 'andalso'; for Kind=call, Op is
+%%%                                                       the SAME CallSpec term calls/5's own
+%%%                                                       third field carries — local(F,ArgCount)
+%%%                                                       or remote(M,F,ArgCount) — not a new
+%%%                                                       vocabulary
+%%%   expr_operand(Id, Role, ChildId)                  — Role: left/right/operand for a
+%%%                                                       binary/unary expr, or a 0-based
+%%%                                                       argument index for a call
+%%%   literal(Id, Function, Arity, LitKind, Value, File, Line) — a literal value: an operand of
+%%%                                                       a binary/unary expr, OR a call
+%%%                                                       argument (LitKind now also includes
+%%%                                                       `string`, Value a binary)
+%%%   expr_ref(Id, Function, Arity, Name, File, Line)  — a bare `var` used as an operand or
+%%%                                                       passed as a call argument
+%%%
+%%% Every calls/5 fact site (local and remote) ALSO gets a Kind=call
+%%% expr/6 fact for its own call node plus one expr_operand/3 per
+%%% argument, indexed 0.., pointing at a literal/7 or expr_ref/6 fact for
+%%% that argument node — the same operand-walk machinery ?BINARY_OP_QUERIES
+%%% already uses (see operand_facts/7), just with an integer Role instead
+%%% of left/right. This is what lets a query recover the literal string a
+%%% plain call was made with (e.g. `filename:join(Dir, "serve.log")`),
+%%% which calls/5 alone cannot: it only carries ArgCount, never argument
+%%% VALUES. See call_arg_facts/6.
 %%%
 %%% Arity/ArgCount and Params come from the `function_clause`/`call`
 %%% node's own "args" field (an `expr_args` node) — its named-child count
@@ -232,48 +254,70 @@ args_shape(Node, FieldName, Src) ->
 local_calls(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?LOCAL_CALL_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
-    lists:usort(lists:filtermap(
-        fun(N) -> local_call_fact(N, Src, PathAtom) end,
+    lists:usort(lists:flatmap(
+        fun(N) -> local_call_facts(N, Src, PathAtom) end,
         [N || {"callee", N} <- Caps])).
 
-local_call_fact(N, Src, PathAtom) ->
+local_call_facts(N, Src, PathAtom) ->
     case call_site(N, Src) of
         false ->
-            false;
+            [];
         {true, {Caller, CallerArity}} ->
             CallNode = symbolic_ts:node_parent(N),
             {ArgCount, _Params} = args_shape(CallNode, "args", Src),
-            {true, {calls, Caller, CallerArity,
-                {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
-                PathAtom, line(N)}}
+            CallSpec = {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
+            [{calls, Caller, CallerArity, CallSpec, PathAtom, line(N)}
+             | call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom)]
     end.
 
 remote_calls(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?REMOTE_CALL_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
-    lists:usort(lists:filtermap(
-        fun(N) -> remote_call_fact(N, Src, PathAtom) end,
+    lists:usort(lists:flatmap(
+        fun(N) -> remote_call_facts(N, Src, PathAtom) end,
         [N || {"call", N} <- Caps])).
 
 %% The @call capture binds to the `remote` node itself (the `expr` field's
 %% value, e.g. `io:format`), not the enclosing `call` node — its "args"
 %% field lives one level up, on the parent (confirmed empirically: "args"
 %% on the captured node is null).
-remote_call_fact(RemoteNode, Src, PathAtom) ->
+remote_call_facts(RemoteNode, Src, PathAtom) ->
     case call_site(RemoteNode, Src) of
         false ->
-            false;
+            [];
         {true, {Caller, CallerArity}} ->
             ModNode = symbolic_ts:node_child_by_field_name(RemoteNode, "module"),
             ModAtomNode = symbolic_ts:node_child_by_field_name(ModNode, "module"),
             FunNode = symbolic_ts:node_child_by_field_name(RemoteNode, "fun"),
             CallNode = symbolic_ts:node_parent(RemoteNode),
             {ArgCount, _Params} = args_shape(CallNode, "args", Src),
-            {true, {calls, Caller, CallerArity,
-                {remote, to_atom(symbolic_ts:node_text(ModAtomNode, Src)),
-                    to_atom(symbolic_ts:node_text(FunNode, Src)), ArgCount},
-                PathAtom, line(RemoteNode)}}
+            CallSpec = {remote, to_atom(symbolic_ts:node_text(ModAtomNode, Src)),
+                to_atom(symbolic_ts:node_text(FunNode, Src)), ArgCount},
+            [{calls, Caller, CallerArity, CallSpec, PathAtom, line(RemoteNode)}
+             | call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom)]
     end.
+
+%% Give a call site the same Id-keyed expr/expr_operator/expr_operand
+%% treatment binary_op_fact_set/4 and unary_op_fact_set/4 already give a
+%% comparison — Id is the whole `call` node's own byte span (not the
+%% callee/remote node's — that would collide across local vs remote calls
+%% to the same Fun at different arities on the same call, which can't
+%% happen, but would also collide with the callee atom's own OTHER uses
+%% if it were ever reused for anything else keyed by node_id/2). Args come
+%% from the same "args" field args_shape/3 already reads for ArgCount, so
+%% this makes NO new query and cannot disagree with calls/5's own count.
+call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom) ->
+    Id = node_id(PathAtom, CallNode),
+    ArgsNode = symbolic_ts:node_child_by_field_name(CallNode, "args"),
+    N = symbolic_ts:node_named_child_count(ArgsNode),
+    ExprFact = {expr, Id, Caller, CallerArity, call, PathAtom, line(CallNode)},
+    OpFact = {expr_operator, Id, CallSpec},
+    ArgFacts = lists:flatmap(
+        fun(I) ->
+            ArgNode = symbolic_ts:node_named_child(ArgsNode, I),
+            operand_facts(Id, I, ArgNode, Caller, CallerArity, Src, PathAtom)
+        end, lists:seq(0, N - 1)),
+    [ExprFact, OpFact | ArgFacts].
 
 %% A `call` node with no enclosing `function_clause` is not a call site, so
 %% it gets no calls/5 fact. That set is exactly the type references in
@@ -385,20 +429,41 @@ operand_facts(ParentId, Role, Node, Caller, CallerArity, Src, PathAtom) ->
             end
     end.
 
-%% integer/float/atom are the literal node types verified here. `atom`
-%% covers Erlang's true/false too — they're ordinary atoms in Erlang,
-%% not a distinct boolean type, so LitKind stays `atom` rather than
-%% inventing a `boolean` kind that doesn't correspond to any real
-%% grammar distinction. `string` is deliberately not classified yet —
-%% whether its text includes surrounding quotes the way TypeScript's
-%% does hasn't been verified.
+%% integer/float/atom/string are the literal node types verified here.
+%% `atom` covers Erlang's true/false too — they're ordinary atoms in
+%% Erlang, not a distinct boolean type, so LitKind stays `atom` rather
+%% than inventing a `boolean` kind that doesn't correspond to any real
+%% grammar distinction. `string`'s own node text DOES include the
+%% surrounding quotes (confirmed empirically: parsing
+%% `filename:join("a", "serve.log")` and reading the `string` node's own
+%% text back gives `"\"serve.log\""`, i.e. the two quote characters are
+%% part of it) — strip_quotes/1 removes exactly the outer pair. Escape
+%% sequences inside (`\"`, `\n`, ...) are NOT unescaped yet — the raw
+%% source text between the quotes is kept as-is, same open-ended status
+%% as parse_number/1's own doc comment for numeric edge cases.
 classify_literal(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "integer" -> {integer, parse_number(symbolic_ts:node_text(Node, Src))};
         "float" -> {float, parse_number(symbolic_ts:node_text(Node, Src))};
         "atom" -> {atom, to_atom(symbolic_ts:node_text(Node, Src))};
+        "string" -> {string, to_text(strip_quotes(symbolic_ts:node_text(Node, Src)))};
         _ -> no
     end.
+
+%% Strip exactly one leading and one trailing `"` — NOT every leading/
+%% trailing quote char via e.g. string:trim/3, which would also eat into
+%% the value itself when it ends right after an escaped quote (the raw
+%% text of `"say \"hi\""` ends in TWO consecutive `"` characters: the
+%% escaped one and the closing one). A well-formed `string` node's text
+%% always starts and ends with exactly one real quote by grammar
+%% construction, so peeling one char off each end is always correct,
+%% regardless of what's escaped inside.
+strip_quotes([$" | Rest]) ->
+    case lists:reverse(Rest) of
+        [$" | RevBody] -> lists:reverse(RevBody);
+        _ -> Rest
+    end;
+strip_quotes(Text) -> Text.
 
 %% Erlang's own numeral syntax allows two things that don't round-trip
 %% through list_to_integer/1 or list_to_float/1 unchanged: a `_` digit
