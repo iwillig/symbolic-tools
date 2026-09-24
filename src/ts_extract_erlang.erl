@@ -400,9 +400,22 @@ classify_literal(Node, Src) ->
         _ -> no
     end.
 
-parse_number(Text) ->
-    try list_to_integer(Text)
-    catch error:badarg -> list_to_float(Text)
+%% Erlang's own numeral syntax allows two things that don't round-trip
+%% through list_to_integer/1 or list_to_float/1 unchanged: a `_` digit
+%% separator (1_000_000) and a `Base#Digits` radix prefix (16#FF,
+%% 2#1010, any base 2-36) — confirmed empirically, not just a separator
+%% problem: list_to_integer("16#FF") badargs exactly like
+%% list_to_integer("16#FF_FF") does. Same bug class, same fix shape, as
+%% ts_extract_typescript.erl's parse_number/1 (issue #1) — that one hits
+%% JS/TS's own radix-prefix/separator/BigInt syntax instead.
+parse_number(Text0) ->
+    Text1 = [C || C <- Text0, C =/= $_],
+    case string:split(Text1, "#") of
+        [BaseStr, Digits] -> list_to_integer(Digits, list_to_integer(BaseStr));
+        [Text] ->
+            try list_to_integer(Text)
+            catch error:badarg -> list_to_float(Text)
+            end
     end.
 
 %% Same node-identity scheme as ts_extract_typescript.erl's node_id/2 —

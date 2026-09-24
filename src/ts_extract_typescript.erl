@@ -716,7 +716,41 @@ string_fragment_text(Node, Src) ->
         _ -> symbolic_ts:node_text(symbolic_ts:node_named_child(Node, 0), Src)
     end.
 
-parse_number(Text) ->
+%% JS/TS numeric literals allow three things Erlang's own
+%% list_to_integer/1 and list_to_float/1 don't understand at all, so the
+%% raw node text needs normalizing before either BIF sees it (issue #1 —
+%% confirmed empirically, not assumed: list_to_integer("0b100000")
+%% badargs exactly like list_to_integer("0b1_00000") does, so a fix that
+%% only strips `_` is incomplete):
+%%   - `_` as a purely cosmetic digit separator (5_000, 1_000_000) —
+%%     stripped outright, same treatment real JS/TS engines give it.
+%%   - a `0x`/`0b`/`0o` radix prefix (0x1F, 0b101, 0o17) — Erlang's
+%%     list_to_integer/1 has no concept of one at all; parsed via the
+%%     2-arity `list_to_integer(Digits, Base)` instead, prefix stripped.
+%%   - a trailing BigInt `n` suffix (100n, 0x1Fn) — Erlang integers are
+%%     already arbitrary-precision, so this is just stripped; the value
+%%     underneath is parsed the same way as a non-BigInt integer.
+%% Order matters: strip `_` and the `n` suffix BEFORE checking for a
+%% radix prefix, so `0x1_Fn` normalizes to `0x1F` before the prefix check
+%% ever runs.
+parse_number(Text0) ->
+    Text1 = [C || C <- Text0, C =/= $_],
+    Text2 = strip_bigint_suffix(Text1),
+    parse_normalized_number(Text2).
+
+strip_bigint_suffix(Text) ->
+    case lists:last(Text) of
+        $n -> lists:droplast(Text);
+        _ -> Text
+    end.
+
+parse_normalized_number([$0, Radix | Digits]) when Radix =:= $x; Radix =:= $X ->
+    list_to_integer(Digits, 16);
+parse_normalized_number([$0, Radix | Digits]) when Radix =:= $b; Radix =:= $B ->
+    list_to_integer(Digits, 2);
+parse_normalized_number([$0, Radix | Digits]) when Radix =:= $o; Radix =:= $O ->
+    list_to_integer(Digits, 8);
+parse_normalized_number(Text) ->
     try list_to_integer(Text)
     catch error:badarg -> list_to_float(Text)
     end.

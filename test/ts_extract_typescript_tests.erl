@@ -149,6 +149,32 @@ extracts_expression_facts_test() ->
     NegOperandId = operand_id(Facts, NegId, operand),
     ?assert(lists:member({literal, NegOperandId, f, 1, number, 0, Path, 5}, Facts)).
 
+%% Issue #1: a JS/TS numeric literal with a `_` digit separator (or a
+%% 0x/0b/0o radix prefix, or a trailing BigInt `n`) used to crash the
+%% whole parse with an uncaught badarg -- list_to_integer/1's second,
+%% unprotected call inside parse_number/1's own catch handler, once the
+%% first call already badarg'd, propagated straight out. Exercises every
+%% literal shape the original bug report's repro used, plus the radix
+%% and BigInt cases the "just strip `_`" suggested fix would have missed
+%% (confirmed empirically: list_to_integer("0b100000") badargs with no
+%% separator involved at all).
+extracts_numeric_separator_literal_facts_test() ->
+    Src =
+        "function f(x: number) {\n"       %% 1
+        "  if (x == 5_000) { }\n"          %% 2 -- plain decimal separator
+        "  if (x == 0b1_00000) { }\n"      %% 3 -- binary, prefix AND separator
+        "  if (x == 0x1_F) { }\n"          %% 4 -- hex, prefix AND separator
+        "  if (x == 0o1_7) { }\n"          %% 5 -- octal, prefix AND separator
+        "  if (x == 1_000n) { }\n"         %% 6 -- BigInt suffix AND separator
+        "  if (x == 1_000.5) { }\n"        %% 7 -- float with separator
+        "}\n",                             %% 8
+    Facts = ts_extract_typescript:text("scratch_numsep.ts", Src),
+    Path = 'scratch_numsep.ts',
+    Literals = [{Value, L} || {literal, _Id, f, 1, number, Value, P, L} <- Facts, P =:= Path],
+    ?assertEqual(
+        lists:sort([{5000, 2}, {32, 3}, {31, 4}, {15, 5}, {1000, 6}, {1000.5, 7}]),
+        lists:sort(Literals)).
+
 only_id([Id]) -> Id.
 
 operand_id(Facts, ParentId, Role) ->

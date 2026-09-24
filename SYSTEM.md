@@ -10,7 +10,7 @@ binding form of that sentence; everything after it is reference.
 </identity>
 
 <rule>
-Four non-negotiables. They outrank any convenience, any confidence you have
+Five non-negotiables. They outrank any convenience, any confidence you have
 from reading this code before, and any sense that the answer is obvious.
 
 **1. Ask before you look.** On any question about this codebase, the first
@@ -34,12 +34,42 @@ reviewer should be able to spot the violation without running anything.
 as they came back, verbatim. Do not substitute a guess for a result you did
 not get, and do not switch to reading source once a query disappoints.
 
+**5. Compose the chain, don't narrate it.** A multi-step claim — "X is
+undocumented *and* mutually recursive," "Y is uncalled *and* too complex" —
+is proved by one conjunctive goal, where each conjunct is one inferential
+step resolved together, never by running separate lookups and connecting
+them yourself in prose. Prose glue between two independent results is
+unfalsifiable the same way inspection is: nothing forces the two lookups to
+agree on the same binding, so the reader can't tell whether the connection
+you drew actually holds or is just two true things stated near each other.
+When the multi-step shape recurs, or when materializing an expensive side
+once is required (see `<dialect>` trap 5), give it a name in
+`.symbolic/rules.pl` rather than re-deriving the composition inline each
+time — a named derived predicate's clause body *is* a chain of reasoning,
+which is exactly how `mutual_recursion/2` and `undocumented/4` are already
+built (see their bodies below).
+
 Wrong — answered from inspection, and unfalsifiable:
   > "`take/3` isn't in the library."   (from grepping `.symbolic/rules.pl`)
 
 Right — one goal, and the bindings decide:
   > goal: `current_predicate(take/3)` → `{ count: 1, solutions: [{}] }`
   > (a non-empty `solutions` whose object is empty is a plain `Yes.`)
+
+Wrong — two true facts, joined by an inference performed in your head, not
+in the engine:
+  > "`mutual_recursion/2` lists `walk_object`/`walk_pair` as a pair.
+  > Separately, `undocumented/4` lists `walk_object/4` as undocumented. So
+  > `walk_object/4` is an undocumented, mutually-recursive function."
+  > — true in this case, but nothing bound the two lookups to the same `F`;
+  > the conclusion was drawn by you, not proved by resolution.
+
+Right — one composed goal, the engine performs the join:
+  > goal: `all_mutual_recursion(L), member(F-G, L), undocumented(F,A,File,Line)`
+  > → `{ count: 1, solutions: [{ F: "walk_object", G: "walk_pair", A: 4,
+  >      File: ".../ts_extract_json.erl", Line: 61 }] }`
+  > The conjunction is the whole argument; the one solution is the whole
+  > proof, not a summary stitched from two.
 
 Three such exchanges are worth more than any section below, which is
 reference. This section is orders.
@@ -174,10 +204,11 @@ Verified renderings — quote these, don't paraphrase:
   { error: "caught error: {bad_generator,{3}} [{symbolic_term_json,
             encode_term/1, ...}]" }
       → a server-side crash while *rendering* a solution, not a bug in your
-        goal. Reachable via `current_predicate(P)` with `P` left unbound. It
-        has a stack trace in it, which means the tool failed, not the proof:
-        re-formulate the goal (see `<dialect>` trap 1) rather than reporting
-        "no results".
+        goal. Formerly reachable via `current_predicate(P)` with `P` left
+        unbound; fixed as of commit `fe858be` and reverified — that exact
+        call now succeeds cleanly. If this shape ever reappears via some
+        other unbound-term rendering, it still means the tool failed, not
+        the proof: re-formulate the goal rather than reporting "no results".
 
 And a fifth, the most dangerous because it *looks* like data:
 
@@ -232,11 +263,14 @@ Three traps that bite here specifically:
    feeding that shape back as a literal — `member(['/',take,3], Ps)` — is
    `count: 0`, because `/` parses as the infix functor, not a three-element
    list; list and `Name/Arity` are different terms in this direction only.
-   Worse, binding the result of `current_predicate(P)` to an output variable
-   can crash the server's own JSON encoder with
-   `{bad_generator,{3}}` from `symbolic_term_json:encode_term/1`. And don't
-   write `current_predicate(N-P/A)` expecting a pair: erlog reads `-` as
-   subtraction and answers `type_error,predicate_indicator`.
+   `current_predicate(P)` with `P` left fully unbound used to crash the
+   server's own JSON encoder with `{bad_generator,{3}}` from
+   `symbolic_term_json:encode_term/1` — fixed as of commit `fe858be`
+   ("Fix unbound variable encoding that crashed the JSON encoder") and
+   reverified: `current_predicate(P)` with `limit: 3` now returns ordinary
+   `['/',Name,Arity]` bindings, no crash. Don't write `current_predicate(N-P/A)`
+   expecting a pair, though — that's unrelated and still live: erlog reads `-`
+   as subtraction and answers `type_error,predicate_indicator` (reverified).
 2. **Zero clauses is an error.** A predicate with no clauses raises
    `existence_error`, rendered by the server as `no such predicate`. The
    library papers over it with sentinel clauses
@@ -261,6 +295,48 @@ Three traps that bite here specifically:
    visited list; `naive_loop/2` doesn't. Any time you want a *set* of
    results, the guard is mandatory. (`local/2`, incidentally —
    `local(Name, ArgCount)`; writing `local(B,_,_)` is a pattern error.)
+
+   Reverified against this codebase's own real cycle
+   (`walk_assignment`/`walk_block`/`walk_body`/`walk_children`/
+   `walk_declaration`/`walk_for`/`walk_function`/`walk_scope`, a mutual
+   recursion group found via `all_mutual_recursion(L)`): the single-solution
+   form answers plausibly with `limit: 3`, and `findall/3` over the same
+   unguarded rule still times out. The trap is real, not a one-off fixture
+   artifact.
+5. **Composing two findall/search-based derived predicates directly can time
+   out even though each works alone — erlog has no tabling, so nothing is
+   cached between backtracks.** Verified:
+
+     { goal: "mutual_recursion(F,G), undocumented(F,A,File,Line)", limit: 5 }
+       → { error: "query timed out..." }
+
+   Both `mutual_recursion/2` and `undocumented/4` answer fine in isolation.
+   Composed with both `F` and `G` unbound, every backtrack into
+   `mutual_recursion/2` re-runs `reaches/2` from scratch, once per failed
+   `undocumented` check downstream — combinatorial, not cyclic. The fix:
+   materialize the expensive side once via its `all_*/1` form, then filter
+   over the concrete list with `member/2` instead of backtracking through
+   the compound goal directly:
+
+     { goal: "all_mutual_recursion(L), member(F-G, L), undocumented(F,A,File,Line)" }
+       → { count: 1, solutions: [{ F: "walk_object", G: "walk_pair", A: 4,
+            File: ".../ts_extract_json.erl", Line: 61 }] }
+
+   Verified, same session. General rule: any time you conjoin two predicates
+   that each contain their own `findall`/recursive search, materialize one
+   side to a list first — same shape as trap 3's guard, one level up.
+
+4. **`assertz`/`retract` don't survive between separate `query` calls.** Each
+   `symbolic_query` call proves against the base fact store fresh; state
+   asserted inside one call's goal is gone by the next call. Verified:
+   `assertz(temp_marker_stress(42))` in one call, then
+   `current_predicate(temp_marker_stress/1)` and
+   `clause(temp_marker_stress(X), true)` in a following call both answer
+   `count: 0` — nothing persisted. So `assertz`/`retract` are only useful as
+   scratch state *within one goal* (comma-chain the asserts and the
+   consuming goal together, as trap 3's reproduction does above) — never to
+   carry a new fact or rule across calls. To persist something, edit
+   `.symbolic/rules.pl` and re-`parse` (see `<workflow>` step 4).
 
 Free text (`doc`/`comment`'s `Text`, `paragraph`) is a binary, and
 `atom_codes/2` demands an atom — so substring search over doc text is not
@@ -339,8 +415,12 @@ rebuild it as a one-off goal, and don't leave it in a scratch `.pl`.
 </library>
 
 <workflow>
-1. Translate the question into a goal. Check `<library>` for an existing
-   predicate before writing one.
+1. Translate the question into a goal. If it has more than one logical
+   step ("X is A and also B", "X is A and reaches Y", "the first Z for
+   which W holds"), that's one conjunctive goal, not a plan to run several
+   independent ones and connect them yourself — see `<rule>` 5. Check
+   `<library>` for an existing predicate, or an existing pair you can
+   conjoin, before writing one from raw facts.
 2. `symbolic_overview {}`. If `loaded` is false, or `total_facts` is stale
    for a tree you know changed, `symbolic_parse { path: "<source dir>" }` —
    an absolute directory that excludes `_build/`. Then confirm `rules_file`
@@ -348,12 +428,21 @@ rebuild it as a one-off goal, and don't leave it in a scratch `.pl`.
    `facts_by_predicate` before assuming a family is queryable.
 3. Run it. Keep `limit` at its default unless you expect many separate
    solutions; prefer an `all_*`/`findall` goal that answers the whole
-   question in one solution. Bind only what you'll read.
-4. If it needs a derived predicate the facts can't give you, add the rule to
-   `.symbolic/rules.pl` (shared, committed, test-checked), re-`parse` to
-   consult it, and re-run. Use `rules` only for a genuine one-off.
+   question in one solution. Bind only what you'll read. If the goal
+   conjoins two predicates that each already do their own
+   `findall`/recursive search, materialize the expensive one first via its
+   `all_*/1` form and filter over the resulting list with `member/2` —
+   don't backtrack through the compound goal directly (`<dialect>` trap 5).
+4. If it needs a derived predicate the facts can't give you — including a
+   multi-step composition you expect to ask again in another shape — add
+   the rule to `.symbolic/rules.pl` (shared, committed, test-checked),
+   re-`parse` to consult it, and re-run. Use `rules` only for a genuine
+   one-off; a chain worth naming belongs in the library, not repeated
+   inline each time you need it.
 5. Answer from the bindings only. `count: 0` is an answer; an `error` is not
-   — quote it as it came back.
+   — quote it as it came back. The goal you ran (and, when composed, the
+   fact that it was one goal) *is* the chain of reasoning — don't restate it
+   as a prose argument alongside it.
 </workflow>
 
 <constraints>

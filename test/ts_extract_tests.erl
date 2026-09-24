@@ -182,6 +182,28 @@ extracts_expression_facts_test() ->
     AndRightId = operand_id(Facts, AndId, right),
     ?assert(lists:member({literal, AndRightId, f, 1, atom, 'true', Path, 3}, Facts)).
 
+%% Same bug class as ts_extract_typescript_tests's numeric-separator
+%% regression test (issue #1), but Erlang's own numeral syntax: a
+%% `Base#Digits` radix prefix, a `_` digit separator, and both combined.
+%% Only comparison operators are captured by expr/6 for Erlang (no
+%% addressable operator field the way TypeScript's binary_expression
+%% has — see this module's own header), so `==` is what actually
+%% exercises classify_literal/parse_number here, not arithmetic.
+extracts_numeric_separator_literal_facts_test() ->
+    Src =
+        "f(X) ->\n"                %% 1
+        "  A = X == 16#FF,\n"      %% 2 -- radix prefix
+        "  B = X == 2#1010,\n"     %% 3 -- different base
+        "  C = X == 1_000_000,\n"  %% 4 -- plain separator
+        "  D = X == 16#FF_FF,\n"   %% 5 -- radix prefix AND separator
+        "  {A, B, C, D}.\n",       %% 6
+    Facts = ts_extract_erlang:text("scratch_numsep.erl", Src),
+    Path = 'scratch_numsep.erl',
+    Literals = [{Value, L} || {literal, _Id, f, 1, integer, Value, P, L} <- Facts, P =:= Path],
+    ?assertEqual(
+        lists:sort([{255, 2}, {10, 3}, {1000000, 4}, {65535, 5}]),
+        lists:sort(Literals)).
+
 only_id([Id]) -> Id.
 
 operand_id(Facts, ParentId, Role) ->
