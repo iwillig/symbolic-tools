@@ -239,6 +239,61 @@ library_cases() ->
 
 real_rules() -> filename:join([".symbolic", "rules.pl"]).
 
+%% --- hidden_risky_call/3: transitive risk propagation ---
+%%
+%% Deliberately requires a bound starting Fun (see its own doc comment in
+%% .symbolic/rules.pl) — an "every hidden risky function" form was tried
+%% first and timed out for real against this project's own source, so
+%% there is no all_hidden_risky_calls/1 to test here; only the per-Fun
+%% predicate.
+
+%% entry/0 -> mid/0 -> deep/0 -> os:getenv/1 — entry never calls os
+%% itself, but reaches it two LOCAL hops away through mid/0 and deep/0
+%% (the risky remote call itself isn't a reaches/2 hop — deep/0 is where
+%% the local chain ends and risky_call/3 takes over).
+hidden_risky_call_flags_a_two_hop_transitive_call_test() ->
+    with_db([{defines, entry, 0, <<"()">>, 'p.erl', 1},
+             {defines, mid, 0, <<"()">>, 'p.erl', 2},
+             {defines, deep, 0, <<"()">>, 'p.erl', 3},
+             {calls, entry, 0, {local, mid, 0}, 'p.erl', 1},
+             {calls, mid, 0, {local, deep, 0}, 'p.erl', 2},
+             {calls, deep, 0, {remote, os, getenv, 1}, 'p.erl', 3}], fun() ->
+        ?assertEqual({solutions, [{'Module', os}, {'Target', getenv}]},
+            symbolic_query:run_result(?DB, real_rules(), "hidden_risky_call(entry, Module, Target)"))
+    end).
+
+%% The base case: a direct one-hop caller of a risky-call site is hidden
+%% too, not just multi-hop chains — reaches/2's own direct-call clause.
+%% mid/0 is one local hop from deep/0, which makes the risky call itself.
+hidden_risky_call_flags_a_direct_one_hop_call_test() ->
+    with_db([{defines, mid, 0, <<"()">>, 'p.erl', 1},
+             {defines, deep, 0, <<"()">>, 'p.erl', 2},
+             {calls, mid, 0, {local, deep, 0}, 'p.erl', 1},
+             {calls, deep, 0, {remote, os, getenv, 1}, 'p.erl', 2}], fun() ->
+        ?assertEqual({solutions, [{'Module', os}, {'Target', getenv}]},
+            symbolic_query:run_result(?DB, real_rules(), "hidden_risky_call(mid, Module, Target)"))
+    end).
+
+%% The site making the risky call directly is not "hidden" — it's already
+%% visible via risky_call/3 on its own, so hidden_risky_call/3 must not
+%% double-report it.
+hidden_risky_call_does_not_flag_the_direct_risky_caller_itself_test() ->
+    with_db([{defines, mid, 0, <<"()">>, 'p.erl', 1},
+             {calls, mid, 0, {remote, os, getenv, 1}, 'p.erl', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "hidden_risky_call(mid, _, _)"))
+    end).
+
+%% A function with no call chain reaching any risky call at all.
+hidden_risky_call_does_not_flag_an_unrelated_function_test() ->
+    with_db([{defines, harmless, 0, <<"()">>, 'p.erl', 1},
+             {defines, mid, 0, <<"()">>, 'p.erl', 2},
+             {calls, harmless, 0, {local, format_name, 1}, 'p.erl', 1},
+             {calls, mid, 0, {remote, os, getenv, 1}, 'p.erl', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "hidden_risky_call(harmless, _, _)"))
+    end).
+
 too_many_params_flags_over_the_threshold_test() ->
     with_db([{defines, five_args, 5, <<"(a,b,c,d,e)">>, 'p.erl', 1},
              {defines, two_args, 2, <<"(a,b)">>, 'p.erl', 5}], fun() ->

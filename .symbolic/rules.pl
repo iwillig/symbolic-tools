@@ -109,6 +109,40 @@ all_risky_calls(Triples) :-
     findall(Caller-Module-Fun, risky_call(Caller, Module, Fun), Raw),
     sort(Raw, Triples).
 
+%% Transitive risk propagation: does a GIVEN function (Fun bound — the
+%% starting value a caller supplies, same "fine when bound" contract
+%% mutual_recursion/2 above documents) reach a risky call without making
+%% one itself? `risky_call/3` alone only sees the one function actually
+%% holding the os:cmd/file:write/etc. call — every innocent-looking
+%% function standing between it and a caller several layers up is
+%% invisible to it, exactly the ones a reviewer most needs flagged (the
+%% risk is hidden BEHIND a name that gives no hint of it).
+%%
+%% This is the case a normal, per-file AST-visitor linter (ESLint
+%% included) cannot express as a "rule" at all: answering it needs a real
+%% call graph and a walk over arbitrary-depth call chains — exactly what
+%% taint-tracking tools like CodeQL or Semgrep exist to bolt on as a
+%% separate analysis engine, because the linter's own visitor model has
+%% no notion of "reachable," only "present at this node." Here it's two
+%% lines over facts already extracted.
+%%
+%% Deliberately scoped to ONE starting Fun, not "every hidden risky
+%% function in the codebase" — that version was tried first and empirically
+%% doesn't work: materializing the whole-codebase closure once via
+%% all_reaches_pairs/1 (1929 pairs here, fast on its own) and then
+%% cross-joining it against every risky_call/3 site, re-checking the
+%% `\+ risky_call/3` negation per candidate pair, blew well past the
+%% query timeout (verified live, even after fixing a goal-order variant
+%% of the same trap along the way). The fix isn't a smarter join, it's
+%% not asking the open-ended question at all: reaches/2's own
+%% visited-list guard already makes a SINGLE bounded forward search fast,
+%% the same way callers/3 and fan_out/3 already require a bound Fun
+%% rather than offering an "every function" form.
+hidden_risky_call(Fun, Module, Target) :-
+    reaches(Fun, RiskyCaller),
+    risky_call(RiskyCaller, Module, Target),
+    \+ risky_call(Fun, Module, Target).
+
 %% First N elements of a list, for ranking a sorted Count-Key list into a top-N.
 take(0, _, []) :- !.
 take(_, [], []) :- !.
