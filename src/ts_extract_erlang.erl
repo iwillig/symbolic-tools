@@ -166,18 +166,34 @@
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
     {ok, Bin} = file:read_file(Path),
-    text(Path, binary_to_list(Bin)).
+    %% Pass the binary straight through — text/2 does the one list
+    %% conversion parser_parse_string's NIF still needs (enif_get_string)
+    %% itself, and every node_text/2 call downstream now runs against
+    %% this same binary directly (see symbolic_ts:node_text/2's own
+    %% comment on why that's not just tidier but a real, measured fix).
+    text(Path, Bin).
 
 %% Same extraction as file/1, but against an already-in-memory source
-%% string rather than a file on disk — used by ts_extract_markdown to
-%% run this extractor against a fenced code block's contents, with
-%% `Path` set to the enclosing Markdown file (not a real .erl file).
--spec text(file:filename(), string()) -> [tuple()].
-text(Path, Src) ->
+%% (binary or list — see below) rather than a file on disk — used by
+%% ts_extract_markdown to run this extractor against a fenced code
+%% block's contents, with `Path` set to the enclosing Markdown file (not
+%% a real .erl file).
+-spec text(file:filename(), string() | binary()) -> [tuple()].
+text(Path, Src0) ->
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_erlang(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    Tree = symbolic_ts:parser_parse_string(Parser, Src),
+    %% parser_parse_string's NIF decodes its argument via enif_get_string,
+    %% which requires a real Erlang list — it cannot take a binary
+    %% directly (confirmed against c_src/symbolic_ts_nif.c). Every
+    %% node_text/2 call below this point, by contrast, wants a binary for
+    %% its own O(1) slice — so both forms are produced once, up front,
+    %% and node_text/2's own consumers (Src) get the binary.
+    {SrcList, Src} = case Src0 of
+        B when is_binary(B) -> {binary_to_list(B), B};
+        L when is_list(L) -> {L, list_to_binary(L)}
+    end,
+    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =

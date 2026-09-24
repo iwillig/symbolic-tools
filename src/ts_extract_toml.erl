@@ -48,11 +48,16 @@
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
     {ok, Bin} = file:read_file(Path),
-    Src = binary_to_list(Bin),
+    %% Src stays a binary from here on for node_text/2's own O(1) slice
+    %% (see symbolic_ts:node_text/2's comment) — SrcList exists only
+    %% because parser_parse_string's NIF still needs a real list
+    %% (enif_get_string), the one place that's still true.
+    Src = Bin,
+    SrcList = binary_to_list(Bin),
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_toml(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    Tree = symbolic_ts:parser_parse_string(Parser, Src),
+    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Count = symbolic_ts:node_named_child_count(Root),

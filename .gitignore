@@ -3,6 +3,11 @@ rebar3.crashdump
 erl_crash.dump
 *.beam
 
+# fprof's raw trace dump (fprof:profile/0 writes it to the cwd by
+# default) — tens of MB of binary data from a single profiling run
+# (docs/benchmarking.md), never meant to be committed.
+fprof.trace
+
 # C build artifacts under c_src/ (and anywhere else) — always regenerated
 # by rebar3's `pc` port-compiler plugin, never meant to be committed.
 *.o

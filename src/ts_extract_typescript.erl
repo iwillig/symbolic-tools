@@ -162,18 +162,29 @@
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
     {ok, Bin} = file:read_file(Path),
-    text(Path, binary_to_list(Bin)).
+    %% Pass the binary straight through — see ts_extract_erlang:file/1's
+    %% identical comment; symbolic_ts:node_text/2's own comment has the
+    %% full story (a plain-list slice measured at effectively all of a
+    %% large file's parse time under fprof).
+    text(Path, Bin).
 
 %% Same extraction as file/1, but against an already-in-memory source
-%% string rather than a file on disk — used by ts_extract_markdown to
-%% run this extractor against a fenced code block's contents, with
-%% `Path` set to the enclosing Markdown file (not a real .ts file).
--spec text(file:filename(), string()) -> [tuple()].
-text(Path, Src) ->
+%% (binary or list — see below) rather than a file on disk — used by
+%% ts_extract_markdown to run this extractor against a fenced code
+%% block's contents, with `Path` set to the enclosing Markdown file (not
+%% a real .ts file).
+-spec text(file:filename(), string() | binary()) -> [tuple()].
+text(Path, Src0) ->
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_typescript(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    Tree = symbolic_ts:parser_parse_string(Parser, Src),
+    %% See ts_extract_erlang:text/2's identical comment: parser_parse_string
+    %% needs a list (enif_get_string), node_text/2 wants a binary.
+    {SrcList, Src} = case Src0 of
+        B when is_binary(B) -> {binary_to_list(B), B};
+        L when is_list(L) -> {L, list_to_binary(L)}
+    end,
+    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =

@@ -78,11 +78,18 @@
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
     {ok, Bin} = file:read_file(Path),
-    Src = binary_to_list(Bin),
+    %% Src stays a binary — see ts_extract_toml:file/1's identical
+    %% comment (symbolic_ts:node_text/2's own comment has the full
+    %% story). example_facts/4 below forwards a node_text/2-extracted
+    %% fenced-code-block's own text (still a list — see that function's
+    %% own type) into e.g. ts_extract_erlang:text/2, which already
+    %% accepts either form.
+    Src = Bin,
+    SrcList = binary_to_list(Bin),
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_markdown(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    Tree = symbolic_ts:parser_parse_string(Parser, Src),
+    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =
