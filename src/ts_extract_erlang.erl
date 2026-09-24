@@ -30,16 +30,16 @@
 %%%   expr_operand(Id, Role, ChildId)                  — Role: left/right/operand for a
 %%%                                                       binary/unary expr, or a 0-based
 %%%                                                       argument index for a call
-%%%   literal(Id, Function, Arity, LitKind, Value, File, Line) — a literal value: an operand of
-%%%                                                       a binary/unary expr, OR a call
-%%%                                                       argument (LitKind now also includes
+%%%   literal(Id, Function, Arity, LitKind, Value, File, Line, RawText) — a literal value: an
+%%%                                                       operand of a binary/unary expr, OR a
+%%%                                                       call argument (LitKind now also includes
 %%%                                                       `string`, Value a binary)
 %%%   expr_ref(Id, Function, Arity, Name, File, Line)  — a bare `var` used as an operand or
 %%%                                                       passed as a call argument
 %%%
 %%% Every calls/5 fact site (local and remote) ALSO gets a Kind=call
 %%% expr/6 fact for its own call node plus one expr_operand/3 per
-%%% argument, indexed 0.., pointing at a literal/7 or expr_ref/6 fact for
+%%% argument, indexed 0.., pointing at a literal/8 or expr_ref/6 fact for
 %%% that argument node — the same operand-walk machinery ?BINARY_OP_QUERIES
 %%% already uses (see operand_facts/7), just with an integer Role instead
 %%% of left/right. This is what lets a query recover the literal string a
@@ -433,8 +433,8 @@ operand_facts(ParentId, Role, Node, Caller, CallerArity, Src, PathAtom) ->
     ChildId = node_id(PathAtom, Node),
     Link = {expr_operand, ParentId, Role, ChildId},
     case classify_literal(Node, Src) of
-        {LitKind, Value} ->
-            [Link, {literal, ChildId, Caller, CallerArity, LitKind, Value, PathAtom, line(Node)}];
+        {LitKind, Value, RawText} ->
+            [Link, {literal, ChildId, Caller, CallerArity, LitKind, Value, PathAtom, line(Node), RawText}];
         no ->
             case symbolic_ts:node_type(Node) of
                 "var" ->
@@ -457,12 +457,16 @@ operand_facts(ParentId, Role, Node, Caller, CallerArity, Src, PathAtom) ->
 %% sequences inside (`\"`, `\n`, ...) are NOT unescaped yet — the raw
 %% source text between the quotes is kept as-is, same open-ended status
 %% as parse_number/1's own doc comment for numeric edge cases.
+%% RawText (3rd element) is the whole literal node's own verbatim source
+%% text — captured before parse_number/1's normalization or
+%% strip_quotes/1's unquoting, same "widen literal/7 to literal/8"
+%% addition as ts_extract_typescript.erl's own classify_literal/2.
 classify_literal(Node, Src) ->
     case symbolic_ts:node_type(Node) of
-        "integer" -> {integer, parse_number(symbolic_ts:node_text(Node, Src))};
-        "float" -> {float, parse_number(symbolic_ts:node_text(Node, Src))};
-        "atom" -> {atom, to_atom(symbolic_ts:node_text(Node, Src))};
-        "string" -> {string, to_text(strip_quotes(symbolic_ts:node_text(Node, Src)))};
+        "integer" -> {integer, parse_number(symbolic_ts:node_text(Node, Src)), to_text(symbolic_ts:node_text(Node, Src))};
+        "float" -> {float, parse_number(symbolic_ts:node_text(Node, Src)), to_text(symbolic_ts:node_text(Node, Src))};
+        "atom" -> {atom, to_atom(symbolic_ts:node_text(Node, Src)), to_text(symbolic_ts:node_text(Node, Src))};
+        "string" -> {string, to_text(strip_quotes(symbolic_ts:node_text(Node, Src))), to_text(symbolic_ts:node_text(Node, Src))};
         _ -> no
     end.
 

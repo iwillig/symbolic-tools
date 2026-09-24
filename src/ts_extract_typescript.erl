@@ -40,8 +40,11 @@
 %%%   expr_operand(Id, Role, ChildId)                    — Role: left/right/operand for a
 %%%                                                         binary/unary expr, or a 0-based
 %%%                                                         argument index for a call
-%%%   literal(Id, Function, Arity, LitKind, Value, File, Line) — a literal value: an operand of a
-%%%                                                         binary/unary expr, OR a call argument
+%%%   literal(Id, Function, Arity, LitKind, Value, File, Line, RawText) — a literal value: an
+%%%                                                         operand of a binary/unary expr, OR a
+%%%                                                         call argument. RawText is the whole
+%%%                                                         literal's own verbatim source slice,
+%%%                                                         captured before any parsing/unescaping
 %%%   expr_ref(Id, Function, Arity, Name, File, Line)    — a bare identifier used as an operand
 %%%                                                         or passed as a call argument
 %%%
@@ -71,6 +74,21 @@
 %%%   braceless_body(Function, Arity, Kind, File, Line)  — Kind: if/else/for/while whose
 %%%                                                         body isn't a statement_block
 %%%   return_stmt(Function, Arity, HasValue, File, Line) — HasValue: true/false
+%%   async_function(Function, Arity, File, Line)       — a function_declaration
+%%                                                         with a literal `async`
+%%                                                         token child
+%%   generator_function(Function, Arity, File, Line)   — a generator_function_declaration
+%%                                                         (`function* foo(){}`); a
+%%                                                         SEPARATE node type from
+%%                                                         function_declaration, so it
+%%                                                         also gets its own defines/5,
+%%                                                         caller_info/2 and walk_scope/5
+%%                                                         dispatch — see ?GENERATOR_DEF_QUERY
+%%   await_expr(Function, Arity, File, Line)           — an await_expression, wherever
+%%                                                         it occurs (not restricted to
+%%                                                         async_function's own body — a
+%%                                                         top-level `await` is its own bug)
+%%   yield_expr(Function, Arity, File, Line)           — a yield_expression
 %%%
 %%% scope/var_decl/var_ref/resolves_to are TypeScript-only (Erlang's
 %%% variable model — single-assignment, pattern-bound, no var/let/const
@@ -113,10 +131,37 @@
 -import(ts_extract_text, [to_atom/1, to_text/1]).
 
 -define(DEF_QUERY, "(function_declaration name: (identifier) @fun_name)").
+%% `function* foo(){}` is a SEPARATE node type from `function_declaration`
+%% (confirmed against tree-sitter-typescript's own node-types.json — it
+%% has no "async"/"generator" flag field on function_declaration at all),
+%% so a generator declaration needs its own query or ?DEF_QUERY silently
+%% never sees it. `async function foo(){}` stays the same node type
+%% (function_declaration) with "async" as a literal token child instead —
+%% same "no addressable field, query the literal token" technique
+%% ts_extract_erlang.erl's ?BINARY_OP_QUERIES already uses for its own
+%% no-fields case.
+-define(GENERATOR_DEF_QUERY, "(generator_function_declaration name: (identifier) @fun_name)").
+-define(ASYNC_FUNCTION_QUERY, "(function_declaration \"async\") @f").
+-define(GENERATOR_FUNCTION_QUERY, "(generator_function_declaration) @f").
+-define(AWAIT_QUERY, "(await_expression) @a").
+-define(YIELD_QUERY, "(yield_expression) @y").
+-define(LABELED_STMT_QUERY, "(labeled_statement label: (statement_identifier) @n) @l").
+-define(BREAK_LABEL_QUERY, "(break_statement label: (statement_identifier) @n) @s").
+-define(CONTINUE_LABEL_QUERY, "(continue_statement label: (statement_identifier) @n) @s").
 -define(LOCAL_CALL_QUERY, "(call_expression function: (identifier) @callee)").
 -define(MEMBER_CALL_QUERY,
     "(call_expression function: (member_expression "
     "object: (_) @obj property: (property_identifier) @prop))").
+%% Every property access, called or not — calls/5's member(Obj,Method,_)
+%% only ever fires when the member_expression is itself a call's own
+%% "function" field (see ?MEMBER_CALL_QUERY above); a bare read like
+%% `arguments.callee` or `Object.prototype` is invisible to that query
+%% entirely. member_reads/4 below re-queries every member_expression and
+%% filters OUT the ones ?MEMBER_CALL_QUERY already covers, rather than
+%% widening that query itself — keeps calls/5's own "only calls" contract
+%% untouched.
+-define(MEMBER_EXPR_QUERY,
+    "(member_expression object: (_) @obj property: (property_identifier) @prop) @m").
 -define(NEW_EXPR_QUERY, "(new_expression) @n").
 -define(IMPORT_QUERY, "(import_statement) @i").
 -define(EXPORT_QUERY, "(export_statement) @e").
@@ -158,6 +203,13 @@
 
 -define(BINARY_EXPR_QUERY, "(binary_expression) @b").
 -define(UNARY_EXPR_QUERY, "(unary_expression) @b").
+%% The comma operator: `a, b, c` — an n-ary node (no left/right/operand
+%% fields at all, confirmed against tree-sitter-typescript's own
+%% node-types.json: just repeated anonymous "expression" children), so it
+%% needs its own Kind rather than fitting binary/unary's two-operand
+%% shape — operands are positional (0-based), same technique
+%% call_arg_facts/6 already uses for call arguments.
+-define(SEQUENCE_EXPR_QUERY, "(sequence_expression) @s").
 
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
@@ -200,7 +252,15 @@ text(Path, Src0) ->
         scope_facts(Lang, Root, Src, PathAtom) ++
         stmt_blocks(Lang, Root, Src, PathAtom) ++
         braceless_bodies(Lang, Root, Src, PathAtom) ++
-        return_stmts(Lang, Root, Src, PathAtom),
+        return_stmts(Lang, Root, Src, PathAtom) ++
+        generator_defines(Lang, Root, Src, PathAtom) ++
+        async_functions(Lang, Root, Src, PathAtom) ++
+        generator_functions(Lang, Root, Src, PathAtom) ++
+        await_exprs(Lang, Root, Src, PathAtom) ++
+        yield_exprs(Lang, Root, Src, PathAtom) ++
+        member_reads(Lang, Root, Src, PathAtom) ++
+        label_stmts(Lang, Root, Src, PathAtom) ++
+        label_refs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
 
 defines(Lang, Root, Src, PathAtom) ->
@@ -216,6 +276,64 @@ define_fact(NameNode, Src, PathAtom) ->
     {Arity, Params} = args_shape(Decl, "parameters", Src),
     {defines, to_atom(symbolic_ts:node_text(NameNode, Src)), Arity, Params,
      PathAtom, line(NameNode)}.
+
+%% `function* foo(){}` is a distinct node type (generator_function_declaration)
+%% that ?DEF_QUERY never matches — see ?GENERATOR_DEF_QUERY's own doc
+%% comment above. Same define_fact/3 shape, so a generator declaration
+%% still gets an ordinary defines/5 fact like any other function.
+generator_defines(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?GENERATOR_DEF_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    lists:usort([
+        define_fact(N, Src, PathAtom)
+     || {"fun_name", N} <- Caps
+    ]).
+
+%% async_function/4: a function_declaration with a literal `async` token
+%% child — Name/Arity read directly off the captured node's own fields,
+%% the same technique define_fact/3 uses via its parent, just without the
+%% extra node_parent/1 hop (the capture here already IS the declaration).
+async_functions(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?ASYNC_FUNCTION_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    lists:usort([
+        function_marker_fact(async_function, N, Src, PathAtom)
+     || {"f", N} <- Caps
+    ]).
+
+%% generator_function/4: same idea, for generator_function_declaration —
+%% every match of ?GENERATOR_DEF_QUERY's own node, tagged instead of named.
+generator_functions(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?GENERATOR_FUNCTION_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    lists:usort([
+        function_marker_fact(generator_function, N, Src, PathAtom)
+     || {"f", N} <- Caps
+    ]).
+
+function_marker_fact(FactName, DeclNode, Src, PathAtom) ->
+    NameNode = symbolic_ts:node_child_by_field_name(DeclNode, "name"),
+    {Arity, _Params} = args_shape(DeclNode, "parameters", Src),
+    {FactName, to_atom(symbolic_ts:node_text(NameNode, Src)), Arity, PathAtom, line(DeclNode)}.
+
+%% await_expr/4 + yield_expr/4: attributed via caller_info/2's own walk-up
+%% (now generator_function_declaration-aware, see caller_info/2 below) —
+%% same shape as return_stmt/5 minus HasValue, no operand content needed.
+await_exprs(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?AWAIT_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"a", N} <- Caps]),
+    lists:map(fun(N) -> keyword_expr_fact(await_expr, N, Src, PathAtom) end, Nodes).
+
+yield_exprs(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?YIELD_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"y", N} <- Caps]),
+    lists:map(fun(N) -> keyword_expr_fact(yield_expr, N, Src, PathAtom) end, Nodes).
+
+keyword_expr_fact(FactName, N, Src, PathAtom) ->
+    {Caller, CallerArity} = caller_info(N, Src),
+    {FactName, Caller, CallerArity, PathAtom, line(N)}.
 
 %% A node's arg-list field (`formal_parameters` for a declaration,
 %% `arguments` for a call) — named-child count is the arity/arg count,
@@ -291,6 +409,83 @@ member_call_facts(PropNode, Src, PathAtom) ->
         to_atom(symbolic_ts:node_text(PropNode, Src)), ArgCount},
     [{calls, Caller, CallerArity, CallSpec, PathAtom, line(PropNode)}
      | call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom)].
+
+%% member_read/6: a property access that ISN'T a call — see
+%% ?MEMBER_EXPR_QUERY's own doc comment. Filters out every match whose
+%% immediate parent is a call_expression with THIS SAME node as its own
+%% "function" field (a real call, already a calls/5 fact); everything
+%% else — `arguments.callee`, `x.__proto__`, an access later used as a
+%% call's ARGUMENT rather than its target, etc. — is a genuine read.
+member_reads(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?MEMBER_EXPR_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"m", N} <- Caps]),
+    lists:filtermap(fun(N) -> member_read_fact(N, Src, PathAtom) end, Nodes).
+
+member_read_fact(MemberNode, Src, PathAtom) ->
+    case is_call_target(MemberNode) of
+        true -> false;
+        false ->
+            ObjNode = symbolic_ts:node_child_by_field_name(MemberNode, "object"),
+            PropNode = symbolic_ts:node_child_by_field_name(MemberNode, "property"),
+            {Caller, CallerArity} = caller_info(MemberNode, Src),
+            {true, {member_read, Caller, CallerArity,
+                to_atom(symbolic_ts:node_text(ObjNode, Src)),
+                to_atom(symbolic_ts:node_text(PropNode, Src)), PathAtom, line(MemberNode)}}
+    end.
+
+is_call_target(MemberNode) ->
+    Parent = symbolic_ts:node_parent(MemberNode),
+    case symbolic_ts:node_is_null(Parent) of
+        true -> false;
+        false ->
+            case symbolic_ts:node_type(Parent) of
+                "call_expression" ->
+                    FnField = symbolic_ts:node_child_by_field_name(Parent, "function"),
+                    same_node(FnField, MemberNode);
+                _ -> false
+            end
+    end.
+
+%% Node identity by byte span — no direct equality op on a tree-sitter
+%% node reference otherwise, same technique block_stmt_facts/4 already
+%% uses (via node_id/2) to compare a switch_case's own value node.
+same_node(A, B) ->
+    symbolic_ts:node_start_byte(A) =:= symbolic_ts:node_start_byte(B)
+        andalso symbolic_ts:node_end_byte(A) =:= symbolic_ts:node_end_byte(B).
+
+%% label_stmt/5 + label_ref/6: `label: for(...) {...}` and the
+%% `break label;`/`continue label;` that target it. Both "label" fields
+%% are addressable (statement_identifier), same discipline as every other
+%% field lookup in this module. Attributed via caller_info/2, same as
+%% every other function-scoped fact family here.
+label_stmts(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?LABELED_STMT_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"n", N} <- Caps]),
+    lists:map(fun(N) -> label_decl_fact(N, Src, PathAtom) end, Nodes).
+
+label_decl_fact(NameNode, Src, PathAtom) ->
+    LabeledStmt = symbolic_ts:node_parent(NameNode),
+    {Caller, CallerArity} = caller_info(LabeledStmt, Src),
+    {label_stmt, Caller, CallerArity, to_atom(symbolic_ts:node_text(NameNode, Src)),
+     PathAtom, line(LabeledStmt)}.
+
+label_refs(Lang, Root, Src, PathAtom) ->
+    label_ref_kind(Lang, Root, Src, PathAtom, break, ?BREAK_LABEL_QUERY)
+        ++ label_ref_kind(Lang, Root, Src, PathAtom, 'continue', ?CONTINUE_LABEL_QUERY).
+
+label_ref_kind(Lang, Root, Src, PathAtom, Kind, Query) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, Query),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"n", N} <- Caps]),
+    lists:map(fun(N) -> label_ref_fact(N, Src, PathAtom, Kind) end, Nodes).
+
+label_ref_fact(NameNode, Src, PathAtom, Kind) ->
+    Stmt = symbolic_ts:node_parent(NameNode),
+    {Caller, CallerArity} = caller_info(Stmt, Src),
+    {label_ref, Caller, CallerArity, to_atom(symbolic_ts:node_text(NameNode, Src)),
+     Kind, PathAtom, line(Stmt)}.
 
 %% `new X(...)` — modeled as one more calls/5 CallSpec shape
 %% (new(Constructor, ArgCount)), not a separate fact family: it's
@@ -701,7 +896,8 @@ branch_fact(N, Src, PathAtom, Kind) ->
 %% its own expr/6 fact independently — operand_facts/7 just links to
 %% the Id that fact already has, via node_start_byte/1 on the same node.
 exprs(Lang, Root, Src, PathAtom) ->
-    binary_exprs(Lang, Root, Src, PathAtom) ++ unary_exprs(Lang, Root, Src, PathAtom).
+    binary_exprs(Lang, Root, Src, PathAtom) ++ unary_exprs(Lang, Root, Src, PathAtom)
+        ++ sequence_exprs(Lang, Root, Src, PathAtom).
 
 binary_exprs(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?BINARY_EXPR_QUERY),
@@ -736,6 +932,29 @@ unary_expr_facts(N, Src, PathAtom) ->
     ArgNode = symbolic_ts:node_child_by_field_name(N, "argument"),
     [ExprFact, OpFact] ++ operand_facts(Id, operand, ArgNode, Caller, CallerArity, Src, PathAtom).
 
+%% ESLint no-sequences: the comma operator. One expr/6 fact (Kind=sequence)
+%% per node, one expr_operand/3 per child, indexed 0.. — deliberately NOT
+%% folded into binary_exprs/unary_exprs above (those assume exactly
+%% left/right or one operand; a sequence_expression has 2+ children with
+%% no such shape).
+sequence_exprs(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?SEQUENCE_EXPR_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"s", N} <- Caps]),
+    lists:flatmap(fun(N) -> sequence_expr_facts(N, Src, PathAtom) end, Nodes).
+
+sequence_expr_facts(N, Src, PathAtom) ->
+    Id = node_id(PathAtom, N),
+    {Caller, CallerArity} = caller_info(N, Src),
+    ExprFact = {expr, Id, Caller, CallerArity, sequence, PathAtom, line(N)},
+    Count = symbolic_ts:node_named_child_count(N),
+    OperandFacts = lists:flatmap(
+        fun(I) ->
+            Child = symbolic_ts:node_named_child(N, I),
+            operand_facts(Id, I, Child, Caller, CallerArity, Src, PathAtom)
+        end, lists:seq(0, Count - 1)),
+    [ExprFact | OperandFacts].
+
 %% Classify one operand node: a literal gets its own literal/7 fact, a
 %% bare identifier gets expr_ref/6, and anything else (notably a nested
 %% binary/unary expression — already captured independently, see
@@ -745,8 +964,8 @@ operand_facts(ParentId, Role, Node, Caller, CallerArity, Src, PathAtom) ->
     ChildId = node_id(PathAtom, Node),
     Link = {expr_operand, ParentId, Role, ChildId},
     case classify_literal(Node, Src) of
-        {LitKind, Value} ->
-            [Link, {literal, ChildId, Caller, CallerArity, LitKind, Value, PathAtom, line(Node)}];
+        {LitKind, Value, RawText} ->
+            [Link, {literal, ChildId, Caller, CallerArity, LitKind, Value, PathAtom, line(Node), RawText}];
         no ->
             case symbolic_ts:node_type(Node) of
                 "identifier" ->
@@ -760,14 +979,19 @@ operand_facts(ParentId, Role, Node, Caller, CallerArity, Src, PathAtom) ->
 %% number/string/true/false/null are TypeScript's own literal node
 %% types. `string` wraps an unquoted string_fragment child (confirmed
 %% empirically — no manual quote-stripping needed); an empty string
-%% ("") has no such child at all.
+%% ("") has no such child at all. The 3rd element, RawText, is the
+%% WHOLE literal node's own verbatim source text — captured before
+%% parse_number/1's normalization or string_fragment_text/2's unquoting
+%% ever runs, so a rule needing the original digits/escapes/quote style
+%% (no-octal, no-loss-of-precision, no-useless-escape, ...) has them; the
+%% already-parsed Value stays exactly as before for everything else.
 classify_literal(Node, Src) ->
     case symbolic_ts:node_type(Node) of
-        "number" -> {number, parse_number(symbolic_ts:node_text(Node, Src))};
-        "string" -> {string, to_text(string_fragment_text(Node, Src))};
-        "true" -> {boolean, true};
-        "false" -> {boolean, false};
-        "null" -> {null, null};
+        "number" -> {number, parse_number(symbolic_ts:node_text(Node, Src)), to_text(symbolic_ts:node_text(Node, Src))};
+        "string" -> {string, to_text(string_fragment_text(Node, Src)), to_text(symbolic_ts:node_text(Node, Src))};
+        "true" -> {boolean, true, to_text(symbolic_ts:node_text(Node, Src))};
+        "false" -> {boolean, false, to_text(symbolic_ts:node_text(Node, Src))};
+        "null" -> {null, null, to_text(symbolic_ts:node_text(Node, Src))};
         _ -> no
     end.
 
@@ -895,6 +1119,7 @@ walk_scope(Node, Scope, FuncScope, Src, PathAtom) ->
                 "function_declaration" -> walk_function(Node, Scope, Src, PathAtom);
                 "function_expression" -> walk_function(Node, Scope, Src, PathAtom);
                 "arrow_function" -> walk_function(Node, Scope, Src, PathAtom);
+                "generator_function_declaration" -> walk_function(Node, Scope, Src, PathAtom);
                 "statement_block" -> walk_block(Node, Scope, FuncScope, Src, PathAtom);
                 "for_statement" -> walk_for(Node, Scope, FuncScope, Src, PathAtom);
                 "lexical_declaration" ->
@@ -1203,6 +1428,10 @@ definition_name(Node, Src) ->
             NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
             {Arity, _Params} = args_shape(Node, "parameters", Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
+        "generator_function_declaration" ->
+            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
+            {Arity, _Params} = args_shape(Node, "parameters", Src),
+            {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         _ ->
             false
     end.
@@ -1215,6 +1444,17 @@ definition_name(Node, Src) ->
 caller_info(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_declaration" ->
+            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
+            {Arity, _Params} = args_shape(Node, "parameters", Src),
+            {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
+        %% `function* foo(){}` is a distinct node type from
+        %% function_declaration (see ?GENERATOR_DEF_QUERY's own doc
+        %% comment) — without this clause, every call/branch/expr/await/
+        %% yield fact inside a generator's own body silently walked all
+        %% the way up past it and came back {undefined, undefined}, a
+        %% real bug (found by tracing why a generator's own await_expr
+        %% facts came back attributed to nothing).
+        "generator_function_declaration" ->
             NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
             {Arity, _Params} = args_shape(Node, "parameters", Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};

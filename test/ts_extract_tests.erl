@@ -180,7 +180,7 @@ extracts_expression_facts_test() ->
     AndLeftId = operand_id(Facts, AndId, left),
     ?assert(lists:member({expr_ref, AndLeftId, f, 1, 'X', Path, 3}, Facts)),
     AndRightId = operand_id(Facts, AndId, right),
-    ?assert(lists:member({literal, AndRightId, f, 1, atom, 'true', Path, 3}, Facts)).
+    ?assert(lists:member({literal, AndRightId, f, 1, atom, 'true', Path, 3, <<"true">>}, Facts)).
 
 %% Same bug class as ts_extract_typescript_tests's numeric-separator
 %% regression test (issue #1), but Erlang's own numeral syntax: a
@@ -199,10 +199,17 @@ extracts_numeric_separator_literal_facts_test() ->
         "  {A, B, C, D}.\n",       %% 6
     Facts = ts_extract_erlang:text("scratch_numsep.erl", Src),
     Path = 'scratch_numsep.erl',
-    Literals = [{Value, L} || {literal, _Id, f, 1, integer, Value, P, L} <- Facts, P =:= Path],
+    Literals = [{Value, L} || {literal, _Id, f, 1, integer, Value, P, L, _RawText} <- Facts, P =:= Path],
     ?assertEqual(
         lists:sort([{255, 2}, {10, 3}, {1000000, 4}, {65535, 5}]),
-        lists:sort(Literals)).
+        lists:sort(Literals)),
+    %% RawText keeps the ORIGINAL digits (radix prefix, separators) —
+    %% unlike Value, which is already normalized — the whole point of
+    %% widening literal/7 to literal/8.
+    RawTexts = [{RawText, L} || {literal, _Id, f, 1, integer, _Value, P, L, RawText} <- Facts, P =:= Path],
+    ?assertEqual(
+        lists:sort([{<<"16#FF">>, 2}, {<<"2#1010">>, 3}, {<<"1_000_000">>, 4}, {<<"16#FF_FF">>, 5}]),
+        lists:sort(RawTexts)).
 
 only_id([Id]) -> Id.
 

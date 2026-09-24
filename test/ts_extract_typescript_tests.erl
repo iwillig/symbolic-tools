@@ -142,12 +142,12 @@ extracts_expression_facts_test() ->
     CmpId = only_id([Id || {expr, Id, f, 1, binary, P, 5} <- Facts, P =:= Path]),
     ?assert(lists:member({expr_operator, CmpId, '==='}, Facts)),
     LitId = operand_id(Facts, CmpId, left),
-    ?assert(lists:member({literal, LitId, f, 1, number, 0, Path, 5}, Facts)),
+    ?assert(lists:member({literal, LitId, f, 1, number, 0, Path, 5, <<"0">>}, Facts)),
     NegId = operand_id(Facts, CmpId, right),
     ?assert(lists:member({expr, NegId, f, 1, unary, Path, 5}, Facts)),
     ?assert(lists:member({expr_operator, NegId, '-'}, Facts)),
     NegOperandId = operand_id(Facts, NegId, operand),
-    ?assert(lists:member({literal, NegOperandId, f, 1, number, 0, Path, 5}, Facts)).
+    ?assert(lists:member({literal, NegOperandId, f, 1, number, 0, Path, 5, <<"0">>}, Facts)).
 
 %% Issue #1: a JS/TS numeric literal with a `_` digit separator (or a
 %% 0x/0b/0o radix prefix, or a trailing BigInt `n`) used to crash the
@@ -170,10 +170,17 @@ extracts_numeric_separator_literal_facts_test() ->
         "}\n",                             %% 8
     Facts = ts_extract_typescript:text("scratch_numsep.ts", Src),
     Path = 'scratch_numsep.ts',
-    Literals = [{Value, L} || {literal, _Id, f, 1, number, Value, P, L} <- Facts, P =:= Path],
+    Literals = [{Value, L} || {literal, _Id, f, 1, number, Value, P, L, _RawText} <- Facts, P =:= Path],
     ?assertEqual(
         lists:sort([{5000, 2}, {32, 3}, {31, 4}, {15, 5}, {1000, 6}, {1000.5, 7}]),
-        lists:sort(Literals)).
+        lists:sort(Literals)),
+    %% RawText keeps the original separator/prefix, unlike the already-
+    %% normalized Value above — the whole point of literal/8.
+    RawTexts = [{RawText, L} || {literal, _Id, f, 1, number, _Value, P, L, RawText} <- Facts, P =:= Path],
+    ?assertEqual(
+        lists:sort([{<<"5_000">>, 2}, {<<"0b1_00000">>, 3}, {<<"0x1_F">>, 4},
+                    {<<"0o1_7">>, 5}, {<<"1_000n">>, 6}, {<<"1_000.5">>, 7}]),
+        lists:sort(RawTexts)).
 
 only_id([Id]) -> Id.
 
@@ -468,3 +475,111 @@ extracts_return_stmt_facts_test() ->
     ?assertEqual(
         lists:sort([{true, 3}, {false, 5}]),
         lists:sort([{HasValue, L} || {return_stmt, f, 1, HasValue, P, L} <- Facts, P =:= Path])).
+
+%% async_function/4: an ordinary `async function` declaration — Name/Arity
+%% read directly off the captured function_declaration node, no walk-up.
+extracts_async_function_facts_test() ->
+    Src =
+        "async function f(a: number) {\n" %% 1
+        "  return a;\n"                    %% 2
+        "}\n"                              %% 3
+        "function g() {}\n",                %% 4
+    Facts = ts_extract_typescript:text("scratch_async.ts", Src),
+    Path = 'scratch_async.ts',
+    ?assert(lists:member({async_function, f, 1, Path, 1}, Facts)),
+    ?assertEqual([], [F || {async_function, g, 0, _, _} = F <- Facts]).
+
+%% generator_function/4 + defines/5: `function* foo(){}` is a SEPARATE
+%% node type from function_declaration (verified against
+%% tree-sitter-typescript's own node-types.json) — this is the regression
+%% test for the bug that would exist if ?DEF_QUERY alone were relied on:
+%% a generator declaration must still produce an ordinary defines/5 fact.
+extracts_generator_function_facts_test() ->
+    Src =
+        "function* gen(a: number) {\n" %% 1
+        "  yield a;\n"                  %% 2
+        "}\n",                          %% 3
+    Facts = ts_extract_typescript:text("scratch_gen.ts", Src),
+    Path = 'scratch_gen.ts',
+    ?assert(lists:member({generator_function, gen, 1, Path, 1}, Facts)),
+    ?assert(lists:member({defines, gen, 1, <<"(a: number)">>, Path, 1}, Facts)).
+
+%% member_read/6: a property access that's a call (obj.method()) must NOT
+%% also produce a member_read fact (it's already a calls/5 member(...)),
+%% while a bare read (obj.prop, no call) must. Also covers a read used as
+%% a call's own ARGUMENT (arguments.callee passed to something) — that
+%% member_expression's parent is the call's "arguments" list, not its
+%% "function" field, so it's still a genuine read.
+extracts_member_read_facts_test() ->
+    Src =
+        "function f(x: any) {\n"          %% 1
+        "  x.method();\n"                  %% 2 -- a call: no member_read
+        "  return x.callee;\n"              %% 3 -- a bare read
+        "  g(x.callee);\n"                  %% 4 -- read used as an argument
+        "}\n",                              %% 5
+    Facts = ts_extract_typescript:text("scratch_memberread.ts", Src),
+    Path = 'scratch_memberread.ts',
+    ?assertEqual(
+        lists:sort([{x, callee, 3}, {x, callee, 4}]),
+        lists:sort([{O, P, L} || {member_read, f, 1, O, P, Pa, L} <- Facts, Pa =:= Path])),
+    ?assertEqual([], [F || {member_read, f, 1, x, method, _, _} = F <- Facts]).
+
+%% label_stmt/5 + label_ref/6: a used label (referenced by both a break
+%% and a continue) and an unused one (`outer2`, never referenced) in the
+%% same function — the exact shapes no_unused_labels/4 needs to tell them
+%% apart.
+extracts_label_facts_test() ->
+    Src =
+        "function f() {\n"                %% 1
+        "  outer: for (const x of []) {\n" %% 2
+        "    if (x) continue outer;\n"     %% 3
+        "    if (x) break outer;\n"        %% 4
+        "  }\n"                            %% 5
+        "  outer2: for (const y of []) {\n" %% 6
+        "    g(y);\n"                       %% 7
+        "  }\n"                             %% 8
+        "}\n",                              %% 9
+    Facts = ts_extract_typescript:text("scratch_label.ts", Src),
+    Path = 'scratch_label.ts',
+    ?assertEqual(
+        lists:sort([{outer, 2}, {outer2, 6}]),
+        lists:sort([{N, L} || {label_stmt, f, 0, N, P, L} <- Facts, P =:= Path])),
+    ?assertEqual(
+        lists:sort([{outer, 'continue', 3}, {outer, break, 4}]),
+        lists:sort([{N, K, L} || {label_ref, f, 0, N, K, P, L} <- Facts, P =:= Path])).
+
+%% expr/6 Kind=sequence: the comma operator, `a, b, c` — an n-ary node
+%% with no left/right shape, so it needs its own positional
+%% expr_operand/3 walk rather than binary_expr_facts/3's fixed left/right.
+extracts_sequence_expression_facts_test() ->
+    Src =
+        "function f() {\n"          %% 1
+        "  return (1, 2, x);\n"     %% 2
+        "}\n",                      %% 3
+    Facts = ts_extract_typescript:text("scratch_seq.ts", Src),
+    Path = 'scratch_seq.ts',
+    SeqId = only_id([Id || {expr, Id, f, 0, sequence, P, 2} <- Facts, P =:= Path]),
+    Op0 = operand_id(Facts, SeqId, 0),
+    Op1 = operand_id(Facts, SeqId, 1),
+    Op2 = operand_id(Facts, SeqId, 2),
+    ?assert(lists:member({literal, Op0, f, 0, number, 1, Path, 2, <<"1">>}, Facts)),
+    ?assert(lists:member({literal, Op1, f, 0, number, 2, Path, 2, <<"2">>}, Facts)),
+    ?assert(lists:member({expr_ref, Op2, f, 0, x, Path, 2}, Facts)).
+
+%% await_expr/4 + yield_expr/4: attribution via caller_info/2 must reach
+%% correctly into a generator_function_declaration's own body — before
+%% caller_info/2 gained its own generator_function_declaration clause,
+%% every fact inside a generator's body (yield_expr included) walked all
+%% the way up past it undetected and came back {undefined, undefined}.
+extracts_await_and_yield_facts_test() ->
+    Src =
+        "async function f() {\n"       %% 1
+        "  await g();\n"                %% 2
+        "}\n"                           %% 3
+        "function* gen() {\n"           %% 4
+        "  yield 1;\n"                  %% 5
+        "}\n",                          %% 6
+    Facts = ts_extract_typescript:text("scratch_awaityield.ts", Src),
+    Path = 'scratch_awaityield.ts',
+    ?assert(lists:member({await_expr, f, 0, Path, 2}, Facts)),
+    ?assert(lists:member({yield_expr, gen, 0, Path, 5}, Facts)).

@@ -366,13 +366,18 @@ all_short_names(Triples) :-
     findall(Fun-Arity-File, short_name(Fun, Arity, File, _Line), Raw),
     sort(Raw, Triples).
 
-%% --- Expression content, on top of expr/6 + literal/7 + expr_operand/3 + expr_ref/6 ---
-%% (byte-span Id; Erlang/TypeScript only)
+%% --- Expression content, on top of expr/6 + literal/8 + expr_operand/3 + expr_ref/6 ---
+%% (byte-span Id; Erlang/TypeScript only). literal/8's 8th argument,
+%% RawText, is the verbatim source slice captured BEFORE any
+%% parsing/unescaping (classify_literal/2 in each extractor) — was
+%% literal/7 until the Fact Debt Ledger's "Raw literal source text"
+%% bucket widened it; every existing consultation below took one more
+%% trailing `_`.
 
 expr(none, none, 0, none, none, 0) :- fail.
 expr_operator(none, none) :- fail.
 expr_operand(none, none, none) :- fail.
-literal(none, none, 0, none, none, none, 0) :- fail.
+literal(none, none, 0, none, none, none, 0, none) :- fail.
 expr_ref(none, none, 0, none, none, 0) :- fail.
 
 %% ESLint no-self-compare: https://eslint.org/docs/latest/rules/no-self-compare
@@ -396,8 +401,8 @@ yoda_condition(Id, Fun, Arity, File, Line) :-
     expr(Id, Fun, Arity, binary, File, Line),
     expr_operator(Id, Op),
     member(Op, ['==', '===', '!=', '!==', '<', '>', '<=', '>=', '=<', '=:=', '=/=']),
-    expr_operand(Id, left, L), literal(L, _, _, _, _, _, _),
-    expr_operand(Id, right, R), \+ literal(R, _, _, _, _, _, _).
+    expr_operand(Id, left, L), literal(L, _, _, _, _, _, _, _),
+    expr_operand(Id, right, R), \+ literal(R, _, _, _, _, _, _, _).
 
 all_yoda_conditions(Triples) :-
     findall(Fun-Arity-File, yoda_condition(_Id, Fun, Arity, File, _Line), Raw),
@@ -419,7 +424,7 @@ call_arg_literal(Fun, Arity, CallSpec, ArgIndex, LitKind, Value, File, Line) :-
     expr(Id, Fun, Arity, call, File, Line),
     expr_operator(Id, CallSpec),
     expr_operand(Id, ArgIndex, ArgId),
-    literal(ArgId, Fun, Arity, LitKind, Value, File, Line).
+    literal(ArgId, Fun, Arity, LitKind, Value, File, Line, _RawText).
 
 all_call_arg_literals(Rows) :-
     findall(Fun-Arity-CallSpec-ArgIndex-LitKind-Value-File-Line,
@@ -980,7 +985,7 @@ no_compare_neg_zero(Id, Fun, Arity, File, Line) :-
     expr(Side, _, _, unary, _, _),
     expr_operator(Side, '-'),
     expr_operand(Side, operand, LitId),
-    literal(LitId, _, _, LitKind, Value, _, _),
+    literal(LitId, _, _, LitKind, Value, _, _, _),
     member(LitKind, [number, integer, float]),
     Value =:= 0.
 
@@ -1049,7 +1054,7 @@ invalid_typeof(Id, Fun, Arity, File, Line) :-
     ),
     expr(TSide, _, _, unary, _, _),
     expr_operator(TSide, typeof),
-    literal(LitSide, _, _, LitKind, _, _, _),
+    literal(LitSide, _, _, LitKind, _, _, _, _),
     LitKind \= string.
 
 all_invalid_typeofs(Triples) :-
@@ -1181,7 +1186,7 @@ no_eq_null(Id, Fun, Arity, File, Line) :-
     expr_operator(Id, Op),
     member(Op, ['==', '!=']),
     ( expr_operand(Id, left, Side) ; expr_operand(Id, right, Side) ),
-    literal(Side, _, _, null, _, _, _).
+    literal(Side, _, _, null, _, _, _, _).
 
 all_no_eq_nulls(Triples) :-
     findall(Fun-Arity-File, no_eq_null(_Id, Fun, Arity, File, _Line), Raw),
@@ -1268,7 +1273,7 @@ magic_number_allowed(1.0).
 magic_number_allowed(-1.0).
 
 magic_number(Id, Fun, Arity, File, Line) :-
-    literal(Id, Fun, Arity, LitKind, Value, File, Line),
+    literal(Id, Fun, Arity, LitKind, Value, File, Line, _RawText),
     member(LitKind, [number, integer, float]),
     \+ magic_number_allowed(Value).
 
@@ -1339,3 +1344,192 @@ symbol_description_missing(Caller, Arity, File, Line) :-
 all_symbol_description_missings(Pairs) :-
     findall(File-Line, symbol_description_missing(_C, _A, File, Line), Raw),
     sort(Raw, Pairs).
+
+%% --- await/yield, on top of async_function/4 + generator_function/4 +
+%% await_expr/4 + yield_expr/4 (TypeScript only) ---
+async_function(none, 0, none, 0) :- fail.
+generator_function(none, 0, none, 0) :- fail.
+await_expr(none, 0, none, 0) :- fail.
+yield_expr(none, 0, none, 0) :- fail.
+
+%% ESLint require-await: https://eslint.org/docs/latest/rules/require-await
+%% An async function with no await_expr anywhere inside its own body —
+%% same (Fun, Arity, File) attribution await_expr/4 already carries, no
+%% new join needed.
+require_await(Fun, Arity, File, Line) :-
+    async_function(Fun, Arity, File, Line),
+    \+ await_expr(Fun, Arity, File, _Line).
+
+all_require_awaits(Triples) :-
+    findall(Fun-Arity-File, require_await(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint require-yield: https://eslint.org/docs/latest/rules/require-yield
+%% A generator_function_declaration with no yield_expr anywhere inside its
+%% own body — same shape as require_await/4 above.
+require_yield(Fun, Arity, File, Line) :-
+    generator_function(Fun, Arity, File, Line),
+    \+ yield_expr(Fun, Arity, File, _Line).
+
+all_require_yields(Triples) :-
+    findall(Fun-Arity-File, require_yield(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-sequences: https://eslint.org/docs/latest/rules/no-sequences
+%% expr/6's Kind=sequence directly names the comma operator.
+no_sequences(Fun, Arity, File, Line) :-
+    expr(_Id, Fun, Arity, sequence, File, Line).
+
+all_no_sequences(Triples) :-
+    findall(Fun-Arity-File, no_sequences(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% no-sparse-arrays is NOT built, deliberately: a hole in `[1, , 3]` is
+%% represented by tree-sitter as an absence between two anonymous comma
+%% tokens, not a node of its own (confirmed against
+%% tree-sitter-typescript's own node-types.json — "array"'s only children
+%% are named "expression"/"spread_element", no elision/hole type at all).
+%% Detecting it needs RAW (not named-only) child access — symbolic_ts's
+%% NIF wrapper (c_src/symbolic_ts_nif.c) exports node_named_child/2 and
+%% node_named_child_count/1 only, no node_child/2 or node_child_count/1 —
+%% confirmed by probing a real `[1, , 3]` parse. Closing this needs a new
+%% NIF primitive and a rebuild, not a query — a different risk class than
+%% everything else in this ledger bucket, so it's out of this pass.
+
+%% --- Property reads, on top of member_read/6 (TypeScript only) ---
+member_read(none, 0, none, none, none, 0) :- fail.
+
+%% ESLint no-caller: https://eslint.org/docs/latest/rules/no-caller
+no_caller(Fun, Arity, File, Line) :-
+    member_read(Fun, Arity, _Obj, callee, File, Line).
+no_caller(Fun, Arity, File, Line) :-
+    member_read(Fun, Arity, _Obj, caller, File, Line).
+
+all_no_callers(Triples) :-
+    findall(Fun-Arity-File, no_caller(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-iterator: https://eslint.org/docs/latest/rules/no-iterator
+no_iterator(Fun, Arity, File, Line) :-
+    member_read(Fun, Arity, _Obj, '__iterator__', File, Line).
+
+all_no_iterators(Triples) :-
+    findall(Fun-Arity-File, no_iterator(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-proto: https://eslint.org/docs/latest/rules/no-proto
+no_proto(Fun, Arity, File, Line) :-
+    member_read(Fun, Arity, _Obj, '__proto__', File, Line).
+
+all_no_protos(Triples) :-
+    findall(Fun-Arity-File, no_proto(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% --- Labels, on top of label_stmt/5 + label_ref/6 (TypeScript only) ---
+label_stmt(none, 0, none, none, 0) :- fail.
+label_ref(none, 0, none, none, none, 0) :- fail.
+
+%% ESLint no-labels: https://eslint.org/docs/latest/rules/no-labels
+no_labels(Fun, Arity, File, Line) :-
+    label_stmt(Fun, Arity, _Name, File, Line).
+
+all_no_labels(Triples) :-
+    findall(Fun-Arity-File, no_labels(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-unused-labels: https://eslint.org/docs/latest/rules/no-unused-labels
+%% Scoped to the SAME (Fun, Arity, File) as the label's own declaration —
+%% labels are function-local in JS, so a break/continue in a different
+%% function reusing the same label name is a different label entirely,
+%% not a use of this one.
+no_unused_labels(Fun, Arity, File, Line) :-
+    label_stmt(Fun, Arity, Name, File, Line),
+    \+ label_ref(Fun, Arity, Name, _Kind, File, _RefLine).
+
+all_no_unused_labels(Triples) :-
+    findall(Fun-Arity-File, no_unused_labels(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint no-label-var: https://eslint.org/docs/latest/rules/no-label-var
+%% A label sharing a name with a variable declared anywhere in the same
+%% file — approximate (var_decl/6's own Scope isn't consulted here, so a
+%% variable declared in a wholly unrelated function of the same file
+%% would also trigger this), same "reasonable approximation, documented"
+%% policy short_name/4's allow_short_name/1 exemption list already uses.
+no_label_var(Fun, Arity, File, Line) :-
+    label_stmt(Fun, Arity, Name, File, Line),
+    var_decl(_Id, Name, _Kind, _Scope, File, _VarLine).
+
+all_no_label_vars(Triples) :-
+    findall(Fun-Arity-File, no_label_var(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% no-extra-label is NOT built, deliberately: telling a label
+%% "unnecessary" needs knowing it's the label of the NEAREST enclosing
+%% loop/switch — i.e. nesting depth, the same statement-block-ownership
+%% gap that blocks the Fact Debt Ledger's own "large" bucket (see
+%% require-await's sibling comment above). label_stmt/5 alone can't
+%% distinguish a label on the nearest loop from one on an outer loop two
+%% levels up.
+
+%% ESLint no-useless-concat: https://eslint.org/docs/latest/rules/no-useless-concat
+%% `"a" + "b"` — a binary '+' whose BOTH operands are already string
+%% literals, foldable at parse time with no variable involved at all.
+no_useless_concat(Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, binary, File, Line),
+    expr_operator(Id, '+'),
+    expr_operand(Id, left, L), literal(L, _, _, string, _, _, _, _),
+    expr_operand(Id, right, R), literal(R, _, _, string, _, _, _, _).
+
+all_no_useless_concats(Triples) :-
+    findall(Fun-Arity-File, no_useless_concat(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% ESLint prefer-template: https://eslint.org/docs/latest/rules/prefer-template
+%% A binary '+' with at least one string-literal operand — string
+%% concatenation via `+`, the shape a template literal replaces. A
+%% superset of no_useless_concat/4 above (that one requires BOTH sides to
+%% be literals); real projects don't enable both at once, so the overlap
+%% is intentional, not a bug.
+prefer_template(Fun, Arity, File, Line) :-
+    expr(Id, Fun, Arity, binary, File, Line),
+    expr_operator(Id, '+'),
+    ( expr_operand(Id, left, S), literal(S, _, _, string, _, _, _, _)
+    ; expr_operand(Id, right, S), literal(S, _, _, string, _, _, _, _)
+    ).
+
+all_prefer_templates(Triples) :-
+    findall(Fun-Arity-File, prefer_template(Fun, Arity, File, _Line), Raw),
+    sort(Raw, Triples).
+
+%% The other 8 rules in the Fact Debt Ledger's "Raw literal source text"
+%% bucket are NOT built from literal/8's RawText yet, deliberately:
+%% RawText is a Prolog BINARY (same reason literal's own string Value and
+%% comment/3's Text already are — see ts_extract_text.erl's to_text/1 doc
+%% comment: unbounded length, no atom-table pressure), and erlog has no
+%% sub_atom/atom_codes-on-binary — the exact same blocker that already
+%% keeps capitalized-comments/no-warning-comments unbuilt. Closing
+%% no-octal, no-template-curly-in-string and no-script-url needs a
+%% PRECOMPUTED FLAG fact instead (checked once in Erlang, where real
+%% string ops exist, over the raw list form BEFORE it's wrapped into a
+%% binary) — same "different mechanism" fix as the comment-text bucket,
+%% not yet built. no-multi-str, no-nonoctal-decimal-escape,
+%% no-octal-escape and no-useless-escape need real per-character
+%% escape-sequence classification (which specific `\X` sequence, and
+%% whether it's redundant given the surrounding quote style) — also flag
+%% work, just more of it. no-loss-of-precision needs comparing the raw
+%% digit string's EXACT mathematical value against what it rounds to as
+%% an IEEE-754 double — a real numeric algorithm, not a lookup.
+
+%% no-await-in-loop is NOT built yet, deliberately: await_expr/4 only
+%% carries (Fun, Arity, File, Line) attribution, the same granularity
+%% every other fact family in this schema uses — it doesn't know whether
+%% a given await sits specifically inside a loop's own body versus
+%% anywhere else in the same function. That needs the statement-block
+%% ownership link (branch/loop body -> owning construct), the same
+%% cross-cutting gap that also blocks default-case, default-case-last and
+%% sort-imports — see the Fact Debt Ledger's "Statement-block ownership
+%% link" bucket. Approximating it here (e.g. "await co-occurs with a
+%% for/while branch/5 fact in the same function") would produce false
+%% positives on any async function that merely CONTAINS both a loop and
+%% an unrelated top-level await, so it's left unbuilt rather than wrong.
