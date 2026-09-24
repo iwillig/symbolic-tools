@@ -21,6 +21,7 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `calls/5` | Erlang, TypeScript, Bash | A call site, shape varies per language |
 | `comment/3` | Erlang, TypeScript, Bash | Every comment, unconditionally |
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
+| `doc_tag/8` | TypeScript | One structured `@`-tag from inside a `doc/5` comment |
 | `branch/5` | Erlang, TypeScript, Bash | A decision point inside a definition, for real complexity |
 | `expr/6` | Erlang, TypeScript | A binary/unary expression, keyed on real node identity |
 | `expr_operator/2` | Erlang, TypeScript | That expression's operator |
@@ -261,6 +262,51 @@ to. **Identifier-like atoms elsewhere in this schema are still
 truncated at 200 characters** the same way (`ts_extract_text:to_atom/1`)
 — that's a genuinely different helper, kept separate for exactly this
 reason.
+
+### `doc_tag(Function, Arity, TagName, Type, Name, Description, File, Line)`
+
+`doc/5` says a comment documents a function and gives its flattened
+text; this says what the comment's own `@`-tags actually structured —
+produced by `src/ts_extract_jsdoc.erl`, a second tree-sitter grammar
+(`tree-sitter-jsdoc`, `symbolic_ts:tree_sitter_jsdoc/0`) applied not to a
+whole file but to one `doc/5` comment's own raw text, called directly
+from `ts_extract_typescript.erl`'s `docs/4` — the same "re-parse a
+substring through another extractor" shape `example_defines/5` already
+uses for fenced Markdown code, just with a grammar dedicated to the
+substring instead of reusing a whole-file one. **TypeScript only, and
+only for a genuine `/** ... */` block** — a `//`-run or a tag-less
+`/** */` comment (no `@`-anything, just prose) produces `doc/5` as
+normal but zero `doc_tag/8` facts; the grammar's own `_begin`/`_end`
+rules require the real delimiters to parse at all.
+
+- **`Function`/`Arity`/`File`** — the same attribution as the `doc/5`
+  fact this tag's comment produced, not anything re-derived from the tag
+  itself.
+- **`TagName`** — the raw `@`-prefixed atom exactly as written
+  (`` '@param' ``, `` '@returns' ``, `` '@deprecated' ``). **Not
+  normalized** — `` '@return' `` and `` '@returns' `` are both real,
+  common spellings and stay distinct; a query that cares about either
+  checks both (`.symbolic/rules.pl`'s `missing_return_doc/3` does).
+- **`Type`** — the raw text inside a tag's `{...}` (`<<"number">>`,
+  `<<"Array<string>">>`), or the atom `none` if the tag has no type
+  annotation.
+- **`Name`** — the tagged expression's raw text: a bare identifier
+  (`<<"a">>`), a qualified/member/path/array expression
+  (`<<"options.foo">>`), or a bracketed optional parameter (`<<"[b=1]">>`,
+  brackets and default value both kept verbatim) — or `none` for a tag
+  with no name position at all (`@returns`, `@deprecated`).
+- **`Description`** — the tag's own trailing free text, or `none`.
+  Already stripped of the comment's `/** */`/leading-`*` syntax by the
+  grammar's own tokenizer (confirmed empirically) — unlike `doc/5`'s
+  flattened `Text`, no separate cleanup pass is needed here.
+- **`Line`** — a real file line: the comment's own `doc/5` `Line` (its
+  attribution target's line) is not what this uses — it's the comment's
+  own *first* line plus the tag's row *within* the re-parsed comment
+  string, since the grammar parses the comment in isolation and has no
+  notion of the surrounding file's line numbers.
+
+Same `existence_error`-on-zero-clauses guard as every other fact family
+above — one sentinel clause in `.symbolic/rules.pl`.
 
 ### `branch(Function, Arity, Kind, File, Line)`
 

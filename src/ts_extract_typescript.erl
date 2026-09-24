@@ -18,6 +18,12 @@
 %%%   comment(File, Line, Text)                          — every comment, unconditionally
 %%%   doc(Function, Arity, File, Line, Text)             — a comment run immediately
 %%%                                                         preceding a function_declaration
+%%%   doc_tag(Function, Arity, TagName, Type, Name, Description, File, Line)
+%%%                                                       — one structured @-tag from a
+%%%                                                         real `/** */` doc/5 comment,
+%%%                                                         re-parsed via tree-sitter-jsdoc
+%%%                                                         (symbolic_ts:tree_sitter_jsdoc/0);
+%%%                                                         see ts_extract_jsdoc:tags/5
 %%%   branch(Function, Arity, Kind, File, Line)          — a decision point (if/for/while/
 %%%                                                         ternary/switch_case/catch/and/or)
 %%%                                                         inside Function; see ?BRANCH_QUERIES
@@ -1044,7 +1050,7 @@ comments(Lang, Root, Src, PathAtom) ->
 
 docs(Lang, Root, Src, PathAtom) ->
     RunStarts = [N || N <- comment_nodes(Lang, Root), is_run_start(N)],
-    lists:filtermap(fun(Start) -> doc_fact(Start, Src, PathAtom) end, RunStarts).
+    lists:flatmap(fun(Start) -> doc_facts(Start, Src, PathAtom) end, RunStarts).
 
 comment_nodes(Lang, Root) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?COMMENT_QUERY),
@@ -1071,13 +1077,30 @@ collect_run(Node, Src, Acc) ->
             end
     end.
 
-doc_fact(StartNode, Src, PathAtom) ->
+doc_facts(StartNode, Src, PathAtom) ->
     {Texts, Target} = collect_run(StartNode, Src, []),
     case Target =/= undefined andalso definition_name(Target, Src) of
-        false -> false;
+        false -> [];
         {Name, Arity} ->
-            {true, {doc, Name, Arity, PathAtom, line(Target), clean_join(Texts)}}
+            DocFact = {doc, Name, Arity, PathAtom, line(Target), clean_join(Texts)},
+            [DocFact | jsdoc_tag_facts(Name, Arity, PathAtom, StartNode, Texts)]
     end.
+
+%% Structured @-tag facts, on top of the flattened doc/5 Text above —
+%% only attempted for a genuine single JSDoc block comment (`/** ... */`),
+%% never a run of consecutive `//` lines or a plain non-doc `/* */` block:
+%% the jsdoc grammar's own `_begin`/`_end` rules require exactly those
+%% delimiters to parse at all (confirmed empirically — see
+%% ts_extract_jsdoc.erl's own header comment), and only ONE raw comment's
+%% own text is valid input to it, never clean_join's flattened,
+%% delimiter-stripped join of a whole run.
+jsdoc_tag_facts(Name, Arity, PathAtom, StartNode, [RawText]) ->
+    case lists:prefix("/**", RawText) of
+        true -> ts_extract_jsdoc:tags(Name, Arity, PathAtom, line(StartNode), RawText);
+        false -> []
+    end;
+jsdoc_tag_facts(_Name, _Arity, _PathAtom, _StartNode, _Texts) ->
+    [].
 
 definition_name(Node, Src) ->
     case symbolic_ts:node_type(Node) of

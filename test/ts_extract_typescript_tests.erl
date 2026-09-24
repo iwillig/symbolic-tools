@@ -47,6 +47,37 @@ extracts_doc_test() ->
          <<"Shouts a word by capitalizing it and adding an exclamation mark.">>},
         Facts)).
 
+%% doc_tag/8: a real `/** */` doc comment with @param/@returns tags, on
+%% top of the flattened doc/5 fact it already produces — proves the
+%% ts_extract_jsdoc wiring end to end (the /** prefix gate, and StartLine
+%% attribution via line(StartNode)), not just ts_extract_jsdoc in
+%% isolation (see ts_extract_jsdoc_tests.erl for that).
+extracts_doc_tag_facts_test() ->
+    Src =
+        "/**\n"                                    %% 1
+        " * Adds two numbers together.\n"          %% 2
+        " * @param {number} a - the first number\n" %% 3
+        " * @returns {number} the sum\n"            %% 4
+        " */\n"                                     %% 5
+        "function add(a: number, b: number): number {\n" %% 6
+        "  return a + b;\n"                        %% 7
+        "}\n",                                      %% 8
+    Facts = ts_extract_typescript:text("scratch_jsdoc.ts", Src),
+    Path = 'scratch_jsdoc.ts',
+    ?assert(lists:member(
+        {doc_tag, add, 2, '@param', <<"number">>, <<"a">>, <<"- the first number">>, Path, 3},
+        Facts)),
+    ?assert(lists:member(
+        {doc_tag, add, 2, '@returns', <<"number">>, none, <<"the sum">>, Path, 4}, Facts)).
+
+%% A `//` line comment (not a `/** */` block) and a `/** */` block with no
+%% @-tags at all must produce zero doc_tag facts — both already covered by
+%% the shared fixture's `capitalize` (line comment) and `shout` (tag-less
+%% jsdoc block) doc comments.
+plain_comments_yield_no_doc_tag_facts_test() ->
+    Facts = ts_extract_typescript:file(?FIXTURE),
+    ?assertEqual([], [F || {doc_tag, _, _, _, _, _, _, _, _} = F <- Facts]).
+
 standalone_comment_has_no_doc_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     ?assertEqual(

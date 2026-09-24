@@ -26,6 +26,7 @@ extern const TSLanguage *tree_sitter_markdown(void);
 extern const TSLanguage *tree_sitter_toml(void);
 extern const TSLanguage *tree_sitter_json(void);
 extern const TSLanguage *tree_sitter_bash(void);
+extern const TSLanguage *tree_sitter_jsdoc(void);
 
 #define NIF(f) static ERL_NIF_TERM f(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 #define NIF_ENTRY(f, a) { #f, a, f }
@@ -226,6 +227,11 @@ NIF(nif_tree_sitter_json) {
 NIF(nif_tree_sitter_bash) {
     (void)argc; (void)argv;
     return make_language_term(env, tree_sitter_bash(), "unable_to_create_language_bash");
+}
+
+NIF(nif_tree_sitter_jsdoc) {
+    (void)argc; (void)argv;
+    return make_language_term(env, tree_sitter_jsdoc(), "unable_to_create_language_jsdoc");
 }
 
 /* ---- parser ---- */
@@ -445,6 +451,7 @@ static ErlNifFunc nif_funcs[] = {
     NIF_ENTRY_AS("tree_sitter_toml", 0, nif_tree_sitter_toml),
     NIF_ENTRY_AS("tree_sitter_json", 0, nif_tree_sitter_json),
     NIF_ENTRY_AS("tree_sitter_bash", 0, nif_tree_sitter_bash),
+    NIF_ENTRY_AS("tree_sitter_jsdoc", 0, nif_tree_sitter_jsdoc),
     NIF_ENTRY(parser_new, 0),
     NIF_ENTRY(parser_set_language, 2),
     NIF_ENTRY(parser_parse_string, 2),

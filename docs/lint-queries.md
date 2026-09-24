@@ -267,6 +267,57 @@ all_god_files(Ranked) :-
     reverse(Sorted, Ranked).
 ```
 
+### JSDoc tags — on top of `doc_tag/8` (TypeScript only)
+
+`doc_tag/8` (`src/ts_extract_jsdoc.erl`, `docs/tree-sitter-erlang.md`
+§5.3) structures a `/** ... */` comment's own `@param`/`@returns`/etc.
+tags — not just that a function is documented, but what its
+documentation actually says.
+
+```prolog
+doc_tag(none, 0, none, none, none, none, none, 0) :- fail.
+
+param_doc(Fun, Arity, Name, Type, Description, File) :-
+    doc_tag(Fun, Arity, TagName, Type, Name, Description, File, _Line),
+    member(TagName, ['@param', '@prop', '@property']),
+    Name \= none.
+
+all_param_docs(Rows) :-
+    findall(Fun-Arity-Name-Type-Description-File,
+            param_doc(Fun, Arity, Name, Type, Description, File), Raw),
+    sort(Raw, Rows).
+
+%% A documented function with a real value-returning `return` but no
+%% @return/@returns tag anywhere in that same comment — a doc comment
+%% that never said what the function returns, or fell out of sync after
+%% a bare `return;` grew a value. Both spellings checked independently,
+%% not normalized to one atom.
+missing_return_doc(Fun, Arity, File) :-
+    doc(Fun, Arity, File, _DocLine, _Text),
+    return_stmt(Fun, Arity, true, File, _),
+    \+ doc_tag(Fun, Arity, '@returns', _, _, _, File, _),
+    \+ doc_tag(Fun, Arity, '@return', _, _, _, File, _).
+
+all_missing_return_docs(Triples) :-
+    findall(Fun-Arity-File, missing_return_doc(Fun, Arity, File), Raw),
+    sort(Raw, Triples).
+```
+
+Real, captured output — a two-function fixture, `add/2` fully documented
+(`@param` × 2 + `@returns`) and `subtract/2` documented but missing its
+`@returns` tag despite a real `return a - b;`:
+
+```
+?- all_param_docs(Rows).
+Rows = [add-2-<<"a">>-<<"number">>-<<"- the first number">>-'demo.ts',
+        add-2-<<"b">>-<<"number">>-<<"- the second number">>-'demo.ts',
+        subtract-2-<<"a">>-<<"number">>-<<"- the first number">>-'demo.ts',
+        subtract-2-<<"b">>-<<"number">>-<<"- the second number">>-'demo.ts'].
+
+?- all_missing_return_docs(Triples).
+Triples = [subtract-2-'demo.ts'].
+```
+
 ## Running them against this repo's own `src/`
 
 For scale (at the time this section was captured): 222 `defines/3`, 723

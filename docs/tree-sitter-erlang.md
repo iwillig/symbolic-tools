@@ -235,6 +235,47 @@ unchanged. Also wired into `ts_extract_markdown.erl`'s
 "Catching stale doc examples") for `sh`/`bash`-tagged fenced blocks,
 alongside the languages already there.
 
+### 5.3 A grammar over a substring, not a file (done for real: JSDoc)
+
+Every case in §5/§5.1/§5.2 vendors a grammar for a real *file type* —
+`ts_extract.erl`'s extension dispatcher picks it by suffix. JSDoc has no
+file extension of its own: `/** ... */` only ever occurs embedded inside
+a `.ts`/`.js` comment. `tree-sitter-jsdoc` (`c_src/grammars/jsdoc/`) is
+vendored and wired in exactly per steps 1–4 above — same `parser.c` +
+`scanner.c` (its scanner is real: one external token, `TYPE_TOKEN`,
+scanning to a balanced `}` for a tag's `{Type}` — confirmed by reading
+it, not assumed from its small size) — but there's no fifth "dispatch by
+extension" step. Instead `src/ts_extract_jsdoc.erl` is called directly
+from `ts_extract_typescript.erl`'s `docs/4`, once per `doc/5` comment,
+the same "re-parse a substring through another extractor" shape
+`ts_extract_markdown.erl` already uses for fenced code blocks
+(`example_defines/5`/`example_calls/5`) — just with a grammar dedicated
+to the substring's own syntax instead of reusing a whole-file one.
+
+Two things only matter because the substring being parsed is a comment,
+not a file:
+
+- **The grammar requires its own delimiters.** `tree-sitter-jsdoc`'s
+  `document` rule is `seq($._begin, optional($.description),
+  repeat($.tag), $._end)` where `_begin`/`_end` are literally `/` +
+  `repeat('*')` and `/` — so it must be fed the *raw*, unmodified comment
+  text (`/**` through `*/` inclusive), never `clean_join`'s flattened,
+  delimiter-stripped `doc/5` `Text`. The caller pre-filters on exactly
+  that: only a single comment node (not a `//`-run) whose raw text
+  starts with `/**` is worth trying at all.
+- **Line numbers need an offset.** Parsed in isolation, a tag's own
+  `node_start_point/1` row is relative to the start of the comment
+  *string*, not the file. `doc_tag/8`'s `Line` is the comment's own real
+  file line (the same one `line/1` computes for `doc/5`'s attribution
+  walk) plus that row — confirmed empirically, not assumed, with a
+  regression test asserting a tag on a doc comment's 3rd real line comes
+  back at the right absolute line number
+  (`ts_extract_jsdoc_tests:tag_line_is_offset_from_start_line_test`).
+
+See `docs/prolog-schema.md`'s `doc_tag/8` entry for the fact shape
+itself, and `.symbolic/rules.pl`'s `param_doc/6`/`missing_return_doc/3`
+for what it's used for.
+
 ## 6. Pitfalls
 
 - **ABI pinning.** The `libtree-sitter` runtime and every grammar must share a
@@ -361,10 +402,12 @@ This is roughly the path actually followed, kept for reference:
   [`tree-sitter-grammars/tree-sitter-markdown`](https://github.com/tree-sitter-grammars/tree-sitter-markdown),
   [`ikatyang/tree-sitter-toml`](https://github.com/ikatyang/tree-sitter-toml),
   [`tree-sitter/tree-sitter-json`](https://github.com/tree-sitter/tree-sitter-json),
-  [`tree-sitter/tree-sitter-bash`](https://github.com/tree-sitter/tree-sitter-bash)
-  — the TypeScript, Markdown, TOML, JSON, and Bash grammars, vendored at
-  `c_src/grammars/{typescript,markdown,toml,json,bash}/`. Erlang's own
-  grammar (`c_src/grammars/erlang/`) traces back to
+  [`tree-sitter/tree-sitter-bash`](https://github.com/tree-sitter/tree-sitter-bash),
+  [`tree-sitter/tree-sitter-jsdoc`](https://github.com/tree-sitter/tree-sitter-jsdoc)
+  — the TypeScript, Markdown, TOML, JSON, Bash, and JSDoc grammars,
+  vendored at `c_src/grammars/{typescript,markdown,toml,json,bash,jsdoc}/`
+  (JSDoc pinned at its `v0.25.0` tag). Erlang's own grammar
+  (`c_src/grammars/erlang/`) traces back to
   [`tree-sitter-erlang`](https://github.com/WhatsApp/tree-sitter-erlang).
   [`ikatyang/tree-sitter-yaml`](https://github.com/ikatyang/tree-sitter-yaml)
   was investigated but deliberately not vendored — see §5.1's C++

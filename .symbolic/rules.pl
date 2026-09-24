@@ -657,6 +657,48 @@ all_inconsistent_returns(Triples) :-
     findall(Fun-Arity-File, inconsistent_return(Fun, Arity, File), Raw),
     sort(Raw, Triples).
 
+%% --- JSDoc tags, on top of doc_tag/8 (ts_extract_jsdoc.erl via
+%% ts_extract_typescript.erl's docs/4; TypeScript-only, and only for a
+%% real `/** */` doc comment, never a plain `//`-run or tag-less block) ---
+
+%% Sentinel: keeps doc_tag/8 defined so a tree with no JSDoc-tagged
+%% comments at all (or no TypeScript) fails cleanly instead of raising
+%% existence_error, same convention as branch/5, export/4, etc. above.
+doc_tag(none, 0, none, none, none, none, none, 0) :- fail.
+
+%% A documented parameter/property: one @param/@prop/@property tag that
+%% actually named something (Name \= none rules out a malformed tag with
+%% no name position at all, which shouldn't occur for these three tag
+%% names in practice but costs nothing to guard).
+param_doc(Fun, Arity, Name, Type, Description, File) :-
+    doc_tag(Fun, Arity, TagName, Type, Name, Description, File, _Line),
+    member(TagName, ['@param', '@prop', '@property']),
+    Name \= none.
+
+all_param_docs(Rows) :-
+    findall(Fun-Arity-Name-Type-Description-File,
+            param_doc(Fun, Arity, Name, Type, Description, File), Raw),
+    sort(Raw, Rows).
+
+%% A documented function (real doc/5 comment) with at least one
+%% value-returning `return` (return_stmt/5's HasValue=true) but no
+%% @return/@returns tag anywhere in that same comment — catches a doc
+%% comment that never mentioned what the function returns, or one whose
+%% `@returns` fell out of sync after a bare `return;` grew a value.
+%% `@return` and `@returns` are both real, common spellings (see
+%% tag_name_with_type in tree-sitter-jsdoc's own grammar) — checked
+%% independently, not normalized to one atom, same policy as every other
+%% tag name doc_tag/8 itself leaves un-normalized.
+missing_return_doc(Fun, Arity, File) :-
+    doc(Fun, Arity, File, _DocLine, _Text),
+    return_stmt(Fun, Arity, true, File, _),
+    \+ doc_tag(Fun, Arity, '@returns', _, _, _, File, _),
+    \+ doc_tag(Fun, Arity, '@return', _, _, _, File, _).
+
+all_missing_return_docs(Triples) :-
+    findall(Fun-Arity-File, missing_return_doc(Fun, Arity, File), Raw),
+    sort(Raw, Triples).
+
 %% --- Newly-provable ESLint rules, on top of the fact families above (no new extraction) ---
 
 %% ESLint no-const-assign: https://eslint.org/docs/latest/rules/no-const-assign
