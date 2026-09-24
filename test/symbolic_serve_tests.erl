@@ -52,7 +52,10 @@ serve_test_() ->
         fun parse_reports_rules_file/1,
         fun overview_reports_rules_file/1,
         fun query_resolves_a_real_derived_predicate/1,
-        fun parse_with_broken_rules_override_is_friendly_error/1
+        fun parse_with_broken_rules_override_is_friendly_error/1,
+        fun parsing_two_dirs_keeps_both_queryable_by_path/1,
+        fun query_with_unknown_path_is_friendly_error/1,
+        fun overview_with_unknown_path_is_friendly_error/1
     ]}.
 
 overview_before_parse(_Setup) ->
@@ -184,6 +187,77 @@ query_resolves_a_real_derived_predicate(_Setup) ->
         _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
         Json = decode(symbolic_serve:handle_query(#{<<"goal">> => <<"callees(foo, Callees)">>})),
         ?assertMatch(#{<<"count">> := C} when C > 0, Json)
+    end.
+
+%% --- multiple cached directories, keyed by path (mirrors
+%%     symbolic_codebase_tests.erl's coverage of the same behavior one
+%%     layer down, exercised here through the actual tool handlers) ---
+
+%% Parsing a second directory doesn't evict the first: `query`/`overview`
+%% with an explicit `path` reach either one, and the no-`path` default
+%% follows whichever was parsed most recently.
+parsing_two_dirs_keeps_both_queryable_by_path(_Setup) ->
+    fun() ->
+        with_two_scratch_dirs(fun(DirA, DirB) ->
+            _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(DirA)}),
+            _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(DirB)}),
+            QueryA = decode(symbolic_serve:handle_query(#{
+                <<"goal">> => <<"defines(alpha_fn, 0, _, _, _)">>,
+                <<"path">> => list_to_binary(DirA)})),
+            ?assertMatch(#{<<"count">> := 1}, QueryA),
+            %% No `path` -> DirB, the most recently parsed.
+            NoPathOverview = decode(symbolic_serve:handle_overview(#{})),
+            #{<<"ok">> := NoPathOk} = NoPathOverview,
+            ?assertEqual(list_to_binary(DirB), maps:get(<<"path">>, NoPathOk)),
+            %% DirA is still there when asked for explicitly.
+            ExplicitOverviewA = decode(symbolic_serve:handle_overview(
+                #{<<"path">> => list_to_binary(DirA)})),
+            #{<<"ok">> := OkA} = ExplicitOverviewA,
+            ?assertEqual(list_to_binary(DirA), maps:get(<<"path">>, OkA))
+        end)
+    end.
+
+query_with_unknown_path_is_friendly_error(_Setup) ->
+    fun() ->
+        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        Json = decode(symbolic_serve:handle_query(#{
+            <<"goal">> => <<"defines(F, _, _, _, _)">>,
+            <<"path">> => <<"no/such/dir_never_parsed_zz">>})),
+        ?assertMatch(
+            #{<<"error">> := <<"no codebase cached for path no/such/dir_never_parsed_zz", _/binary>>},
+            Json)
+    end.
+
+overview_with_unknown_path_is_friendly_error(_Setup) ->
+    fun() ->
+        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        Json = decode(symbolic_serve:handle_overview(
+            #{<<"path">> => <<"no/such/dir_never_parsed_zz">>})),
+        ?assertMatch(
+            #{<<"error">> := <<"no codebase cached for path no/such/dir_never_parsed_zz", _/binary>>},
+            Json)
+    end.
+
+%% Same shape as symbolic_codebase_tests.erl's helper of the same name —
+%% two scratch directories under _build/, each with one distinctively
+%% named function, kept separate so a query naming that function proves
+%% which cache entry actually answered it.
+with_two_scratch_dirs(Fun) ->
+    DirA = filename:absname(filename:join(["_build", "serve_multi_scratch_a"])),
+    DirB = filename:absname(filename:join(["_build", "serve_multi_scratch_b"])),
+    _ = file:del_dir_r(DirA),
+    _ = file:del_dir_r(DirB),
+    ok = filelib:ensure_path(DirA),
+    ok = filelib:ensure_path(DirB),
+    ok = file:write_file(filename:join(DirA, "sample.erl"),
+        <<"-module(sample_serve_multi_a).\nalpha_fn() -> ok.\n">>),
+    ok = file:write_file(filename:join(DirB, "sample.erl"),
+        <<"-module(sample_serve_multi_b).\nbeta_fn() -> ok.\n">>),
+    try
+        Fun(DirA, DirB)
+    after
+        _ = file:del_dir_r(DirA),
+        _ = file:del_dir_r(DirB)
     end.
 
 %% A rules file that fails to consult renders through parse_error_str/1's

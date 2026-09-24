@@ -75,7 +75,12 @@ setup_logging() ->
 register_tools() ->
     ok = erlmcp_stdio:add_tool(<<"parse">>,
         <<"Scan a directory, extract codebase facts, and cache them in "
-          "memory. Replaces any previously cached codebase. Also "
+          "memory, keyed by that directory's path. A previously cached "
+          "directory is untouched by parsing a different one - both stay "
+          "queryable, by passing `path` to `query`/`overview`. "
+          "Re-parsing the SAME directory always rescans it and replaces "
+          "just that entry. `query`/`overview` with no `path` use "
+          "whichever directory was most recently parsed. Also "
           "auto-consults that project's `.symbolic/rules.pl` derived-"
           "predicate library, if one is found by walking up from the "
           "scanned directory (pass `rules` to use a specific file "
@@ -96,8 +101,11 @@ register_tools() ->
                                    "auto-discovering .symbolic/rules.pl">>}},
           <<"required">> => [<<"path">>]}),
     ok = erlmcp_stdio:add_tool(<<"query">>,
-        <<"Prove a Prolog goal against the cached codebase and return all "
-          "solutions (capped). Raw facts, from `overview`: "
+        <<"Prove a Prolog goal against a cached codebase and return all "
+          "solutions (capped). More than one directory can be cached at "
+          "once (see `parse`); pass `path` to pick which one, or omit it "
+          "to use whichever was most recently parsed. Raw facts, from "
+          "`overview`: "
           "defines(Function, Arity, Params, File, Line), "
           "export(Function, Arity, File, Line) - an Erlang -export list "
           "element (Erlang only; one fact per entry, keyed Fun+Arity like "
@@ -210,15 +218,30 @@ register_tools() ->
                                  <<"Prolog goal, e.g. calls(X, local(foo), _, _)">>},
               <<"limit">> => #{<<"type">> => <<"integer">>,
                               <<"description">> =>
-                                  <<"Max solutions to return (default 50)">>}},
+                                  <<"Max solutions to return (default 50)">>},
+              <<"path">> => #{<<"type">> => <<"string">>,
+                             <<"description">> =>
+                                 <<"Which cached directory to query, by the "
+                                   "same path passed to `parse`. Omit to use "
+                                   "whichever directory was most recently "
+                                   "parsed.">>}},
           <<"required">> => [<<"goal">>]}),
     ok = erlmcp_stdio:add_tool(<<"overview">>,
-        <<"Report the current state of the cached fact base: whether a "
+        <<"Report the current state of a cached fact base: whether a "
           "codebase is loaded, how many files/languages, and fact counts by "
           "predicate. Call it after `parse`, or to check state before "
-          "`query`.">>,
+          "`query`. Pass `path` to report on a specific cached directory "
+          "(see `parse`); omit it to use whichever was most recently "
+          "parsed.">>,
         fun handle_overview/1,
-        #{<<"type">> => <<"object">>, <<"properties">> => #{}}),
+        #{<<"type">> => <<"object">>,
+          <<"properties">> => #{
+              <<"path">> => #{<<"type">> => <<"string">>,
+                             <<"description">> =>
+                                 <<"Which cached directory to report on, by "
+                                   "the same path passed to `parse`. Omit "
+                                   "to use whichever directory was most "
+                                   "recently parsed.">>}}}),
     ok.
 
 %% Tool handlers — each returns a JSON binary and never crashes.
@@ -233,8 +256,9 @@ handle_parse(#{<<"path">> := Path} = Params) ->
         ?LOG_INFO("parse: path=~s rules=~p", [PathStr, RulesOverride]),
         case symbolic_codebase:parse(PathStr, RulesOverride) of
             {ok, Meta} ->
-                ?LOG_INFO("parse: ok files=~p total_facts=~p",
-                          [maps:get(files, Meta), maps:get(total_facts, Meta)]),
+                ?LOG_INFO("parse: ok path=~s files=~p total_facts=~p elapsed_ms=~p",
+                          [maps:get(path, Meta), maps:get(files, Meta),
+                           maps:get(total_facts, Meta), maps:get(parse_ms, Meta)]),
                 json(#{ok => meta_to_json(Meta)});
             {error, ParseErr} ->
                 ?LOG_ERROR("parse: error=~p", [ParseErr]),
@@ -250,8 +274,9 @@ handle_query(Params) ->
     try
         Goal = to_list(maps:get(<<"goal">>, Params)),
         Limit = limit_of(Params),
-        ?LOG_INFO("query: goal=~s limit=~p", [Goal, Limit]),
-        Result = symbolic_codebase:query(Goal, Limit),
+        Path = optional_path(Params),
+        ?LOG_INFO("query: goal=~s limit=~p path=~p", [Goal, Limit, Path]),
+        Result = symbolic_codebase:query(Goal, Limit, Path),
         log_query_result(Result),
         render_query(Result, Limit)
     catch
@@ -274,17 +299,28 @@ render_query({truncated, Solutions}, Limit) ->
 render_query({error, QueryErr}, _Limit) ->
     json(#{error => error_str(QueryErr)}).
 
-handle_overview(_Params) ->
-    ?LOG_INFO("overview"),
+handle_overview(Params) ->
     try
-        case symbolic_codebase:overview() of
+        Path = optional_path(Params),
+        ?LOG_INFO("overview: path=~p", [Path]),
+        case symbolic_codebase:overview(Path) of
             {ok, Meta} -> json(#{ok => meta_to_json(Meta)});
-            {not_parsed, NotParsed} -> json(#{ok => NotParsed})
+            {not_parsed, NotParsed} -> json(#{ok => NotParsed});
+            {error, Reason} -> json(#{error => error_str(Reason)})
         end
     catch
         Class:Crash:ST ->
             ?LOG_ERROR("overview: crashed ~p:~p~n~p", [Class, Crash, ST]),
             json(#{error => caught_str(Class, Crash, ST)})
+    end.
+
+%% Shared by handle_query/1 and handle_overview/1 — an absent `path` means
+%% "whichever directory was most recently parsed" (see symbolic_codebase's
+%% Path argument on query/3, overview/1).
+optional_path(Params) ->
+    case maps:find(<<"path">>, Params) of
+        {ok, P} -> to_list(P);
+        error -> undefined
     end.
 
 %% Rendering — everything out the door is a JSON binary via jsx.
@@ -316,6 +352,8 @@ var_name_key(N) when is_integer(N) -> <<"_">> ++ integer_to_binary(N).
 meta_to_json(Meta) ->
     #{
         loaded => maps:get(loaded, Meta),
+        path => jstr(maps:get(path, Meta)),
+        parse_ms => maps:get(parse_ms, Meta),
         files => maps:get(files, Meta),
         file_list => [jstr(F) || F <- maps:get(file_list, Meta)],
         %% languages are Erlang charlists; jsx encodes a bare int-list as a
@@ -357,6 +395,11 @@ parse_error_str(Reason) ->
 
 error_str(not_parsed) ->
     <<"no codebase is cached - call `parse` first, then `query`">>;
+error_str({unknown_path, Path}) ->
+    iolist_to_binary([<<"no codebase cached for path ">>, jstr(Path),
+                       <<" - call `parse` on that directory first, or omit "
+                         "`path` to use whichever directory was most "
+                         "recently parsed">>]);
 error_str({existence_error, procedure, {'/', F, A}}) ->
     iolist_to_binary([<<"no such predicate: ">>, atom_to_binary(F, utf8),
                        <<"/">>, integer_to_binary(A),

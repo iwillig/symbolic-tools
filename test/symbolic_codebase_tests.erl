@@ -61,7 +61,14 @@ codebase_test_() ->
         fun parse_rules_override_takes_precedence_over_discovery/1,
         fun parse_with_broken_rules_is_error_and_leaves_cache_untouched/1,
         fun fixtures_parse_picks_up_the_real_project_rules_file/1,
-        fun fixtures_parse_makes_a_real_library_predicate_provable/1
+        fun fixtures_parse_makes_a_real_library_predicate_provable/1,
+        fun meta_reports_path_and_parse_ms/1,
+        fun two_parsed_directories_stay_independently_cached/1,
+        fun no_path_query_and_overview_use_most_recently_parsed_dir/1,
+        fun reparsing_one_directory_leaves_the_other_untouched/1,
+        fun query_unknown_path_is_error/1,
+        fun overview_unknown_path_is_error/1,
+        fun trailing_slash_path_normalizes_to_the_same_entry/1
     ]}.
 
 overview_before_parse(_Setup) ->
@@ -268,6 +275,125 @@ fixtures_parse_makes_a_real_library_predicate_provable(_Setup) ->
     fun() ->
         {ok, _Meta} = symbolic_codebase:parse(?FIXTURES),
         ?assertMatch({ok, [_ | _]}, symbolic_codebase:query("callees(foo, Callees)"))
+    end.
+
+%% --- multiple cached directories, keyed by path ---
+
+%% compute_meta/5's two new fields, on top of the ones every other test
+%% here already checks: `path` is the normalized (absolute) directory
+%% `parse` was given, `parse_ms` is how long that scan+build took.
+meta_reports_path_and_parse_ms(_Setup) ->
+    fun() ->
+        {ok, Meta} = symbolic_codebase:parse(?FIXTURES),
+        ?assertEqual(filename:absname(?FIXTURES), maps:get(path, Meta)),
+        ?assert(is_integer(maps:get(parse_ms, Meta))),
+        ?assert(maps:get(parse_ms, Meta) >= 0)
+    end.
+
+%% Parsing DirB no longer evicts DirA's cache entry — both stay queryable
+%% by passing their own path to query/3 and overview/1, and each only
+%% proves goals against its own facts.
+two_parsed_directories_stay_independently_cached(_Setup) ->
+    fun() ->
+        with_two_scratch_dirs(fun(DirA, DirB) ->
+            {ok, _} = symbolic_codebase:parse(DirA),
+            {ok, _} = symbolic_codebase:parse(DirB),
+            {ok, SolA} = symbolic_codebase:query("defines(alpha_fn, 0, _, _, _)", 50, DirA),
+            ?assertEqual(1, length(SolA)),
+            {ok, SolB} = symbolic_codebase:query("defines(beta_fn, 0, _, _, _)", 50, DirB),
+            ?assertEqual(1, length(SolB)),
+            %% DirA's cache has no beta_fn and vice versa — not one merged pool.
+            {ok, NoBetaInA} = symbolic_codebase:query("defines(beta_fn, 0, _, _, _)", 50, DirA),
+            ?assertEqual([], NoBetaInA),
+            {ok, NoAlphaInB} = symbolic_codebase:query("defines(alpha_fn, 0, _, _, _)", 50, DirB),
+            ?assertEqual([], NoAlphaInB),
+            {ok, OverviewA} = symbolic_codebase:overview(DirA),
+            ?assertEqual(filename:absname(DirA), maps:get(path, OverviewA)),
+            {ok, OverviewB} = symbolic_codebase:overview(DirB),
+            ?assertEqual(filename:absname(DirB), maps:get(path, OverviewB))
+        end)
+    end.
+
+%% Omitting Path on query/overview falls back to whichever directory was
+%% parsed most recently — parsing DirB after DirA moves that fallback from
+%% DirA to DirB.
+no_path_query_and_overview_use_most_recently_parsed_dir(_Setup) ->
+    fun() ->
+        with_two_scratch_dirs(fun(DirA, DirB) ->
+            {ok, _} = symbolic_codebase:parse(DirA),
+            {ok, SolAfterA} = symbolic_codebase:query("defines(alpha_fn, 0, _, _, _)"),
+            ?assertEqual(1, length(SolAfterA)),
+            {ok, _} = symbolic_codebase:parse(DirB),
+            {ok, SolAfterB} = symbolic_codebase:query("defines(alpha_fn, 0, _, _, _)"),
+            ?assertEqual([], SolAfterB),
+            {ok, OV} = symbolic_codebase:overview(),
+            ?assertEqual(filename:absname(DirB), maps:get(path, OV))
+        end)
+    end.
+
+%% Same guarantee handle_call({parse,...}) documents: a fresh parse of one
+%% directory leaves every other cached directory's entry byte-for-byte as
+%% it was, whether the fresh parse succeeds or (as
+%% parse_with_broken_rules_is_error_and_leaves_cache_untouched already
+%% covers for the single-directory case) fails.
+reparsing_one_directory_leaves_the_other_untouched(_Setup) ->
+    fun() ->
+        with_two_scratch_dirs(fun(DirA, DirB) ->
+            {ok, _} = symbolic_codebase:parse(DirA),
+            {ok, _} = symbolic_codebase:parse(DirB),
+            {ok, BeforeA} = symbolic_codebase:overview(DirA),
+            {ok, _} = symbolic_codebase:parse(DirB),
+            {ok, AfterA} = symbolic_codebase:overview(DirA),
+            ?assertEqual(BeforeA, AfterA)
+        end)
+    end.
+
+%% {error, {unknown_path, Path}} is distinct from {error, not_parsed}: it
+%% means *something* is cached, just not the directory asked for.
+query_unknown_path_is_error(_Setup) ->
+    fun() ->
+        {ok, _} = symbolic_codebase:parse(?FIXTURES),
+        ?assertMatch({error, {unknown_path, "no/such/dir_never_parsed_zz"}},
+            symbolic_codebase:query("defines(F, _, _, _, _)", 50, "no/such/dir_never_parsed_zz"))
+    end.
+
+overview_unknown_path_is_error(_Setup) ->
+    fun() ->
+        {ok, _} = symbolic_codebase:parse(?FIXTURES),
+        ?assertMatch({error, {unknown_path, "no/such/dir_never_parsed_zz"}},
+            symbolic_codebase:overview("no/such/dir_never_parsed_zz"))
+    end.
+
+%% normalize_dir/1 strips a trailing "/" before using a path as a cache
+%% key, so "test/fixtures" and "test/fixtures/" name the same entry rather
+%% than silently doubling it up.
+trailing_slash_path_normalizes_to_the_same_entry(_Setup) ->
+    fun() ->
+        {ok, Meta} = symbolic_codebase:parse(?FIXTURES),
+        ?assertMatch({ok, _}, symbolic_codebase:overview(?FIXTURES ++ "/")),
+        {ok, OV} = symbolic_codebase:overview(?FIXTURES ++ "/"),
+        ?assertEqual(maps:get(path, Meta), maps:get(path, OV))
+    end.
+
+%% Two scratch directories under _build/, each with one distinctively-named
+%% function, so a query naming that function proves it's reading the right
+%% cache entry rather than some merged pool. Fun gets both absolute roots.
+with_two_scratch_dirs(Fun) ->
+    DirA = filename:absname(filename:join(["_build", "codebase_multi_scratch_a"])),
+    DirB = filename:absname(filename:join(["_build", "codebase_multi_scratch_b"])),
+    _ = file:del_dir_r(DirA),
+    _ = file:del_dir_r(DirB),
+    ok = filelib:ensure_path(DirA),
+    ok = filelib:ensure_path(DirB),
+    ok = file:write_file(filename:join(DirA, "sample.erl"),
+        <<"-module(sample_multi_a).\nalpha_fn() -> ok.\n">>),
+    ok = file:write_file(filename:join(DirB, "sample.erl"),
+        <<"-module(sample_multi_b).\nbeta_fn() -> ok.\n">>),
+    try
+        Fun(DirA, DirB)
+    after
+        _ = file:del_dir_r(DirA),
+        _ = file:del_dir_r(DirB)
     end.
 
 %% A scratch project under _build/: <root>/.symbolic/rules.pl (defining

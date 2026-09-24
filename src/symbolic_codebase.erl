@@ -1,22 +1,28 @@
 %%% The MCP server's in-memory codebase cache.
 %%%
-%%% A single registered gen_server holding the extracted fact base for ONE
-%%% codebase at a time (a deliberate, "for now" scope — no multi-session
-%%% registry, no on-disk persistence; the CLI's DETS path in
-%%% symbolic_fact_store.erl is separate and untouched). The `parse` tool
-%%% populates it, `query` proves goals against it, `overview` reports on it.
+%%% A single registered gen_server, but it can hold more than one cached
+%%% codebase at once — one per directory `parse` was pointed at, keyed by
+%%% that directory's normalized (absolute) path. Still no on-disk
+%%% persistence; the CLI's DETS path in symbolic_fact_store.erl is separate
+%%% and untouched. The `parse` tool populates/replaces the entry for its
+%%% own directory (every other cached directory is left exactly as it
+%%% was); `query`/`overview` take an optional directory to select which
+%%% entry to use, defaulting to whichever directory was most recently
+%%% parsed successfully when omitted — so existing no-argument callers see
+%%% the same behavior as the single-codebase design this replaces.
 %%%
-%%% The fact base lives as an erlog state (facts asserted in, ready to
-%%% prove against) plus a small Meta summary computed at parse time. Queries
-%%% are read-only: the state is never advanced or mutated by a query, and a
-%%% timed-out / killed query leaves it exactly as it was.
+%%% Each cache entry is an erlog state (facts asserted in, ready to prove
+%%% against) plus a small Meta summary computed at parse time. Queries are
+%%% read-only: no entry is ever advanced or mutated by a query, and a
+%%% timed-out / killed query leaves the whole cache exactly as it was.
 %%%
 %%% See docs/erlang-mcp-design.md for the broader MCP architecture this
 %%% refocuses.
 -module(symbolic_codebase).
 -behaviour(gen_server).
 
--export([start_link/0, parse/1, parse/2, query/1, query/2, overview/0]).
+-export([start_link/0, parse/1, parse/2, query/1, query/2, query/3,
+         overview/0, overview/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
 
 -define(DEFAULT_LIMIT, 50).
@@ -28,12 +34,13 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% Scan Dir, extract facts, and (re)build the in-memory cache. Returns the
-%% same summary `overview` reports, so a parse immediately shows what landed.
-%% Also resolves and consults a `.symbolic/rules.pl` derived-predicate
-%% library, same as the CLI's `symbolic query` does for a fact database:
-%% auto-discovered by walking up from Dir (then falling back to the
-%% server's own cwd) unless RulesOverride is given, in which case that
+%% Scan Dir, extract facts, and (re)build that directory's cache entry —
+%% every other directory already cached is left untouched. Returns the
+%% same summary `overview` reports, so a parse immediately shows what
+%% landed. Also resolves and consults a `.symbolic/rules.pl` derived-
+%% predicate library, same as the CLI's `symbolic query` does for a fact
+%% database: auto-discovered by walking up from Dir (then falling back to
+%% the server's own cwd) unless RulesOverride is given, in which case that
 %% path is used outright — see symbolic_query:discover_rules_from_dir/1.
 -spec parse(file:name()) -> {ok, map()} | {error, term()}.
 parse(Dir) ->
@@ -43,59 +50,93 @@ parse(Dir) ->
 parse(Dir, RulesOverride) ->
     gen_server:call(?MODULE, {parse, Dir, RulesOverride}, infinity).
 
-%% Prove Goal against the cache, returning ALL solutions (capped at Limit,
-%% default ?DEFAULT_LIMIT). Returns {ok, [Solutions]} or
-%% {truncated, [Solutions]} (cap hit) or {error, Reason}.
+%% Prove Goal against a cached directory's fact base, returning ALL
+%% solutions (capped at Limit, default ?DEFAULT_LIMIT). Returns
+%% {ok, [Solutions]} or {truncated, [Solutions]} (cap hit) or
+%% {error, Reason}.
 -spec query(string()) -> query_result().
 query(Goal) ->
-    query(Goal, ?DEFAULT_LIMIT).
+    query(Goal, ?DEFAULT_LIMIT, undefined).
 
 -spec query(string(), non_neg_integer()) -> query_result().
 query(Goal, Limit) ->
+    query(Goal, Limit, undefined).
+
+%% Path selects which cached directory to query, by the same string
+%% `parse` was given for it — undefined means "whichever directory was
+%% most recently parsed successfully". {error, not_parsed} means nothing
+%% has ever been parsed at all; {error, {unknown_path, Path}} means Path
+%% itself was never (successfully) parsed, distinct from that.
+-spec query(string(), non_neg_integer(), file:name() | undefined) -> query_result().
+query(Goal, Limit, Path) ->
     %% gen_server:call timeout must exceed the proof's own timeout, so the
     %% worker gets a chance to reply {error, timeout} rather than the call
     %% itself timing out first (same reasoning as prolog_session:query/3).
-    gen_server:call(?MODULE, {query, Goal, Limit}, ?QUERY_TIMEOUT_MS + 1000).
+    gen_server:call(?MODULE, {query, Goal, Limit, Path}, ?QUERY_TIMEOUT_MS + 1000).
 
 -type query_result() ::
     {ok, [Solutions :: [{atom(), term()}]]}
     | {truncated, [Solutions :: [{atom(), term()}]]}
     | {error, term()}.
 
-%% The current state of the cache — see compute_meta/2 for the shape.
+%% The current state of the most-recently-parsed cache entry — see
+%% compute_meta/5 for the shape.
 -spec overview() -> {not_parsed, #{loaded => false}} | {ok, map()}.
 overview() ->
-    gen_server:call(?MODULE, overview).
+    overview(undefined).
+
+%% Same as overview/0, but Path selects which cached directory to report
+%% on (same meaning as query/3's Path). An explicit Path that was never
+%% parsed reports {error, {unknown_path, Path}} rather than the
+%% "nothing at all parsed yet" {not_parsed, ...} shape.
+-spec overview(file:name() | undefined) ->
+    {not_parsed, #{loaded => false}} | {ok, map()} | {error, term()}.
+overview(Path) ->
+    gen_server:call(?MODULE, {overview, Path}).
 
 %% gen_server callbacks
 
+%% caches: NormalizedDir -> #{erl => ErlState, meta => Meta}.
+%% current: the NormalizedDir most recently parsed successfully, or
+%% undefined if nothing has been parsed yet — what query/3 and
+%% overview/1 fall back to when their Path argument is undefined.
 init([]) ->
-    {ok, #{erl => undefined, meta => undefined}}.
+    {ok, #{caches => #{}, current => undefined}}.
 
 handle_call({parse, Dir, RulesOverride}, _From, State) ->
+    StartMs = erlang:monotonic_time(millisecond),
     case symbolic_parse:scan(Dir) of
         {ok, {Files, Facts}} ->
             RulesPath = resolve_rules(Dir, RulesOverride),
             case build_state(Facts, RulesPath) of
                 {ok, Erl} ->
-                    Meta = compute_meta(Files, Facts, RulesPath),
-                    {reply, {ok, Meta}, State#{erl => Erl, meta => Meta}};
+                    ElapsedMs = erlang:monotonic_time(millisecond) - StartMs,
+                    NormDir = normalize_dir(Dir),
+                    Meta = compute_meta(Files, Facts, RulesPath, NormDir, ElapsedMs),
+                    Caches = maps:get(caches, State),
+                    NewState = State#{
+                        caches => Caches#{NormDir => #{erl => Erl, meta => Meta}},
+                        current => NormDir},
+                    {reply, {ok, Meta}, NewState};
                 {error, Reason} ->
                     %% A bad rules file fails the whole parse rather than
                     %% caching a facts-only session silently missing the
-                    %% library the caller asked for — State is untouched,
-                    %% same as a query timeout/crash leaves it untouched.
+                    %% library the caller asked for — State is untouched
+                    %% (this directory's previous entry, every other
+                    %% directory's entry, and `current` all stay exactly
+                    %% as they were), same as a query timeout/crash leaves
+                    %% it untouched.
                     {reply, {error, {rules_error, RulesPath, Reason}}, State}
             end;
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
 
-handle_call({query, Goal, Limit}, _From, State) ->
-    case maps:get(erl, State) of
-        undefined ->
-            {reply, {error, not_parsed}, State};
-        Erl ->
+handle_call({query, Goal, Limit, Path}, _From, State) ->
+    case resolve_cache_entry(Path, State) of
+        {error, Reason} ->
+            {reply, {error, Reason}, State};
+        {ok, #{erl := Erl}} ->
             case parse_goal(Goal) of
                 {ok, ParsedGoal} ->
                     case prove_all_with_timeout(ParsedGoal, Erl, clamp_limit(Limit)) of
@@ -108,10 +149,11 @@ handle_call({query, Goal, Limit}, _From, State) ->
             end
     end;
 
-handle_call(overview, _From, State) ->
-    case maps:get(meta, State) of
-        undefined -> {reply, {not_parsed, #{loaded => false}}, State};
-        Meta -> {reply, {ok, Meta}, State}
+handle_call({overview, Path}, _From, State) ->
+    case resolve_cache_entry(Path, State) of
+        {error, not_parsed} -> {reply, {not_parsed, #{loaded => false}}, State};
+        {error, Reason} -> {reply, {error, Reason}, State};
+        {ok, #{meta := Meta}} -> {reply, {ok, Meta}, State}
     end.
 
 handle_cast(_Msg, State) -> {noreply, State}.
@@ -121,6 +163,37 @@ terminate(_Reason, _State) -> ok.
 code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
 %% Internal
+
+%% Look up which cache entry Path (or, if undefined, `current`) names.
+%% {error, not_parsed} only ever means "nothing has been parsed at all
+%% yet" (Path undefined, current undefined) — an explicit Path that just
+%% isn't cached is the distinct {error, {unknown_path, Path}}, so a caller
+%% can tell "you haven't parsed anything" apart from "you asked for a
+%% directory you never parsed".
+resolve_cache_entry(undefined, State) ->
+    case maps:get(current, State) of
+        undefined -> {error, not_parsed};
+        Dir -> {ok, maps:get(Dir, maps:get(caches, State))}
+    end;
+resolve_cache_entry(Path, State) ->
+    NormDir = normalize_dir(Path),
+    case maps:find(NormDir, maps:get(caches, State)) of
+        {ok, Entry} -> {ok, Entry};
+        error -> {error, {unknown_path, Path}}
+    end.
+
+%% The cache key: Dir made absolute (relative to this process's cwd) so
+%% "src" and an equivalent absolute path parsed in two different calls
+%% land in the same entry instead of silently doubling up.
+%% filename:absname/1 already strips any trailing "/" on its own
+%% (confirmed: filename:absname("test/fixtures/") =:=
+%% filename:absname("test/fixtures")), so there's nothing extra to do for
+%% that case — no need to duplicate work it already does. Doesn't resolve
+%% symlinks or collapse ".." segments beyond what filename:absname/1
+%% itself does — good enough for "the same string names the same entry",
+%% not a general path-canonicalization utility.
+normalize_dir(Dir) ->
+    filename:absname(Dir).
 
 %% A fresh erlog state with every fact asserted. Same asserta pattern as
 %% prolog_session:load_facts/2's handle_call (asserta is O(1); facts have no
@@ -151,9 +224,11 @@ consult_rules(Erl, RulesPath) -> erlog:consult(RulesPath, Erl).
 resolve_rules(_Dir, RulesOverride) when RulesOverride =/= undefined -> RulesOverride;
 resolve_rules(Dir, undefined) -> symbolic_query:discover_rules_from_dir(Dir).
 
-compute_meta(Files, Facts, RulesPath) ->
+compute_meta(Files, Facts, RulesPath, NormDir, ElapsedMs) ->
     #{
         loaded => true,
+        path => NormDir,
+        parse_ms => ElapsedMs,
         files => length(Files),
         file_list => Files,
         languages => languages_from_files(Files),

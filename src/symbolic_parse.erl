@@ -12,6 +12,7 @@
 %%% truncated-at-200-chars atoms, not arbitrary-length values. See
 %%% symbolic_term_json.erl and ts_extract_text.erl.
 -module(symbolic_parse).
+-include_lib("kernel/include/logger.hrl").
 -export([run/1, run/2, scan/1]).
 %% Exported for symbolic_parse_tests.erl only — run/1,2 halt() on every
 %% path and can't be called directly from EUnit; maybe_store/2 and
@@ -32,7 +33,12 @@ scan(Dir) ->
             case code:ensure_loaded(symbolic_ts) of
                 {module, symbolic_ts} ->
                     Files = scan_files(Dir),
-                    Facts = lists:usort(lists:flatmap(fun ts_extract:file/1, Files)),
+                    ?LOG_INFO("parse: scanning ~p files under ~s", [length(Files), Dir]),
+                    StartAll = erlang:monotonic_time(millisecond),
+                    Facts = lists:usort(lists:flatmap(fun extract_file_timed/1, Files)),
+                    ElapsedAllMs = erlang:monotonic_time(millisecond) - StartAll,
+                    ?LOG_INFO("parse: finished ~s - ~p files, ~p facts, ~p ms",
+                              [Dir, length(Files), length(Facts), ElapsedAllMs]),
                     {ok, {Files, Facts}};
                 {error, Reason} ->
                     {error, {nif_not_loadable, Reason}}
@@ -40,6 +46,21 @@ scan(Dir) ->
         false ->
             {error, {no_such_directory, Dir}}
     end.
+
+%% ts_extract:file/1 timed and logged per file — this is what lets an
+%% operator (or an agent reading the log) see which file is currently
+%% being parsed and how long each one took, rather than only a single
+%% total at the end. Logged via `logger`, same as everywhere else in this
+%% codebase; filtered out entirely unless the primary log level is raised
+%% to `info` (see symbolic_serve:setup_logging/0), so this is silent by
+%% default for the CLI and only visible when the MCP server turns logging
+%% on and points it at a file.
+extract_file_timed(File) ->
+    Start = erlang:monotonic_time(millisecond),
+    Facts = ts_extract:file(File),
+    ElapsedMs = erlang:monotonic_time(millisecond) - Start,
+    ?LOG_INFO("parse: ~s - ~p facts, ~p ms", [File, length(Facts), ElapsedMs]),
+    Facts.
 
 scan_files(Dir) ->
     filelib:wildcard(filename:join(Dir, "**/*.erl")) ++
