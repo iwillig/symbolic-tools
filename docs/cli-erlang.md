@@ -50,7 +50,7 @@ document used a fictional `{escriptize, [...]}` tuple):
 
 ```erlang
 {relx, [
-    {release, {symbolic_tools, "0.1.1"}, [sasl, erlog, erlmcp, symbolic_tools]},
+    {release, {symbolic_tools, "0.1.2"}, [sasl, erlog, erlmcp, symbolic_tools]},
     {dev_mode, true},        % symlinked app dirs, fast local builds —
     {include_erts, false},   % flip both for an actually portable/shippable release
     {extended_start_script, true},

@@ -7,8 +7,8 @@ class SymbolicTools < Formula
   # commit that contains it (impossible to satisfy). `tag:` alone is
   # enough for a single-maintainer personal tap; a separate tap repo
   # (not sharing history with the source) wouldn't have this problem.
-  url "https://github.com/iwillig/symbolic-tools.git", tag: "v0.1.1"
-  version "0.1.1"
+  url "https://github.com/iwillig/symbolic-tools.git", tag: "v0.1.2"
+  version "0.1.2"
   license "MIT"
 
   depends_on "erlang"
