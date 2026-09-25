@@ -45,6 +45,15 @@ is otherwise mediocre at:
   (*Knowledge-Based Systems*, 2025) — translating a natural-language query
   into Prolog and delegating the actual proof to SWI-Prolog outperforms
   having the LLM reason in free text, across multiple model architectures.
+- ["Unlocking the Potential of Generative AI through Neuro-Symbolic
+  Architectures — Benefits and
+  Limitations"](https://arxiv.org/html/2502.11269v1) (Bougzime, Jabbar,
+  Cruz, Demoly) — a broader survey across five neuro-symbolic
+  architectures finding that pairing a neural model with a symbolic
+  component (`Neuro → Symbolic ← Neuro`) beats purely neural approaches on
+  generalization, scalability, and interpretability — the same rationale
+  for keeping the Prolog engine and the fact base separate from the LLM
+  in this project.
 
 `symbolic-tools` applies the same idea to **software codebases** instead
 of math word problems: build the Prolog fact base ahead of time from the
@@ -82,38 +91,216 @@ source files ──tree-sitter (symbolic_ts NIF)──> facts (defs, calls, impo
 
 Inspired by the [Chiasmus MCP Server](https://github.com/yogthos/chiasmus).
 
+## The Prolog data model
+
+Every fact is a plain Prolog term, keyed on the same `(Function, Arity,
+File)` triple across families — that's what `calls/5` and `doc/5` use to
+attribute a call site or a comment to the definition it belongs to. There's
+no ID to generate and no join to write by hand: a variable shared across two
+goals *is* the join.
+
+| Predicate | Shape | Captures |
+|---|---|---|
+| `defines/5` | `(Fun, Arity, Params, File, Line)` | a function/method definition |
+| `calls/5` | `(Caller, CallerArity, CallSpec, File, Line)` | one call site, inside `Caller` |
+| `doc/5` | `(Fun, Arity, File, Line, Text)` | the comment immediately before a definition |
+| `comment/3` | `(File, Line, Text)` | every comment, attributed or not |
+| `export/4` | `(Fun, Arity, File, Line)` | an Erlang `-export` entry |
+| `branch/5` | `(Fun, Arity, Kind, File, Line)` | one decision point (`if`/`case`/`&&`/...) |
+
+Full dictionary, every language, in `docs/prolog-schema.md`.
+
+`calls/5`'s third argument, `CallSpec`, is the one shape worth knowing on
+its own — a nested term, not a string, so a query can match *part* of it
+and leave the rest wild:
+
+```prolog
+local(Name, ArgCount)               % bar()
+remote(Module, Function, ArgCount)  % mod:fun(), or Module.fun() in TS
+member(Object, Method, ArgCount)    % obj.method()
+new(Constructor, ArgCount)          % new Ctor()   — TypeScript only
+```
+
+`calls(_, _, member(_, hasOwnProperty, _), _, _)` finds every call to a
+method named `hasOwnProperty`, on any object, in one goal — and it matches
+regardless of which extractor produced the call site, because all of them
+emit the same `CallSpec` shapes.
+
+Two things to know before writing your own goals: identifiers are atoms
+(`defines(cli, ...)` matches; `defines("cli", ...)` doesn't), while free
+text (`doc`/`comment`'s `Text`) is a binary — the two never unify with each
+other, and there's no substring search over a binary yet
+(`docs/erlog-missing-builtins.md`). And `File` is always the absolute path
+`parse` walked, not a repo-relative one.
+
+Derived predicates — everything in `.symbolic/rules.pl` — aren't a
+different kind of thing from the raw facts, just more clauses over them,
+with no new extraction step:
+
+```prolog
+undocumented(Fun, Arity, File, Line) :-
+    defines(Fun, Arity, _Params, File, Line),
+    \+ doc(Fun, Arity, _, _, _).
+```
+
+## Query examples
+
+Parse a small file and ask it questions directly — no schema to design, no
+index to build:
+
+```ts
+// greeter.ts
+// Formats a full name from its parts.
+function formatName(first: string, last: string): string {
+  return capitalize(first) + " " + capitalize(last);
+}
+
+function greet(name: string): void {
+  const formatted = formatName(name, "user");
+  console.log(formatted);
+}
+
+// Capitalizes the first letter of a word.
+function capitalize(word: string): string {
+  return word.toUpperCase();
+}
+```
+
+```sh
+$ symbolic parse . -db facts.dets
+
+$ symbolic query -db facts.dets 'calls(X, _, local(capitalize, _), _, _)'
+X = "formatName"                    # who calls capitalize directly
+
+$ symbolic query -db facts.dets 'calls(X, _, member(console, _, _), _, _)'
+X = "greet"                         # who calls a method on console
+
+$ symbolic query -db facts.dets 'defines(F, _, _, _, _), \+ doc(F, _, _, _, _)'
+F = "greet"                         # which functions have no doc comment
+
+$ symbolic query -db facts.dets 'calls(capitalize, _, member(_, missingMethod, _), _, _)'
+No.                                 # capitalize never calls a method by that name
+```
+
+None of these are special cases the tool was told about — "which functions
+are undocumented" is just `defines/\+ doc`; "who calls a method on
+`console`" is a pattern match on `CallSpec`. A question worth asking once
+goes in a scratch `.pl` file passed via `-rules`; one worth asking every
+time goes in `.symbolic/rules.pl`, found automatically with no flag — see
+"The shared rule library" further down.
+
+## Lints that are hard to write in a normal linter, easy in Prolog
+
+A linter rule is a single-file AST visitor — it sees the node in front of
+it and nothing else. Whole-program questions ("everything this function
+reaches," "everywhere else this name is defined") need a second engine
+underneath the visitor: a call graph, a cross-file symbol table. Here
+that second engine is just more Prolog over facts already in memory. Four
+real checks, run against this project's own `src/` (21 files, 1,482
+`calls/5` facts):
+
+**Mutual recursion, at arbitrary depth.** Two functions that call each
+other only through a chain, never directly — not visible in either
+function's own body, only as a property of the call graph:
+
+```prolog
+mutual_recursion(A, B) :- reaches(A, B), reaches(B, A), A @< B.
+```
+```sh
+$ symbolic query -db facts.dets 'mutual_recursion(walk_object, walk_pair)'
+Yes.
+```
+
+**A risky call, reached two hops away.** `risky_call/3` flags a function
+that directly calls `os`/`erlang`/`file`/`init`. `run/2` never does —
+but it calls something that calls something that does:
+
+```prolog
+hidden_risky_call(Fun, Module, Target) :-
+    reaches(Fun, RiskyCaller),
+    risky_call(RiskyCaller, Module, Target),
+    \+ risky_call(Fun, Module, Target).
+```
+```sh
+$ symbolic query -db facts.dets 'risky_call(run, M, T)'
+No.
+
+$ symbolic query -db facts.dets \
+    'findall(M-T, hidden_risky_call(run, M, T), Raw), sort(Raw, Pairs)'
+Pairs = [["-","erlang","monotonic_time"],["-","file","get_cwd"],["-","file","list_dir"]]
+```
+
+**Cross-file duplicate implementations.** The same name and arity, defined
+in two files a single-file linter never has open at the same time:
+
+```sh
+$ symbolic query -db facts.dets 'duplicate_name(args_shape, 3, Files)'
+Files = ["ts_extract_erlang.erl","ts_extract_typescript.erl"]
+```
+
+**Dead code, minus the false positives.** "No local caller" is easy to
+write and wrong — it flags **78** functions in this codebase: every
+`-export`ed API function, every OTP callback (`init/1`, `handle_call/3`,
+...), every NIF stub only C code calls. The real check joins reachability
+against every way a function can be an entry point instead of dead:
+
+```prolog
+truly_uncalled(Fun, Arity, File) :-
+    defines(Fun, Arity, _, File, _),
+    \+ calls(_, _, local(Fun, Arity), _, _),
+    \+ calls(_, _, remote(_, Fun, Arity), _, _),
+    \+ entry_point(Fun, Arity, File).
+```
+```sh
+$ symbolic query -db facts.dets 'findall(F-A-File, truly_uncalled(F, A, File), Dead)'
+Dead = [["-",["-","extract_file_timed",1],".../symbolic_parse.erl"]]
+```
+
+Exactly one function in this codebase is genuinely dead. Getting from 78
+false positives to 1 real one is a join against this project's own
+`export/4` facts plus a hand-maintained `runtime_entry_point/2` table — a
+whole-program join a per-file visitor has no way to perform, because it
+never sees a *different* file's export list.
+
 ## Supported languages
 
-**TypeScript, Erlang, and Bash**, all real today via `symbolic parse` —
-`defines`, `calls` (distinguishing plain calls from method calls in
-TypeScript, local from remote calls in Erlang, and just `local` calls
-in Bash, which has no qualified-call syntax to tell apart from a bare
-one), `comment`, and `doc` facts (every comment, plus which ones
-document a specific function), plus Erlang's `export` facts (every
-`-export([f/1])` entry, which is what keeps an exported API function or
-an OTP callback from reading as dead code — see
-`docs/lint-queries.md`'s `entry_point/3`), dogfooded against this repo's
-own source and a real-world-style `.ts` file. **Markdown** is real too, for
-`.md` files — `heading`, `code_block`, and `paragraph` facts, so
-`readme.md`/`docs/*.md` become queryable the same way; a fenced
-`erlang`/`ts`/`typescript`/`sh`/`bash` block also gets re-parsed into
-`example_defines`/`example_calls` facts, so a query can catch a doc's
-code sample showing a function the real codebase doesn't (or no
-longer) have. See `docs/tree-sitter-markdown.md` for what's implemented
-(block structure) versus deferred (`link/4`, which needs a second,
-currently unimplemented grammar pass). **TOML and JSON** are real too —
-config formats, not code, so instead of `defines`/`calls` they get
-`config_value(File, Path, Value, Line)` and `config_section(File, Path,
-Line)`, `Path` a dotted key path (`'dependencies.serde'`). Both formats
-emit the *same* two predicates, so `config_value(File, name, Value, _)`
-finds a `name` key the same way in a `Cargo.toml` or a `package.json`.
-YAML was investigated and deliberately skipped — its grammar needs a
-real C++ scanner this project's (all-C) build has no toolchain for; see
-`docs/tree-sitter-erlang.md` §5.1. More tree-sitter
-grammars (Python, Go, Rust) can slot in the same way; see
-`docs/tree-sitter-erlang.md` §5 for the actual recipe (not hypothetical —
-what adding TypeScript really took, including two vendored-fork
-Makefiles).
+`symbolic parse` walks a directory and picks an extractor per file
+extension. What each one produces:
+
+- **TypeScript, Erlang, and Bash** — real code, real definitions.
+  `defines`, `calls` (TypeScript distinguishes plain calls from method
+  calls; Erlang distinguishes local from remote calls; Bash only has
+  `local` calls, since it has no qualified-call syntax to tell a
+  same-script call apart from a bare one), `comment`, and `doc` facts
+  (every comment, plus which ones document a specific function). Erlang
+  also gets `export` facts — every `-export([f/1])` entry, which is what
+  keeps an exported API function or an OTP callback from reading as dead
+  code (see `docs/lint-queries.md`'s `entry_point/3`). Dogfooded against
+  this repo's own source and a real-world-style `.ts` file.
+- **Markdown** — `heading`, `code_block`, and `paragraph` facts for
+  `.md` files, so `readme.md`/`docs/*.md` become queryable the same way
+  as code. A fenced `erlang`/`ts`/`typescript`/`sh`/`bash` block also gets
+  re-parsed into `example_defines`/`example_calls` facts, so a query can
+  catch a doc's code sample showing a function the real codebase doesn't
+  (or no longer) have. Block structure only — links (`link/4`) are
+  deliberately deferred; see `docs/tree-sitter-markdown.md`.
+- **TOML and JSON** — config, not code, so instead of `defines`/`calls`
+  they get `config_value(File, Path, Value, Line)` and
+  `config_section(File, Path, Line)`, `Path` a dotted key path
+  (`'dependencies.serde'`). Both formats emit the *same* two predicates,
+  so `config_value(File, name, Value, _)` finds a `name` key the same way
+  in a `Cargo.toml` or a `package.json`. Array *values* are captured as
+  one opaque leaf (the array's raw source text), not walked
+  element-by-element — a deliberate scope limit; see
+  `docs/tree-sitter-erlang.md` §5.1.
+- **YAML** — investigated and deliberately skipped: its grammar needs a
+  real C++ scanner this project's (all-C) build has no toolchain for; see
+  `docs/tree-sitter-erlang.md` §5.1.
+
+More tree-sitter grammars (Python, Go, Rust) can slot in the same way —
+see `docs/tree-sitter-erlang.md` §5 for the actual recipe (not
+hypothetical — what adding TypeScript really took, including two
+vendored-fork Makefiles).
 
 ## Tools
 
@@ -133,10 +320,19 @@ Makefiles).
 ```sh
 symbolic                                              # prints usage
 symbolic parse ./src -db facts.dets                   # extract facts, print JSON, write a fact database
+symbolic parse -db facts.dets                         # no dir: merge every path in .symbolic/config.json instead
 symbolic query -db facts.dets 'depends_on(X, Y)'      # ask a question about the codebase
 symbolic query -db facts.dets 'top_fan_in(5, Ranked)' # derived rules, no -rules flag needed
 symbolic serve                                        # start the MCP server (stdio transport)
 ```
+
+`symbolic parse` with no directory scans every path listed in
+`.symbolic/config.json`'s `paths` array — directories (`src`, `test`) and
+individual files (`package.json`) alike — and merges them into one fact
+set, found by the same walking-up discovery `.symbolic/rules.pl` already
+uses (`-config <file>` overrides it, the same way `-rules` overrides
+rules discovery). This project's own [`.symbolic/config.json`](.symbolic/config.json)
+is exactly `{"paths": ["src", "test"]}` — see `docs/prolog-store.md` §8.
 
 All three work end-to-end, run via a `rebar3 release` (see Install)
 rather than `rebar3 escriptize` — `parse` and `serve` both need real
@@ -197,18 +393,12 @@ Prolog-text printer had: it didn't escape an atom's embedded single
 quote at all, corrupting ordinary prose ("it's", "doesn't") in
 `comment`/`doc` text. See `docs/prolog-store.md` §7.
 
-A plain call (`bar()`) becomes `local(bar, ArgCount)`; a method call
-(`obj.method()`) becomes `member(obj, method, ArgCount)` — so a query can
-tell "calls that function directly" apart from "calls a method on
-something," and (via `ArgCount`) how many arguments the call actually
-passed. `calls`'s own second argument, `CallerArity`, is the *enclosing*
-function's arity — `["calls","formatName",2,["local","capitalize",1],...]`
-means this call site is inside `formatName`'s 2-arg clause specifically,
-not just "some function named formatName." `defines(Function, Arity, Params, File, Line)`'s own `Arity`/
-`Params` come from the same definition's parameter list, so `formatName`
-above is `["defines","formatName",2,"(first: string, last: string)",...]`
-— arity 2, and the raw parameter text for a human/LLM to read directly.
-Every comment becomes a `comment(File, Line, Text)` fact, unconditionally;
+`calls`'s own second argument, `CallerArity`, is the *enclosing* function's
+arity — `["calls","formatName",2,["local","capitalize",1],...]` means this
+call site is inside `formatName`'s 2-arg clause specifically, not just
+"some function named formatName" (see "The Prolog data model" above for
+what `CallSpec`'s shapes mean). Every comment becomes a `comment(File,
+Line, Text)` fact, unconditionally;
 a comment (or run of consecutive `//` lines) that sits immediately before
 a function also becomes a `doc(Function, Arity, File, Line, Text)` fact,
 attributed to that function at its own definition line — `greet` has no
@@ -222,62 +412,6 @@ documents, not a parent/child of it, so extracting `doc/5` walks
 `docs/tree-sitter-erlang.md` §6 for a real inconsistency this uncovered
 in that part of the API (`node_is_null/1` doesn't apply to a missing
 sibling the way it does to a missing parent).
-
-### Querying the facts
-
-`parse -db` writes a fact database; `query -db` reads it back and asserts
-the facts directly (no text parsing either way — see
-`docs/prolog-store.md` §7):
-
-```sh
-$ symbolic parse . -db facts.dets
-
-$ symbolic query -db facts.dets 'calls(X, _, local(capitalize, _), _, _)'
-X = "formatName"                    # the only caller of capitalize
-
-$ symbolic query -db facts.dets 'defines(formatName, Arity, Params, File, Line)'
-Arity = 2
-File = "greeter.ts"
-Line = 2
-Params = "(first: string, last: string)"
-
-$ symbolic query -db facts.dets 'calls(X, _, member(console, _, _), _, _)'
-X = "greet"                         # who calls a method on console
-
-$ symbolic query -db facts.dets 'calls(greet, CallerArity, X, _, Line)'
-CallerArity = 1
-Line = 7
-X = ["local","formatName",2]        # greet's first call — one solution at a time
-
-$ symbolic query -db facts.dets 'calls(capitalize, _, member(_, missingMethod, _), _, _)'
-No.                                 # capitalize never calls a method by that name
-
-$ symbolic query -db facts.dets 'doc(formatName, Arity, File, Line, Text)'
-Arity = 2
-File = "greeter.ts"
-Line = 2
-Text = "Formats a full name from its parts."
-
-$ symbolic query -db facts.dets 'defines(F, _, _, _, _), \+ doc(F, _, _, _, _)'
-F = "greet"                         # which functions have no doc comment
-
-$ symbolic query -db facts.dets 'comment(File, Line, Text), \+ doc(_, _, _, _, Text)'
-File = "greeter.ts"
-Line = 17
-Text = "TODO: handle names with a middle name too"   # comments not attached to any definition
-```
-
-A bound value prints as JSON (`docs/prolog-store.md` §7) — a plain atom
-or binary prints the same way (`"formatName"`), so the type distinction
-between an identifier and free text (`docs/prolog-schema.md`) only
-matters when *writing* a rule, not when reading a query's answer.
-Because it's a real fact base, not a grep result, this composes: reach
-for the shared rule library (below) for the questions worth asking twice,
-point `-rules` at a scratch file for the ones worth asking once, or ask
-something no text search could answer directly — "what calls a method on
-`console`" is just `calls(X, _, member(console, _, _), _, _)`, and "which
-functions are undocumented" is just
-`defines(F, _, _, _, _), \+ doc(F, _, _, _, _)`.
 
 ### The shared rule library (`.symbolic/rules.pl`)
 
@@ -682,7 +816,10 @@ then follow either's cross-references. Grouped by concern:
 
 - **Reference** — `prolog-schema.md` (the complete data dictionary —
   every fact predicate `symbolic parse` produces, across every
-  language, in one place).
+  language, in one place), `erlog-missing-builtins.md` (what standard
+  Prolog builtins erlog lacks, verified by direct invocation — which
+  gaps are a one-line `.symbolic/rules.pl` shim versus a real erlog
+  engine fix).
 - **Architecture** — `erlang-mcp-design.md` (MCP server, Prolog sessions),
   `cli-erlang.md` (the CLI), `prolog-store.md` (fact storage/caching).
 - **Extraction** — `tree-sitter-erlang.md` (code, via `symbolic_ts`),

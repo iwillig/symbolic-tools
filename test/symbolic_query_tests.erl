@@ -122,6 +122,27 @@ resolve_rules_prefers_the_dbs_project_over_the_cwd_test() ->
         end
     end).
 
+%% discover_up/2 is the generic walk-up discover_rules_from_dir/1 is
+%% built from (symbolic_config.erl's .symbolic/config.json discovery
+%% reuses it too) — proves it's genuinely parameterized on RelPathParts,
+%% not hardcoded to rules.pl, by discovering an arbitrary marker file.
+discover_up_finds_an_arbitrary_marker_file_test() ->
+    with_scratch_project(fun(Root) ->
+        Marker = filename:join([Root, ".symbolic", "config.json"]),
+        ok = file:write_file(Marker, <<"{}">>),
+        ?assertEqual(Marker,
+            symbolic_query:discover_up(Root, [".symbolic", "config.json"])),
+        ?assertEqual(Marker,
+            symbolic_query:discover_up(filename:join([Root, "data"]),
+                [".symbolic", "config.json"]))
+    end).
+
+discover_up_returns_undefined_when_nothing_found_test() ->
+    with_scratch_project(fun(Root) ->
+        ?assertEqual(undefined,
+            symbolic_query:discover_up(Root, [".symbolic", "no-such-marker.json"]))
+    end).
+
 %% The full auto path, short of run/4's halt(): whatever resolve_rules/3
 %% discovers is what run_result/3 then really consults, so a derived
 %% predicate from the discovered file is provable.
@@ -223,7 +244,16 @@ library_cases() ->
         {"module_dependency(File, Module)",
             {solutions, [{'File', 'f.erl'}, {'Module', os}]}},
         {"all_module_dependencies(Edges)",
-            {solutions, [{'Edges', [dash('f.erl', os)]}]}}].
+            {solutions, [{'Edges', [dash('f.erl', os)]}]}},
+        %% sub_atom/5, in the exact mode an LLM agent reaches for first —
+        %% "does this atom contain X" (Before/Length/After left unbound,
+        %% Sub given as a literal) — erlog has no native sub_atom/5, so a
+        %% missing/broken .symbolic/rules.pl definition would surface here
+        %% as existence_error, same drift protection as every other case
+        %% in this list.
+        {"sub_atom(foo, Before, Length, After, oo)",
+            {solutions, [{'Before', 1}, {'Length', 2}, {'After', 0}]}},
+        {"sub_atom(bar, _, _, _, oo)", no_solution}].
 
 %% --- ESLint-style rules added on top of the library above ---
 %%

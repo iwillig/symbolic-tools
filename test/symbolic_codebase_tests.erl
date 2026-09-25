@@ -60,6 +60,7 @@ codebase_test_() ->
         fun parse_discovers_and_consults_scratch_rules/1,
         fun parse_rules_override_takes_precedence_over_discovery/1,
         fun parse_with_broken_rules_is_error_and_leaves_cache_untouched/1,
+        fun parse_crash_is_an_error_and_leaves_cache_and_process_untouched/1,
         fun fixtures_parse_picks_up_the_real_project_rules_file/1,
         fun fixtures_parse_makes_a_real_library_predicate_provable/1,
         fun meta_reports_path_and_parse_ms/1,
@@ -68,7 +69,12 @@ codebase_test_() ->
         fun reparsing_one_directory_leaves_the_other_untouched/1,
         fun query_unknown_path_is_error/1,
         fun overview_unknown_path_is_error/1,
-        fun trailing_slash_path_normalizes_to_the_same_entry/1
+        fun trailing_slash_path_normalizes_to_the_same_entry/1,
+        fun parse_with_no_path_merges_config_paths/1,
+        fun parse_with_no_path_and_no_config_is_error/1,
+        fun path_is_a_project_root_uses_its_own_config/1,
+        fun two_projects_stay_independently_cached_via_their_own_roots/1,
+        fun path_pointing_inside_a_configured_project_is_scanned_literally/1
     ]}.
 
 overview_before_parse(_Setup) ->
@@ -255,6 +261,38 @@ parse_with_broken_rules_is_error_and_leaves_cache_untouched(_Setup) ->
         ?assertEqual(GoodMeta, StillGoodMeta)
     end.
 
+%% Issue #4's structural fix: a crash ANYWHERE during a `parse` call —
+%% not just inside file extraction, which
+%% symbolic_parse_tests:extract_file_timed_survives_a_crashing_file_test
+%% already covers — must never take down this shared gen_server, which
+%% would otherwise silently kill every OTHER already-cached, unrelated
+%% project's entry too (confirmed against the real bug report: four
+%% unrelated directories, already parsed successfully, all started
+%% failing with {noproc,...} after one crashed parse elsewhere, until
+%% the MCP client reconnected). Forced via meck rather than a real
+%% crashing input — the point here is the CATCHING mechanism itself,
+%% generic over the cause, not any one specific bug.
+parse_crash_is_an_error_and_leaves_cache_and_process_untouched(_Setup) ->
+    fun() ->
+        {ok, GoodMeta} = symbolic_codebase:parse(?FIXTURES),
+        Pid = whereis(symbolic_codebase),
+        meck:new(symbolic_parse, [passthrough]),
+        meck:expect(symbolic_parse, scan, fun(_Dir) -> error(boom) end),
+        try
+            Result = symbolic_codebase:parse(?FIXTURES),
+            ?assertMatch({error, {parse_crashed, {error, boom}}}, Result)
+        after
+            meck:unload(symbolic_parse)
+        end,
+        %% The gen_server process itself is still the SAME pid — a crash
+        %% inside handle_call would have killed it (and, if respawned by
+        %% a supervisor, come back as a DIFFERENT pid with an empty
+        %% cache, losing every entry).
+        ?assertEqual(Pid, whereis(symbolic_codebase)),
+        {ok, StillGoodMeta} = symbolic_codebase:overview(),
+        ?assertEqual(GoodMeta, StillGoodMeta)
+    end.
+
 %% test/fixtures lives inside this repo, so a parse of it walks up to this
 %% project's own real .symbolic/rules.pl (the same file the CLI's
 %% docs/lint-queries.md library documents) — proving discovery reaches
@@ -394,6 +432,152 @@ with_two_scratch_dirs(Fun) ->
     after
         _ = file:del_dir_r(DirA),
         _ = file:del_dir_r(DirB)
+    end.
+
+%% parse(undefined, ...) — no `path` at all — falls back to
+%% .symbolic/config.json's `paths` list, discovered by walking up from
+%% this SERVER PROCESS's own cwd (there's no per-call start dir the way
+%% a Dir-based parse has), so proving it works means actually chdir-ing
+%% for the duration of the test — same technique
+%% symbolic_query_tests.erl's resolve_rules_falls_back_to_the_cwd_test
+%% already establishes for the analogous rules-discovery case.
+parse_with_no_path_merges_config_paths(_Setup) ->
+    fun() ->
+        with_scratch_config_codebase(fun(Root, _ConfigPath) ->
+            OldCwd = get_cwd(),
+            set_cwd(Root),
+            try
+                {ok, Meta} = symbolic_codebase:parse(undefined),
+                %% Cached under the project root, not any single Dir —
+                %% queryable by that same path afterward.
+                ?assertEqual(Root, maps:get(path, Meta)),
+                {ok, Solutions} = symbolic_codebase:query("defines(F, _, _, _, _)", 50, Root),
+                Names = lists:sort([proplists:get_value('F', Bs) || Bs <- Solutions]),
+                ?assertEqual([hello, run], Names)
+            after
+                restore_cwd(OldCwd)
+            end
+        end)
+    end.
+
+parse_with_no_path_and_no_config_is_error(_Setup) ->
+    fun() ->
+        OldCwd = get_cwd(),
+        %% "/" itself has no .symbolic/config.json, and walking up from it
+        %% (and from "/" again as the cwd fallback) can only ever find
+        %% nothing — the one starting point discovery can't climb past.
+        set_cwd("/"),
+        try
+            ?assertMatch({error, {no_config_found, _}}, symbolic_codebase:parse(undefined))
+        after
+            restore_cwd(OldCwd)
+        end
+    end.
+
+%% Passing a project's own ROOT directory (the one that directly has
+%% .symbolic/config.json) as `path` is what actually closes the "only
+%% one project at a time via config mode" gap the cwd-only "no path
+%% given" case has: it targets that project regardless of this server's
+%% own cwd, with no chdir at all — unlike
+%% parse_with_no_path_merges_config_paths/1 above, which still had to
+%% temporarily chdir to prove the cwd-based DEFAULT path worked. Not a
+%% walk-up: Root is passed exactly, and own_config/1 finds
+%% Root/.symbolic/config.json directly, no ancestor climbing involved.
+path_is_a_project_root_uses_its_own_config(_Setup) ->
+    fun() ->
+        with_scratch_config_codebase(fun(Root, ConfigPath) ->
+            %% The server's own cwd is wherever `rebar3 eunit` runs from —
+            %% this project's real root, which has its OWN real
+            %% .symbolic/config.json. Proving Root wins means the scratch
+            %% project's facts show up, not the real one's.
+            {ok, Meta} = symbolic_codebase:parse(Root),
+            ?assertEqual(Root, maps:get(path, Meta)),
+            ?assertEqual(ConfigPath, maps:get(config_file, Meta)),
+            {ok, Solutions} = symbolic_codebase:query("defines(F, _, _, _, _)", 50, Root),
+            Names = lists:sort([proplists:get_value('F', Bs) || Bs <- Solutions]),
+            ?assertEqual([hello, run], Names)
+        end)
+    end.
+
+%% The scenario this whole feature is for: ONE running server, TWO
+%% projects, both cached and independently queryable at once — neither
+%% touches the other's entry, same guarantee two Dir-based parses
+%% already had (two_parsed_directories_stay_independently_cached above),
+%% now proven for config-driven parsing too.
+two_projects_stay_independently_cached_via_their_own_roots(_Setup) ->
+    fun() ->
+        with_scratch_config_codebase(fun(RootA, _ConfigPathA) ->
+            with_scratch_config_codebase(other, fun(RootB, _ConfigPathB) ->
+                {ok, MetaA} = symbolic_codebase:parse(RootA),
+                {ok, MetaB} = symbolic_codebase:parse(RootB),
+                ?assertEqual(RootA, maps:get(path, MetaA)),
+                ?assertEqual(RootB, maps:get(path, MetaB)),
+                ?assertNotEqual(RootA, RootB),
+                %% Both still queryable by their own path after the SECOND
+                %% parse — parsing project B didn't touch project A's entry.
+                {ok, SolutionsA} = symbolic_codebase:query("defines(F, _, _, _, _)", 50, RootA),
+                {ok, SolutionsB} = symbolic_codebase:query("defines(F, _, _, _, _)", 50, RootB),
+                ?assertEqual(2, length(SolutionsA)),
+                ?assertEqual(2, length(SolutionsB))
+            end)
+        end)
+    end.
+
+%% own_config/1's whole point: an explicit path must NOT walk up its
+%% ancestors looking for a project. A subdirectory of an already-
+%% configured project (the scratch project's own "src") has no
+%% .symbolic/config.json directly inside IT, so it's scanned literally
+%% — one file's worth of facts, not the whole two-directory project.
+path_pointing_inside_a_configured_project_is_scanned_literally(_Setup) ->
+    fun() ->
+        with_scratch_config_codebase(fun(Root, _ConfigPath) ->
+            Src = filename:join([Root, "src"]),
+            {ok, Meta} = symbolic_codebase:parse(Src),
+            ?assertEqual(filename:absname(Src), maps:get(path, Meta)),
+            ?assertNot(maps:is_key(config_file, Meta)),
+            {ok, Solutions} = symbolic_codebase:query("defines(F, _, _, _, _)", 50, Src),
+            ?assertEqual([hello], [proplists:get_value('F', Bs) || Bs <- Solutions])
+        end)
+    end.
+
+get_cwd() ->
+    {ok, Cwd} = file:get_cwd(),
+    Cwd.
+
+set_cwd(Dir) ->
+    ok = file:set_cwd(Dir).
+
+restore_cwd(Cwd) ->
+    set_cwd(Cwd),
+    ?assertEqual(Cwd, get_cwd()).
+
+%% A scratch project under _build/ with its own .symbolic/config.json
+%% listing "src" and "test", plus real source files under each, so
+%% parse(undefined, ...) has something real to merge.
+with_scratch_config_codebase(Fun) ->
+    with_scratch_config_codebase(default, Fun).
+
+%% Tag distinguishes two scratch projects existing AT ONCE (see
+%% two_projects_stay_independently_cached_via_config_override/1) — each
+%% gets its own root under _build/, so one's setup/teardown never
+%% touches the other's files.
+with_scratch_config_codebase(Tag, Fun) ->
+    Root = filename:absname(filename:join(["_build",
+        "codebase_config_scratch_project_" ++ atom_to_list(Tag)])),
+    _ = file:del_dir_r(Root),
+    ConfigPath = filename:join([Root, ".symbolic", "config.json"]),
+    ok = filelib:ensure_dir(ConfigPath),
+    ok = file:write_file(ConfigPath, <<"{\"paths\": [\"src\", \"test\"]}">>),
+    ok = filelib:ensure_dir(filename:join([Root, "src", "placeholder"])),
+    ok = filelib:ensure_dir(filename:join([Root, "test", "placeholder"])),
+    ok = file:write_file(filename:join([Root, "src", "greeter.erl"]),
+        <<"-module(greeter).\nhello() -> ok.\n">>),
+    ok = file:write_file(filename:join([Root, "test", "greeter_tests.erl"]),
+        <<"-module(greeter_tests).\nrun() -> ok.\n">>),
+    try
+        Fun(Root, ConfigPath)
+    after
+        _ = file:del_dir_r(Root)
     end.
 
 %% A scratch project under _build/: <root>/.symbolic/rules.pl (defining

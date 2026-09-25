@@ -149,7 +149,16 @@ query_cmd() ->
   means "consult nothing", never "go looking". **Implemented.**
 - `parse` — walk a folder, run the tree-sitter extraction
   ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), print facts as JSON,
-  and optionally write them into a fact database via `-db`. **Implemented.**
+  and optionally write them into a fact database via `-db`.
+  **Implemented.** `dir` is declared `nargs => 'maybe', required =>
+  false` — omitting it entirely switches to a second mode: every path
+  listed in `.symbolic/config.json`'s `paths` array (`src`, `test`, a
+  `package.json`, ...) is scanned and merged into ONE fact set instead
+  of one directory's. That file is found the same walking-up way
+  `.symbolic/rules.pl` is (`-config <file>` overrides discovery, the
+  same way `-rules` overrides rules discovery) — see
+  [`prolog-store.md`](prolog-store.md) §8 for the full design,
+  `symbolic_config.erl` and `symbolic_parse:scan_paths/1`.
 - `serve` starts the MCP server supervisor
   ([`erlang-mcp-design.md`](erlang-mcp-design.md)). **Implemented.**
 

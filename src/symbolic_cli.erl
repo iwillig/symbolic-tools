@@ -48,13 +48,22 @@ parse_cmd() ->
     #{
         help => "Walk a folder, extract Prolog facts, and print them as JSON",
         arguments => [
-            #{name => dir, help => "Directory to walk"},
+            #{name => dir, nargs => 'maybe', required => false, default => undefined,
+              help => "Directory to walk. Omit to scan every path listed in the project's "
+                      ".symbolic/config.json instead (see -config)"},
             #{name => db, long => "db", required => false,
-              help => "Also write facts to this fact database (.dets), for `symbolic query --db`"}
+              help => "Also write facts to this fact database (.dets), for `symbolic query --db`"},
+            #{name => config, long => "config", required => false,
+              help => "Config file (JSON, {\"paths\": [...]}) listing multiple paths to merge "
+                      "into one scan. Only used when Dir is omitted; defaults to the nearest "
+                      ".symbolic/config.json, searched upwards from the current directory"}
         ],
         handler => fun(Args) ->
-            #{dir := Dir} = Args,
-            symbolic_parse:run(Dir, maps:get(db, Args, undefined))
+            DbPath = maps:get(db, Args, undefined),
+            case maps:get(dir, Args, undefined) of
+                undefined -> symbolic_parse:run_config(maps:get(config, Args, undefined), DbPath);
+                Dir -> symbolic_parse:run(Dir, DbPath)
+            end
         end
     }.
 

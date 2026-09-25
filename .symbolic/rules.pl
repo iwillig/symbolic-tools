@@ -148,6 +148,18 @@ take(0, _, []) :- !.
 take(_, [], []) :- !.
 take(N, [H|T], [H|Rest]) :- N > 0, N1 is N - 1, take(N1, T, Rest).
 
+%% sub_atom/5 used to be defined here as a pure-Prolog shim
+%% (generate-and-test over append/3, same technique as take/3 above).
+%% It's now a real native builtin instead — src/symbolic_prolog_lib.erl,
+%% loaded into every session via erlog:load/2 (prolog_session:init/1 and
+%% symbolic_codebase:build_state/2 both do this before consulting this
+%% file). Do NOT re-add a Prolog clause for it here: erlog's database
+%% already has sub_atom/5 registered as a compiled procedure by the time
+%% this file is consulted, and asserting a clause over a compiled
+%% procedure is a permission_error — the same class of "reserved
+%% functor" restriction docs/erlog-missing-builtins.md documents for
+%% retractall/1.
+
 %% Reachability with a Visited-list cycle guard (erlog has no tabling).
 %% Arity-blind on both ends.
 reaches(A, B) :- reaches(A, B, []).

@@ -1,25 +1,51 @@
 %%% The MCP server's in-memory codebase cache.
 %%%
 %%% A single registered gen_server, but it can hold more than one cached
-%%% codebase at once — one per directory `parse` was pointed at, keyed by
-%%% that directory's normalized (absolute) path. Still no on-disk
-%%% persistence; the CLI's DETS path in symbolic_fact_store.erl is separate
-%%% and untouched. The `parse` tool populates/replaces the entry for its
-%%% own directory (every other cached directory is left exactly as it
-%%% was); `query`/`overview` take an optional directory to select which
-%%% entry to use, defaulting to whichever directory was most recently
-%%% parsed successfully when omitted — so existing no-argument callers see
-%%% the same behavior as the single-codebase design this replaces.
+%%% codebase at once — one per PROJECT `parse` was pointed at, keyed by
+%%% that project's own root (see below for what "project" means here).
+%%% Still no on-disk persistence; the CLI's DETS path in
+%%% symbolic_fact_store.erl is separate and untouched. The `parse` tool
+%%% populates/replaces the entry for its own project (every other cached
+%%% project is left exactly as it was); `query`/`overview` take an
+%%% optional path to select which entry to use, defaulting to whichever
+%%% one was most recently parsed successfully when omitted.
 %%%
 %%% Each cache entry is an erlog state (facts asserted in, ready to prove
 %%% against) plus a small Meta summary computed at parse time. Queries are
 %%% read-only: no entry is ever advanced or mutated by a query, and a
 %%% timed-out / killed query leaves the whole cache exactly as it was.
 %%%
+%%% "Parse a project", not just "parse a directory" — with two
+%%% deliberately different rules for finding one, depending on whether
+%%% Dir was given:
+%%%   - Dir omitted: discover a .symbolic/config.json by walking UP from
+%%%     this server process's own cwd (see
+%%%     symbolic_query:discover_rules_from_dir/1's identical shape for
+%%%     .symbolic/rules.pl) — there's no explicit target to
+%%%     second-guess here, so climbing to find the enclosing project is
+%%%     exactly what this case is for.
+%%%   - Dir given: only treated as a project if Dir ITSELF directly has
+%%%     a .symbolic/config.json — no walking up its ancestors. An
+%%%     explicit Dir is a commitment, not a hint; silently reinterpreting
+%%%     it as "somewhere under some ancestor project" would mean a
+%%%     typo'd or unrelated directory could get silently rescued into
+%%%     scanning the wrong (enclosing) project entirely — confirmed
+%%%     while building this. Otherwise Dir is scanned literally, the
+%%%     original config-free behavior.
+%%% Either way, when a config IS used, every path in its `paths` list is
+%%% scanned and merged into ONE cache entry, keyed by that config's own
+%%% project root — see symbolic_config.erl and
+%%% symbolic_parse:scan_paths/1. Because the "Dir given" rule runs fresh
+%%% per call, one running server naturally caches as many different
+%%% projects as it's asked to: two `parse` calls naming two different
+%%% projects' own root directories land in two different, both-still-
+%%% queryable cache entries — see parse/1,2's own doc comment.
+%%%
 %%% See docs/erlang-mcp-design.md for the broader MCP architecture this
 %%% refocuses.
 -module(symbolic_codebase).
 -behaviour(gen_server).
+-include_lib("kernel/include/logger.hrl").
 
 -export([start_link/0, parse/1, parse/2, query/1, query/2, query/3,
          overview/0, overview/1]).
@@ -34,19 +60,33 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% Scan Dir, extract facts, and (re)build that directory's cache entry —
-%% every other directory already cached is left untouched. Returns the
-%% same summary `overview` reports, so a parse immediately shows what
-%% landed. Also resolves and consults a `.symbolic/rules.pl` derived-
-%% predicate library, same as the CLI's `symbolic query` does for a fact
-%% database: auto-discovered by walking up from Dir (then falling back to
-%% the server's own cwd) unless RulesOverride is given, in which case that
+%% Discover and parse the PROJECT Dir belongs to (see this module's own
+%% header comment), and (re)build that project's cache entry — every
+%% other project already cached is left untouched. Returns the same
+%% summary `overview` reports, so a parse immediately shows what landed,
+%% including which project root it actually got cached under (`path` in
+%% the returned map, which may differ from the Dir passed in — see
+%% below) and, when a config drove the scan, `config_file`. Also
+%% resolves and consults a `.symbolic/rules.pl` derived-predicate
+%% library — auto-discovered by walking up from wherever the scan
+%% actually happened (the config's project root, or Dir itself in the
+%% no-config fallback) unless RulesOverride is given, in which case that
 %% path is used outright — see symbolic_query:discover_rules_from_dir/1.
--spec parse(file:name()) -> {ok, map()} | {error, term()}.
+%%
+%% Dir omitted -> a .symbolic/config.json is discovered by walking UP
+%% from this server process's own cwd; nothing found there is an error
+%% (there's nothing else to scan). Dir given -> used as a project ONLY
+%% if Dir ITSELF directly has a .symbolic/config.json (no walking up its
+%% ancestors — see this module's header comment for why); found -> every
+%% path in that config's `paths` list is scanned and merged into one
+%% cache entry, keyed by that project root (symbolic_parse:scan_paths/1,
+%% symbolic_config.erl). Not found -> Dir is scanned directly as one
+%% plain directory, exactly the original config-free behavior.
+-spec parse(file:name() | undefined) -> {ok, map()} | {error, term()}.
 parse(Dir) ->
     parse(Dir, undefined).
 
--spec parse(file:name(), file:filename() | undefined) -> {ok, map()} | {error, term()}.
+-spec parse(file:name() | undefined, file:filename() | undefined) -> {ok, map()} | {error, term()}.
 parse(Dir, RulesOverride) ->
     gen_server:call(?MODULE, {parse, Dir, RulesOverride}, infinity).
 
@@ -103,34 +143,47 @@ overview(Path) ->
 init([]) ->
     {ok, #{caches => #{}, current => undefined}}.
 
+%% Two deliberately DIFFERENT rules for "which project", not one —
+%% see this module's header comment and parse/2's own doc comment:
+%%   - Dir omitted: discover by WALKING UP from this server's own cwd
+%%     (same shape as .symbolic/rules.pl discovery) — there's no
+%%     explicit target to second-guess, so climbing to find the
+%%     enclosing project is exactly the convenience this case is for.
+%%   - Dir given: only treated as a project if Dir ITSELF directly has
+%%     a .symbolic/config.json — no walking up. Walking up from an
+%%     EXPLICIT Dir would silently reinterpret a typo'd or unrelated
+%%     directory as some ancestor's unrelated project (confirmed while
+%%     building this: parsing a nonexistent directory nested under this
+%%     very project would otherwise silently "succeed" by discovering
+%%     THIS project's own config instead of erroring). Otherwise Dir is
+%%     scanned literally, exactly the original config-free behavior.
+%% Every branch still routes every error through {reply, {error,_},
+%% State} (State unchanged), so a bad rules file or a missing directory
+%% never disturbs a previously cached project. The whole thing runs
+%% inside safely/2 (issue #4's structural fix — see its own doc comment):
+%% extract_file_timed/1 (symbolic_parse.erl) already catches the single
+%% most likely crash site, a bad literal inside one file, but this is
+%% the outer backstop for anything else that might crash during a scan.
+handle_call({parse, undefined, RulesOverride}, _From, State) ->
+    safely(fun() ->
+        StartMs = erlang:monotonic_time(millisecond),
+        case discovery_start_dir(undefined) of
+            {ok, Cwd} ->
+                case symbolic_config:discover(Cwd) of
+                    undefined -> {reply, {error, {no_config_found, Cwd}}, State};
+                    ConfigPath -> parse_from_config(ConfigPath, RulesOverride, StartMs, State)
+                end;
+            {error, Reason} -> {reply, {error, Reason}, State}
+        end
+    end, State);
 handle_call({parse, Dir, RulesOverride}, _From, State) ->
-    StartMs = erlang:monotonic_time(millisecond),
-    case symbolic_parse:scan(Dir) of
-        {ok, {Files, Facts}} ->
-            RulesPath = resolve_rules(Dir, RulesOverride),
-            case build_state(Facts, RulesPath) of
-                {ok, Erl} ->
-                    ElapsedMs = erlang:monotonic_time(millisecond) - StartMs,
-                    NormDir = normalize_dir(Dir),
-                    Meta = compute_meta(Files, Facts, RulesPath, NormDir, ElapsedMs),
-                    Caches = maps:get(caches, State),
-                    NewState = State#{
-                        caches => Caches#{NormDir => #{erl => Erl, meta => Meta}},
-                        current => NormDir},
-                    {reply, {ok, Meta}, NewState};
-                {error, Reason} ->
-                    %% A bad rules file fails the whole parse rather than
-                    %% caching a facts-only session silently missing the
-                    %% library the caller asked for — State is untouched
-                    %% (this directory's previous entry, every other
-                    %% directory's entry, and `current` all stay exactly
-                    %% as they were), same as a query timeout/crash leaves
-                    %% it untouched.
-                    {reply, {error, {rules_error, RulesPath, Reason}}, State}
-            end;
-        {error, Reason} ->
-            {reply, {error, Reason}, State}
-    end;
+    safely(fun() ->
+        StartMs = erlang:monotonic_time(millisecond),
+        case own_config(Dir) of
+            undefined -> finish_parse(symbolic_parse:scan(Dir), normalize_dir(Dir), RulesOverride, StartMs, State, #{});
+            ConfigPath -> parse_from_config(ConfigPath, RulesOverride, StartMs, State)
+        end
+    end, State);
 
 handle_call({query, Goal, Limit, Path}, _From, State) ->
     case resolve_cache_entry(Path, State) of
@@ -163,6 +216,29 @@ terminate(_Reason, _State) -> ok.
 code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
 %% Internal
+
+%% safely(Fun, State) -> {reply, ..., NewState}.
+%%  Issue #4's structural fix: no crash anywhere inside a `parse` call —
+%%  not just the specific numeric-literal one that issue reported, any
+%%  future one in symbolic_gitignore/symbolic_config/ts_extract/etc. too
+%%  — is allowed to kill THIS shared gen_server process. A crash inside
+%%  a `handle_call` callback doesn't just fail that one call: it crashes
+%%  the whole process, taking every OTHER already-cached, unrelated
+%%  project's entry down with it (confirmed against the real report:
+%%  four unrelated directories, already parsed and cached successfully,
+%%  all started failing with {noproc,...} after one crashed parse
+%%  elsewhere, until the MCP client reconnected). State is returned
+%%  UNCHANGED on a caught crash — the same "leave every previously
+%%  cached project exactly as it was" guarantee every other error branch
+%%  here already gives, just covering the crash case too now.
+safely(Fun, State) ->
+    try Fun()
+    catch
+        Class:Reason:ST ->
+            ?LOG_ERROR("parse: crashed ~p:~p, leaving the cache untouched~n~p",
+                       [Class, Reason, ST]),
+            {reply, {error, {parse_crashed, {Class, Reason}}}, State}
+    end.
 
 %% Look up which cache entry Path (or, if undefined, `current`) names.
 %% {error, not_parsed} only ever means "nothing has been parsed at all
@@ -203,7 +279,12 @@ normalize_dir(Dir) ->
 %% erlog:consult/2 primitive, so `undefined`/RulesPath's absence is the
 %% only difference from a facts-only cache.
 build_state(Facts, RulesPath) ->
-    {ok, Erl} = erlog:new(),
+    {ok, Erl0} = erlog:new(),
+    %% Same native-builtin layering prolog_session:init/1 does — see
+    %% symbolic_prolog_lib.erl. Both erlog session constructors in this
+    %% codebase need it independently; erlog:new/0 itself has no way to
+    %% take extra library modules.
+    {ok, Erl} = erlog:load(symbolic_prolog_lib, Erl0),
     Erl1 = lists:foldl(
         fun(Fact, ErlAcc) ->
             {{succeed, _}, ErlAcc1} = erlog:prove({asserta, Fact}, ErlAcc),
@@ -223,6 +304,77 @@ consult_rules(Erl, RulesPath) -> erlog:consult(RulesPath, Erl).
 %% ever needed.
 resolve_rules(_Dir, RulesOverride) when RulesOverride =/= undefined -> RulesOverride;
 resolve_rules(Dir, undefined) -> symbolic_query:discover_rules_from_dir(Dir).
+
+%% discovery_start_dir(undefined) -> {ok, file:filename()} | {error, term()}.
+%%  Only ever called with `undefined` (see handle_call({parse,...}) —
+%%  an explicit Dir never walks up, so it never needs a "start dir" of
+%%  its own); this server process's own cwd is the one and only start
+%%  point for the "no Dir given" case.
+discovery_start_dir(undefined) ->
+    case file:get_cwd() of
+        {ok, Cwd} -> {ok, Cwd};
+        {error, Reason} -> {error, {cannot_get_cwd, Reason}}
+    end.
+
+%% own_config(Dir) -> file:filename() | undefined.
+%%  Does Dir ITSELF (not any ancestor) directly have a
+%%  .symbolic/config.json? Deliberately narrower than
+%%  symbolic_config:discover/1's walk-up — see handle_call({parse,
+%%  Dir,...})'s own comment for why an explicit Dir must not walk up.
+own_config(Dir) ->
+    Candidate = filename:join([Dir, ".symbolic", "config.json"]),
+    case filelib:is_regular(Candidate) of
+        true -> Candidate;
+        false -> undefined
+    end.
+
+%% parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
+%%  {reply, ..., NewState}.
+%%  A .symbolic/config.json was found — read and validate it, then merge
+%%  every one of its `paths` into a single cache entry keyed by the
+%%  config's own project root (never Dir itself, which may only be a
+%%  subdirectory of it).
+parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
+    case symbolic_config:read(ConfigPath) of
+        {ok, Paths} ->
+            ProjectRoot = symbolic_config:project_root(ConfigPath),
+            finish_parse(symbolic_parse:scan_paths(Paths), ProjectRoot,
+                RulesOverride, StartMs, State, #{config_file => ConfigPath});
+        {error, Reason} -> {reply, {error, Reason}, State}
+    end.
+
+%% finish_parse(ScanResult, CacheKey, RulesOverride, StartMs, State, ExtraMeta)
+%%  -> {reply, ..., NewState}.
+%%  The shared tail of both `parse` variants above: given a
+%%  scan/1-or-scan_paths/1 result and the (already-absolute) key to use
+%%  for both caching and rules discovery, build the erlog state, compute
+%%  the summary (merging in ExtraMeta — e.g. `config_file` for the
+%%  config-driven variant), and cache it. Every "leave State untouched on
+%%  error" guarantee handle_call({parse,...}) documented before this was
+%%  factored out still holds, since both callers still route every error
+%%  branch through the same {reply, {error,_}, State} (State unchanged).
+finish_parse({ok, {Files, Facts}}, CacheKey, RulesOverride, StartMs, State, ExtraMeta) ->
+    RulesPath = resolve_rules(CacheKey, RulesOverride),
+    case build_state(Facts, RulesPath) of
+        {ok, Erl} ->
+            ElapsedMs = erlang:monotonic_time(millisecond) - StartMs,
+            Meta = maps:merge(compute_meta(Files, Facts, RulesPath, CacheKey, ElapsedMs), ExtraMeta),
+            Caches = maps:get(caches, State),
+            NewState = State#{
+                caches => Caches#{CacheKey => #{erl => Erl, meta => Meta}},
+                current => CacheKey},
+            {reply, {ok, Meta}, NewState};
+        {error, Reason} ->
+            %% A bad rules file fails the whole parse rather than caching
+            %% a facts-only session silently missing the library the
+            %% caller asked for — State is untouched (this key's previous
+            %% entry, every other key's entry, and `current` all stay
+            %% exactly as they were), same as a query timeout/crash
+            %% leaves it untouched.
+            {reply, {error, {rules_error, RulesPath, Reason}}, State}
+    end;
+finish_parse({error, Reason}, _CacheKey, _RulesOverride, _StartMs, State, _ExtraMeta) ->
+    {reply, {error, Reason}, State}.
 
 compute_meta(Files, Facts, RulesPath, NormDir, ElapsedMs) ->
     #{

@@ -74,32 +74,59 @@ setup_logging() ->
 
 register_tools() ->
     ok = erlmcp_stdio:add_tool(<<"parse">>,
-        <<"Scan a directory, extract codebase facts, and cache them in "
-          "memory, keyed by that directory's path. A previously cached "
-          "directory is untouched by parsing a different one - both stay "
-          "queryable, by passing `path` to `query`/`overview`. "
-          "Re-parsing the SAME directory always rescans it and replaces "
-          "just that entry. `query`/`overview` with no `path` use "
-          "whichever directory was most recently parsed. Also "
-          "auto-consults that project's `.symbolic/rules.pl` derived-"
-          "predicate library, if one is found by walking up from the "
-          "scanned directory (pass `rules` to use a specific file "
-          "instead). Returns a summary of what was loaded (files, "
-          "languages, fact counts, and which rules file - if any - was "
-          "consulted, as `rules_file`); check `rules_file` before relying "
-          "on a derived predicate. A bad rules file fails the whole call "
-          "and leaves any previously cached codebase untouched.">>,
+        <<"Parse a PROJECT and cache its codebase facts in memory, keyed "
+          "by that project's own root. Two different rules for finding "
+          "one, depending on whether `path` is given: omit `path` - a "
+          ".symbolic/config.json is discovered by walking UP from this "
+          "server process's own cwd (nothing found there is an error, "
+          "since there's then nothing to scan). Give `path` - it's used "
+          "as a project ONLY if `path` ITSELF directly has a "
+          ".symbolic/config.json (no walking up its ancestors - an "
+          "explicit `path` is a commitment, not a hint, so a typo'd or "
+          "unrelated directory never gets silently reinterpreted as some "
+          "enclosing project); otherwise `path` is scanned directly as "
+          "one plain directory (the original, config-free behavior). "
+          "Either way, once a config IS used, every path in its `paths` "
+          "list (e.g. src/, test/, and a config file like package.json) "
+          "is scanned and merged into ONE cache entry, keyed by that "
+          "config's project root. Because the `path`-given rule runs "
+          "fresh per call rather than being pinned to this server's cwd, "
+          "one running server naturally caches as many different "
+          "projects as it's asked to - just pass each project's own root "
+          "directory as `path`. A previously cached project is untouched "
+          "by parsing a different one - both stay queryable, by passing "
+          "`path` to `query`/`overview` (the project root reported back "
+          "in the result's `path`, which may differ from what you passed "
+          "in if `path` was omitted). Re-parsing the SAME project always "
+          "rescans it and replaces just that entry. `query`/`overview` "
+          "with no `path` use whichever project was most recently "
+          "parsed. Also auto-consults that project's "
+          "`.symbolic/rules.pl` derived-predicate library, if one is "
+          "found by walking up from wherever the scan actually happened "
+          "(pass `rules` to use a specific file instead). Returns a "
+          "summary of what was loaded (files, languages, fact counts, "
+          "`config_file` when a config drove the scan, and which rules "
+          "file - if any - was consulted, as `rules_file`); check "
+          "`rules_file` before relying on a derived predicate. A bad "
+          "rules file fails the whole call and leaves any previously "
+          "cached project untouched.">>,
         fun handle_parse/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{
               <<"path">> => #{<<"type">> => <<"string">>,
                              <<"description">> =>
-                                 <<"Directory to scan for source files">>},
+                                 <<"A project's root directory (must have "
+                                   ".symbolic/config.json directly inside "
+                                   "it to be treated as a project - no "
+                                   "walking up its ancestors), or any plain "
+                                   "directory to scan literally. Omit to "
+                                   "discover a project by walking up from "
+                                   "this server's own cwd instead">>},
               <<"rules">> => #{<<"type">> => <<"string">>,
                              <<"description">> =>
                                  <<"Prolog rules file to consult instead of "
                                    "auto-discovering .symbolic/rules.pl">>}},
-          <<"required">> => [<<"path">>]}),
+          <<"required">> => []}),
     ok = erlmcp_stdio:add_tool(<<"query">>,
         <<"Prove a Prolog goal against a cached codebase and return all "
           "solutions (capped). More than one directory can be cached at "
@@ -246,14 +273,20 @@ register_tools() ->
 
 %% Tool handlers — each returns a JSON binary and never crashes.
 
-handle_parse(#{<<"path">> := Path} = Params) ->
+handle_parse(Params) ->
     try
-        PathStr = to_list(Path),
+        %% PathStr is where project discovery STARTS, not necessarily
+        %% what gets scanned — see symbolic_codebase:parse/2's own doc
+        %% comment. `undefined` (no `path` given) means "start from this
+        %% server's own cwd instead".
+        PathStr = optional_path(Params),
         RulesOverride = case maps:find(<<"rules">>, Params) of
             {ok, R} -> to_list(R);
             error -> undefined
         end,
-        ?LOG_INFO("parse: path=~s rules=~p", [PathStr, RulesOverride]),
+        %% ~p (not ~s): PathStr may now be `undefined` — same reasoning as
+        %% handle_query/1's identical Path logging below.
+        ?LOG_INFO("parse: path=~p rules=~p", [PathStr, RulesOverride]),
         case symbolic_codebase:parse(PathStr, RulesOverride) of
             {ok, Meta} ->
                 ?LOG_INFO("parse: ok path=~s files=~p total_facts=~p elapsed_ms=~p",
@@ -390,6 +423,16 @@ parse_error_str({rules_error, RulesPath, Reason}) ->
                        jstr(io_lib:format("~p", [Reason])),
                        <<" - parse failed, any previously cached codebase "
                          "is unchanged">>]);
+parse_error_str({no_config_found, Cwd}) ->
+    iolist_to_binary([<<"no `path` given and no .symbolic/config.json "
+                         "found walking up from ">>, jstr(Cwd),
+                       <<" (this server's own cwd) - pass `path`, or add "
+                         ".symbolic/config.json listing the paths to "
+                         "scan">>]);
+parse_error_str({parse_crashed, {Class, Reason}}) ->
+    iolist_to_binary([<<"parse crashed (">>, jstr(io_lib:format("~p:~p", [Class, Reason])),
+                       <<") - any previously cached codebase is unchanged; "
+                         "see the server log for the full stack trace">>]);
 parse_error_str(Reason) ->
     error_str(Reason).
 

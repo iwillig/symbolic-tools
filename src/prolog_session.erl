@@ -59,7 +59,14 @@ stop(Pid) ->
 %% gen_server callbacks
 
 init([]) ->
-    {ok, Erl} = erlog:new(),
+    {ok, Erl0} = erlog:new(),
+    %% Layer this project's own native (Erlang, not Prolog-shim) builtins
+    %% on top of erlog's own — currently just sub_atom/5 — via erlog's own
+    %% public extension hook (erlog:load/2 does exactly what erlog:new/2
+    %% does internally to load erlog_bips/erlog_lib_lists/etc: fold
+    %% Mod:load(Db) into the session's database). See
+    %% symbolic_prolog_lib.erl for why this needs no fork of erlog.
+    {ok, Erl} = erlog:load(symbolic_prolog_lib, Erl0),
     {ok, Erl}.
 
 handle_call({consult, File}, _From, Erl) ->

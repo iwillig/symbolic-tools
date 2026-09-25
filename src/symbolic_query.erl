@@ -28,7 +28,7 @@
 %% core (see its own doc comment); resolve_rules/3, maybe_consult_rules/2,
 %% print_bindings/1 and name_to_list/1 are its remaining halt-free pieces.
 -export([run_result/3, resolve_rules/3, maybe_consult_rules/2, print_bindings/1,
-    name_to_list/1, discover_rules_from_dir/1]).
+    name_to_list/1, discover_rules_from_dir/1, discover_up/2]).
 
 %% The project-relative default rule library: <project root>/.symbolic/rules.pl
 -define(DEFAULT_RULES_DIR, ".symbolic").
@@ -123,20 +123,32 @@ discover_rules(DbPath) ->
 %% the same "find the project root" rule git applies to `.git`, so this
 %% works from a subdirectory too), then the current directory, for a
 %% caller standing in the project while its target lives elsewhere (e.g.
-%% a db kept outside the tree, under /tmp).
+%% a db kept outside the tree, under /tmp). Just discover_up/2 with the
+%% rules file's own path baked in.
 -spec discover_rules_from_dir(file:filename()) -> file:filename() | undefined.
 discover_rules_from_dir(StartDir) ->
-    case search_up(filename:absname(StartDir)) of
+    discover_up(StartDir, [?DEFAULT_RULES_DIR, ?DEFAULT_RULES_FILE]).
+
+%% discover_up(StartDir, RelPathParts) -> file:filename() | undefined.
+%%  The generic "find the project root" walk-up discover_rules_from_dir/1
+%%  is built from — factored out so symbolic_config.erl's
+%%  .symbolic/config.json discovery can share the exact same two-
+%%  starting-points algorithm instead of a second copy of it.
+%%  RelPathParts is joined onto each candidate directory in turn (e.g.
+%%  [".symbolic", "rules.pl"] or [".symbolic", "config.json"]).
+-spec discover_up(file:filename(), [file:name()]) -> file:filename() | undefined.
+discover_up(StartDir, RelPathParts) ->
+    case search_up(filename:absname(StartDir), RelPathParts) of
         Found when is_list(Found) -> Found;
         undefined ->
             case file:get_cwd() of
-                {ok, Cwd} -> search_up(Cwd);
+                {ok, Cwd} -> search_up(Cwd, RelPathParts);
                 {error, _Reason} -> undefined
             end
     end.
 
-search_up(Dir) ->
-    Candidate = filename:join([Dir, ?DEFAULT_RULES_DIR, ?DEFAULT_RULES_FILE]),
+search_up(Dir, RelPathParts) ->
+    Candidate = filename:join([Dir | RelPathParts]),
     case filelib:is_regular(Candidate) of
         true -> Candidate;
         false ->
@@ -144,7 +156,7 @@ search_up(Dir) ->
             %% condition, so this terminates at "/" instead of looping.
             case filename:dirname(Dir) of
                 Dir -> undefined;
-                Parent -> search_up(Parent)
+                Parent -> search_up(Parent, RelPathParts)
             end
     end.
 

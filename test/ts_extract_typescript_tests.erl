@@ -182,6 +182,35 @@ extracts_numeric_separator_literal_facts_test() ->
                     {<<"0o1_7">>, 5}, {<<"1_000n">>, 6}, {<<"1_000.5">>, 7}]),
         lists:sort(RawTexts)).
 
+%% Issue #4: a JS/TS numeric literal with a bare-exponent mantissa and no
+%% decimal point (1e6, 2E10) used to crash the whole parse with an
+%% uncaught badarg — list_to_float/1 requires a `.` in the mantissa even
+%% when an exponent follows (list_to_float("1.0e6") parses,
+%% list_to_float("1e6") badargs), and parse_normalized_number/1's
+%% fallback called it on the raw, unnormalized text. Exercises the
+%% original repro's own form (1e6), a negative exponent, and confirms a
+%% mantissa that already HAS a `.` (1.5e6) still worked before and after.
+extracts_bare_exponent_literal_facts_test() ->
+    Src =
+        "function f(x: number) {\n"    %% 1
+        "  if (x == 1e6) { }\n"        %% 2 -- the original repro's own form
+        "  if (x == 2E10) { }\n"       %% 3 -- uppercase E
+        "  if (x == 1e-6) { }\n"       %% 4 -- negative exponent
+        "  if (x == 1.5e6) { }\n"      %% 5 -- already has a `.` — unaffected
+        "}\n",                         %% 6
+    Facts = ts_extract_typescript:text("scratch_expnum.ts", Src),
+    Path = 'scratch_expnum.ts',
+    Literals = [{Value, L} || {literal, _Id, f, 1, number, Value, P, L, _RawText} <- Facts, P =:= Path],
+    ?assertEqual(
+        lists:sort([{1.0e6, 2}, {2.0e10, 3}, {1.0e-6, 4}, {1.5e6, 5}]),
+        lists:sort(Literals)),
+    %% RawText keeps the original bare-exponent text, unlike the
+    %% already-normalized Value above.
+    RawTexts = [{RawText, L} || {literal, _Id, f, 1, number, _Value, P, L, RawText} <- Facts, P =:= Path],
+    ?assertEqual(
+        lists:sort([{<<"1e6">>, 2}, {<<"2E10">>, 3}, {<<"1e-6">>, 4}, {<<"1.5e6">>, 5}]),
+        lists:sort(RawTexts)).
+
 only_id([Id]) -> Id.
 
 operand_id(Facts, ParentId, Role) ->

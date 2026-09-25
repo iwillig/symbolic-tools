@@ -232,6 +232,80 @@ Every place this project prints a `jsx:encode/1` result uses `~ts`
 (Unicode-aware) instead, or `io:put_chars/1`, which never reinterprets
 binary contents at all.
 
+## 8. Multiple scan roots, one fact set: `.symbolic/config.json`
+
+Everything in §7 above still describes ONE scan: `symbolic parse <dir>`
+walks exactly one directory tree, and `write/2` replaces the whole DETS
+table with that one walk's output. That was a real limitation for any
+project where the interesting facts don't all live under one root —
+`src/` and `test/` are two different directories in this project itself,
+and a config file (`package.json`, `Cargo.toml`) worth querying usually
+sits at the project root, alongside `src/`, not inside it.
+
+`.symbolic/config.json` closes that gap without touching the "one write
+replaces the table" model at all — it just changes what goes into the
+list of facts *before* that one write happens:
+
+```json
+{ "paths": ["src", "test", "package.json"] }
+```
+
+- **Discovery** is the identical walk-up algorithm `.symbolic/rules.pl`
+  already uses (`symbolic_query:discover_up/2` — the two now share one
+  implementation; see `symbolic_query:discover_rules_from_dir/1`'s own
+  doc comment), so `.symbolic/config.json` is found from any
+  subdirectory the same way `.git` is.
+- **`symbolic_config:read/1`** decodes the JSON (via `jsx`, already a
+  dependency — see §7's `symbolic_term_json.erl` entry) and resolves
+  every listed path against the config file's own directory (its
+  `.symbolic/` parent, i.e. the project root) — `filename:join/2`
+  leaves an already-absolute entry untouched, so an absolute path in
+  `paths` works too.
+- **`symbolic_parse:scan_paths/1`** is `scan/1` generalized over a LIST
+  of paths instead of one directory: each entry is either walked (a
+  directory — gitignore rules loaded fresh per root, since
+  `symbolic_gitignore:load/1` only ever reads one root's own
+  `.gitignore`) or extracted directly (a single file — no
+  gitignore/extension pruning the way a directory walk gets, since an
+  explicitly named file always wins, the same way an explicit `-rules`
+  always wins over discovery). Every path's facts are combined with one
+  shared `lists:usort/1` at the end — still exactly one write, just fed
+  by N scans instead of one.
+- **Every one of those N scans runs concurrently**, one Erlang process
+  per path (`symbolic_parse:parallel_map/2`) — and each directory's own
+  files are, in turn, extracted one process per file
+  (`parallel_extract/1`), so `scan/1` (the plain single-directory case)
+  gets the same speedup. Safe because every extractor calls
+  `symbolic_ts:parser_new/0` fresh per file — no shared mutable parser
+  state across concurrent NIF calls (confirmed against
+  `c_src/symbolic_ts_nif.c`: its own globals are read-only atoms/
+  resource-type handles set once at NIF load time). A crash in any one
+  file's extraction is re-raised in the caller (`error({parse_worker_crashed,
+  Reason})`) rather than silently dropped, so parallelizing the common
+  case doesn't quietly change what happens on the uncommon one.
+- `symbolic parse` with **no directory argument** triggers this path
+  (`-config <file>` overrides discovery, the same way `-rules` does);
+  the MCP server's `parse` tool does too, when called with no `path` —
+  see `docs/cli-erlang.md` §2 and `docs/erlang-mcp-design.md`.
+- **The MCP server's discovery has one extra wrinkle a fresh CLI
+  invocation doesn't**: it's one long-lived process, so "walk up from
+  the current directory" means the SERVER's own cwd, fixed for its
+  whole lifetime — there's no per-call `cd`. That's what the MCP
+  `parse` tool's `config` parameter is for (`symbolic_codebase:parse/3`):
+  an explicit `.symbolic/config.json` path, exactly like `-config`,
+  which is what actually lets one running server hold cache entries for
+  *several* projects at once via config mode — two `parse` calls with
+  two different `config` values land in two different cache entries
+  (each keyed by its own project root), the same way two different
+  `path` directories already do for single-directory mode.
+
+Two things this does NOT do, on purpose: it doesn't merge with a
+*previous* `write/2` call (§7's replace-not-append model is unchanged —
+`.symbolic/config.json` just builds a bigger fact list up front, in
+memory, before the one write) and it doesn't share a `.gitignore`
+context across roots (a file ignored under `src/`'s own `.gitignore`
+stays ignored; there's no *cross*-root ignore rule).
+
 ## References
 
 - [`erlang-mcp-design.md`](erlang-mcp-design.md) — the in-process BEAM design

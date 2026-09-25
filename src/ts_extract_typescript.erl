@@ -1001,12 +1001,12 @@ string_fragment_text(Node, Src) ->
         _ -> symbolic_ts:node_text(symbolic_ts:node_named_child(Node, 0), Src)
     end.
 
-%% JS/TS numeric literals allow three things Erlang's own
-%% list_to_integer/1 and list_to_float/1 don't understand at all, so the
-%% raw node text needs normalizing before either BIF sees it (issue #1 —
-%% confirmed empirically, not assumed: list_to_integer("0b100000")
-%% badargs exactly like list_to_integer("0b1_00000") does, so a fix that
-%% only strips `_` is incomplete):
+%% JS/TS numeric literals allow things Erlang's own list_to_integer/1
+%% and list_to_float/1 don't understand at all, so the raw node text
+%% needs normalizing before either BIF sees it (issue #1 — confirmed
+%% empirically, not assumed: list_to_integer("0b100000") badargs exactly
+%% like list_to_integer("0b1_00000") does, so a fix that only strips `_`
+%% is incomplete):
 %%   - `_` as a purely cosmetic digit separator (5_000, 1_000_000) —
 %%     stripped outright, same treatment real JS/TS engines give it.
 %%   - a `0x`/`0b`/`0o` radix prefix (0x1F, 0b101, 0o17) — Erlang's
@@ -1015,6 +1015,10 @@ string_fragment_text(Node, Src) ->
 %%   - a trailing BigInt `n` suffix (100n, 0x1Fn) — Erlang integers are
 %%     already arbitrary-precision, so this is just stripped; the value
 %%     underneath is parsed the same way as a non-BigInt integer.
+%%   - a bare-exponent mantissa with no decimal point at all (1e6, 2E10
+%%     — issue #4) — handled one level down, in
+%%     parse_normalized_number/1's own fallback to list_to_float/1,
+%%     since it only matters for the float branch, not the integer one.
 %% Order matters: strip `_` and the `n` suffix BEFORE checking for a
 %% radix prefix, so `0x1_Fn` normalizes to `0x1F` before the prefix check
 %% ever runs.
@@ -1037,7 +1041,28 @@ parse_normalized_number([$0, Radix | Digits]) when Radix =:= $o; Radix =:= $O ->
     list_to_integer(Digits, 8);
 parse_normalized_number(Text) ->
     try list_to_integer(Text)
-    catch error:badarg -> list_to_float(Text)
+    catch error:badarg -> list_to_float(ensure_decimal_point(Text))
+    end.
+
+%% Issue #4: JS/TS allows a bare-exponent mantissa with no decimal point
+%% at all (1e6, 2E10 — confirmed a real crash: list_to_float("1e6")
+%% badargs even though list_to_float("1.0e6") parses fine). Erlang float
+%% syntax requires a digit on both sides of a `.` in the mantissa even
+%% when an exponent follows, so insert ".0" right before the e/E when
+%% none is present — same normalize-before-the-BIF-sees-it shape
+%% parse_number/1 above already uses for `_`/radix/BigInt. A mantissa
+%% that already has a `.` (1.5e6) or has no exponent either (plain
+%% integer text that still badarg'd list_to_integer/1 for some other
+%% reason) is passed through unchanged and left to list_to_float/1's own
+%% error, same as before this fix.
+ensure_decimal_point(Text) ->
+    case lists:member($., Text) of
+        true -> Text;
+        false ->
+            case lists:splitwith(fun(C) -> C =/= $e andalso C =/= $E end, Text) of
+                {_Mantissa, []} -> Text;
+                {Mantissa, Exponent} -> Mantissa ++ ".0" ++ Exponent
+            end
     end.
 
 %% A node's identity for the expr/literal/expr_ref fact family. Needs
