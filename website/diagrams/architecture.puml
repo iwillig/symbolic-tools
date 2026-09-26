@@ -1,0 +1,39 @@
+@startuml architecture
+!include <C4/C4_Container>
+
+' Opaque white card, not transparent: PlantUML's own boundary/arrow/legend
+' text is a mid-gray designed to sit on a white page. Left transparent, it
+' nearly disappears against Pico's dark-mode page background (verified via
+' a real browser screenshot, not assumed) — a solid backdrop keeps this
+' diagram legible regardless of the surrounding page's color scheme.
+skinparam backgroundColor white
+skinparam wrapWidth 200
+LAYOUT_LEFT_RIGHT()
+
+' The default C4-PlantUML container blue (#438DD5) with white text measures
+' ~3.5:1 contrast — passes WCAG AA only for large/bold text, fails for the
+' smaller description lines. Darkened so white text clears AA (~6.5:1)
+' across every line in the box, not just the bold title.
+UpdateElementStyle("container", $bgColor="#1B5FA8", $fontColor="#FFFFFF")
+
+System_Ext(source, "Source tree", "The codebase being analyzed")
+
+System_Boundary(st, "symbolic-tools") {
+    Container(extractor, "tree-sitter extractor", "NIF, in-process", "Parses source files into facts: defines, calls, docs, branches, ...")
+    Container(prolog, "Prolog session", "erlog, on the BEAM", "Holds the fact base; answers queries by unification and resolution")
+    Container(mcp, "MCP server", "erlmcp")
+    Container(cli, "symbolic CLI", "escript")
+}
+
+Person(agent, "LLM agent", "over MCP")
+Person(human, "Human", "over argv")
+
+Rel(source, extractor, "read by")
+Rel(extractor, prolog, "loads facts into")
+Rel(mcp, prolog, "queries")
+Rel(cli, prolog, "queries")
+Rel(agent, mcp, "calls parse/query/overview")
+Rel(human, cli, "runs parse/query/serve")
+
+SHOW_LEGEND()
+@enduml

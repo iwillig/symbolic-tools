@@ -1,0 +1,10 @@
+default: build
+
+build:
+    pipenv run pelican content -o output -s pelicanconf.py
+
+serve:
+    pipenv run pelican content -o output -s pelicanconf.py -r -l
+
+clean:
+    rm -rf output cache
