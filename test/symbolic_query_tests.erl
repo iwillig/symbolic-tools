@@ -253,7 +253,19 @@ library_cases() ->
         %% in this list.
         {"sub_atom(foo, Before, Length, After, oo)",
             {solutions, [{'Before', 1}, {'Length', 2}, {'After', 0}]}},
-        {"sub_atom(bar, _, _, _, oo)", no_solution}].
+        {"sub_atom(bar, _, _, _, oo)", no_solution},
+        %% sub_text/5 — the same predicate, same mode, over the binary
+        %% comment/3's Text actually is (sub_atom/5 rejects a binary
+        %% outright, a type_error, not tested here — see
+        %% symbolic_prolog_lib.erl's own header comment). Text has to come
+        %% from a real fact, not a goal-level literal: a double-quoted
+        %% string in erlog is a code list (verified against erlog's own
+        %% scanner/parser), never a binary, so there is no way to write a
+        %% bound binary directly in a goal at all — comment/3's own Text
+        %% is the only bound binary available here.
+        {"comment(_, _, Text), sub_text(Text, Before, Length, After, \"comment\")",
+            {solutions, [{'Text', <<"loose comment">>}, {'Before', 6}, {'Length', 7}, {'After', 0}]}},
+        {"comment(_, _, Text), sub_text(Text, _, _, _, \"lisp\")", no_solution}].
 
 %% --- ESLint-style rules added on top of the library above ---
 %%
@@ -322,6 +334,35 @@ hidden_risky_call_does_not_flag_an_unrelated_function_test() ->
              {calls, mid, 0, {remote, os, getenv, 1}, 'p.erl', 2}], fun() ->
         ?assertEqual(no_solution,
             symbolic_query:run_result(?DB, real_rules(), "hidden_risky_call(harmless, _, _)"))
+    end).
+
+%% --- component_dependency/3, all_component_dependencies/1: the
+%% docs/lint-queries.md "Module dependency graph" filtering, now real
+%% Prolog instead of "belongs in whatever consumes the result" ---
+%% Its own small fixture rather than library_fixture/0: piling more
+%% remote/3 call sites onto foo/bar there would silently change what
+%% fan_out(foo, ...) above already asserts (same reasoning
+%% hidden_risky_call's tests above already follow).
+
+component_dependency_classifies_this_projects_own_module_as_internal_test() ->
+    with_db([{defines, foo, 0, <<"()">>, 'p.erl', 1},
+             {calls, foo, 0, {remote, symbolic_ts, node_type, 1}, 'p.erl', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.erl'}, {'Kind', internal}]},
+            symbolic_query:run_result(?DB, real_rules(), "component_dependency(File, symbolic_ts, Kind)"))
+    end).
+
+component_dependency_classifies_a_real_dependency_as_external_test() ->
+    with_db([{defines, foo, 0, <<"()">>, 'p.erl', 1},
+             {calls, foo, 0, {remote, jsx, encode, 1}, 'p.erl', 2}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.erl'}, {'Kind', external}]},
+            symbolic_query:run_result(?DB, real_rules(), "component_dependency(File, jsx, Kind)"))
+    end).
+
+component_dependency_excludes_stdlib_noise_test() ->
+    with_db([{defines, foo, 0, <<"()">>, 'p.erl', 1},
+             {calls, foo, 0, {remote, os, getenv, 1}, 'p.erl', 2}], fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(), "component_dependency(File, os, Kind)"))
     end).
 
 too_many_params_flags_over_the_threshold_test() ->

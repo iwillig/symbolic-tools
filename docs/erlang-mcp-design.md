@@ -189,7 +189,7 @@ implemented (`erlog_lib_dcg.erl`).
 | Higher-order | — | `maplist/2..5`, `foldl/3..6`, `include/3`, `exclude/3` |
 | Solutions | `findall/3` | `bagof/3`, `setof/3` |
 | Lists (`erlog_lib_lists.erl` has only 7 predicates) | `length/2`, `append/3`, `insert/3`, `member/2`, `memberchk/2`, `reverse/2`, `sort/2` | `msort/2`, `keysort/2`, `nth0/nth1`, `last/2`, `permutation/2`, `subtract/3`, `intersection/3`, `union/3`, `sum_list/2`, `max_list/2`/`min_list/2`, `numlist/3` |
-| Atoms/strings | `atom_chars/2`, `atom_codes/2`, `atom_length/2` | `atom_concat/3`, `sub_atom/5`, `split_string/4`, `number_codes/2`, `atom_number/2` |
+| Atoms/strings | `atom_chars/2`, `atom_codes/2`, `atom_length/2` | `atom_concat/3`, `split_string/4`, `number_codes/2`, `atom_number/2` — `sub_atom/5` and `sub_text/5` are missing from *erlog itself* but shipped as this project's own extension, `src/symbolic_prolog_lib.erl` (see §7 tier 2, `docs/erlog-missing-builtins.md`) |
 | I/O | `write`/`writeq`/`write_canonical`/`nl`/`read/1` | `format/2,3`, stream I/O (`open/3`, `close/1`, `see/1`, `tell/1`) |
 
 **Missing — matters for this repo's specific use cases (see §5):** no
@@ -229,8 +229,11 @@ between(L, H, X) :- L < H, L1 is L + 1, between(L1, H, X).
 ### Tier 2 — native Erlang builtins via `add_compiled_proc/4`, no fork
 
 For predicates that need custom control (e.g. `sub_atom/5`'s multiple
-nondeterministic modes, `format/2`), erlog_int.erl's goal dispatch has two
-registration paths, and only one of them is fork-only:
+nondeterministic modes, `format/2`) — the mechanism this project has
+actually since used, shipping both `sub_atom/5` and `sub_text/5` this
+way (`src/symbolic_prolog_lib.erl`, `docs/erlog-missing-builtins.md`) —
+erlog_int.erl's goal dispatch has two registration paths, and only one
+of them is fork-only:
 
 ```erlang
 %% erlog_int.erl — prove_goal/3 dispatch on a functor already in the db

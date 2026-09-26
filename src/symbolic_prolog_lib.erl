@@ -1,5 +1,6 @@
 %%% Extends the erlog Prolog engine with sub_atom/5 (ISO's substring
-%%% predicate), implemented as real Erlang code, executed inside erlog's
+%%% predicate) and sub_text/5 (the same shape, over a binary instead of
+%%% an atom), implemented as real Erlang code, executed inside erlog's
 %%% own resolution engine — not a `.symbolic/rules.pl` shim.
 %%%
 %%% erlog has no `sub_atom/5` natively (docs/erlog-missing-builtins.md),
@@ -7,6 +8,27 @@
 %%% erlog doesn't provide: `sub_atom(Name, _, _, _, foo)` to check
 %%% whether Name contains "foo" — the ISO idiom, no new predicate name to
 %%% learn.
+%%%
+%%% `sub_atom/5` only ever accepts an atom (a `type_error` otherwise), so
+%%% it does nothing for `comment/3`, `doc/5`, or `paragraph/3`'s free-text
+%%% `Text` field — those are binaries, deliberately never atoms (an
+%%% arbitrary-length comment/paragraph interned as an atom would leak into
+%%% the BEAM's atom table forever; see `docs/prolog-schema.md`). `sub_text/5`
+%%% is the same predicate, the same call shape, over a binary: `sub_text(
+%%% Text, _, _, _, "prolog")` to check whether Text contains "prolog".
+%%%
+%%% `sub_atom/5`'s `Sub` comes back as an atom because that's what a caller
+%%% naturally writes for it (`oo`, unquoted). `sub_text/5`'s `Sub` comes
+%%% back as a plain code list, NOT a binary — verified against erlog's own
+%%% scanner/parser (`erlog_scan.xrl`, `erlog_parse.erl`), not assumed: a
+%%% double-quoted goal literal like `"prolog"` is a code list under erlog's
+%%% ISO-default `double_quotes(codes)` behavior, never a binary (there is
+%%% no Prolog syntax for a binary literal at all here) — so `Sub` has to be
+%%% a code list too, or it could never unify against anything a caller can
+%%% actually type. Both predicates share one internal search
+%%% (`sub_chars_search/11` below); the only difference is what each does
+%%% with a matched character range — `list_to_atom/1` for `sub_atom/5`,
+%%% nothing at all for `sub_text/5`.
 %%%
 %%% No fork of erlog, no vendored copy: this uses erlog's own real
 %%% extension mechanism, the one it already uses on itself. `erlog.erl`'s
@@ -38,15 +60,16 @@
 -include_lib("erlog/src/erlog_int.hrl").
 
 -export([load/1]).
--export([sub_atom_5/3]).
+-export([sub_atom_5/3, sub_text_5/3]).
 
 -import(erlog_int, [prove_body/2, fail/1, unify/3, add_compiled_proc/4]).
 
 %% load(Database) -> Database.
-%%  Register sub_atom/5 as a compiled procedure — same shape as
-%%  erlog_lib_lists:load/1.
+%%  Register sub_atom/5 and sub_text/5 as compiled procedures — same
+%%  shape as erlog_lib_lists:load/1.
 load(Db0) ->
-    add_compiled_proc({sub_atom, 5}, ?MODULE, sub_atom_5, Db0).
+    Db1 = add_compiled_proc({sub_atom, 5}, ?MODULE, sub_atom_5, Db0),
+    add_compiled_proc({sub_text, 5}, ?MODULE, sub_text_5, Db1).
 
 %% sub_atom_5(Head, NextGoal, State) -> void.
 %%
@@ -65,22 +88,58 @@ sub_atom_5({sub_atom, A0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
         A when is_atom(A) ->
             Codes = atom_to_list(A),
             Total = length(Codes),
-            sub_atom_search(Codes, Total, 0, 0, B0, L0, Af0, S0, Next, St);
+            sub_chars_search(Codes, Total, 0, 0, B0, L0, Af0, S0, Next, St, fun list_to_atom/1);
         {_} ->
             erlog_int:instantiation_error(St);
         Other ->
             erlog_int:type_error(atom, Other, St)
     end.
 
-%% Walk (Before,Length) candidates starting at the given position. On the
-%% first one that unifies against the caller's own Before/Length/After/Sub
-%% arguments, install a choice point that resumes the walk from the NEXT
-%% candidate on backtrack, then prove Next. Exhausting every split with no
-%% match fails outright.
-sub_atom_search(Codes, Total, Before, Length, B0, L0, Af0, S0, Next,
-        #est{cps = Cps, bs = Bs0} = St) when Before =< Total ->
+%% sub_text_5(Head, NextGoal, State) -> void.
+%%
+%% sub_text(Text, Before, Length, After, Sub) — the same predicate as
+%% sub_atom/5 above, restricted to Text bound the same way, over a binary
+%% instead of an atom: the type `comment/3`, `doc/5`, and `paragraph/3`
+%% actually store their free text as (see this module's header comment).
+%%
+%% `Sub` comes back as a plain code list (an Erlang string), NOT a
+%% binary — verified against erlog's own vendored source
+%% (`erlog_scan.xrl`'s string rule: `{token,{string,TokenLine,chars(S)}}`;
+%% `erlog_parse.erl`'s `term/3` passes that list straight through with no
+%% conversion), not assumed: a double-quoted goal literal like `"prolog"`
+%% is erlog's ISO default `double_quotes(codes)` behavior, a code list,
+%% not a binary. `sub_atom/5`'s `Sub` is an atom because that's what a
+%% caller naturally writes unquoted (`oo`); the equivalent "what a caller
+%% naturally writes" for free text is a double-quoted literal, so `Sub`
+%% has to come back as a code list to unify against one at all — wrapping
+%% it in `list_to_binary/1` instead (this module's first attempt, caught
+%% by its own EUnit case rather than shipped) would make `Sub` permanently
+%% unable to unify against anything a caller can actually type.
+sub_text_5({sub_text, T0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
+    case deref(T0, Bs) of
+        T when is_binary(T) ->
+            Codes = binary_to_list(T),
+            Total = length(Codes),
+            sub_chars_search(Codes, Total, 0, 0, B0, L0, Af0, S0, Next, St, fun(Cs) -> Cs end);
+        {_} ->
+            erlog_int:instantiation_error(St);
+        Other ->
+            erlog_int:type_error(binary, Other, St)
+    end.
+
+%% Walk (Before,Length) candidates starting at the given position, shared
+%% by sub_atom_5/3 and sub_text_5/3 — identical search either way, the
+%% only difference being ToTerm, which rebuilds a matched character range
+%% back into the caller's own type (list_to_atom/1 or list_to_binary/1)
+%% before unifying it against Sub. On the first candidate that unifies
+%% against the caller's own Before/Length/After/Sub arguments, install a
+%% choice point that resumes the walk from the NEXT candidate on
+%% backtrack, then prove Next. Exhausting every split with no match fails
+%% outright.
+sub_chars_search(Codes, Total, Before, Length, B0, L0, Af0, S0, Next,
+        #est{cps = Cps, bs = Bs0} = St, ToTerm) when Before =< Total ->
     After = Total - Before - Length,
-    Sub = list_to_atom(lists:sublist(Codes, Before + 1, Length)),
+    Sub = ToTerm(lists:sublist(Codes, Before + 1, Length)),
     case try_unify4(B0, Before, L0, Length, Af0, After, S0, Sub, Bs0) of
         {succeed, Bs1} ->
             case next_split(Before, Length, Total) of
@@ -88,7 +147,7 @@ sub_atom_search(Codes, Total, Before, Length, B0, L0, Af0, S0, Next,
                     prove_body(Next, St#est{bs = Bs1});
                 {NBefore, NLength} ->
                     FailFun = fun(LCp, LCps, Lst) ->
-                        fail_sub_atom_5(LCp, LCps, Lst, Codes, Total, NBefore, NLength, B0, L0, Af0, S0)
+                        fail_sub_chars(LCp, LCps, Lst, Codes, Total, NBefore, NLength, B0, L0, Af0, S0, ToTerm)
                     end,
                     Cp = #cp{type = compiled, data = FailFun, next = Next, bs = Bs0, vn = St#est.vn},
                     prove_body(Next, St#est{cps = [Cp | Cps], bs = Bs1})
@@ -97,18 +156,18 @@ sub_atom_search(Codes, Total, Before, Length, B0, L0, Af0, S0, Next,
             case next_split(Before, Length, Total) of
                 done -> fail(St);
                 {NBefore, NLength} ->
-                    sub_atom_search(Codes, Total, NBefore, NLength, B0, L0, Af0, S0, Next, St)
+                    sub_chars_search(Codes, Total, NBefore, NLength, B0, L0, Af0, S0, Next, St, ToTerm)
             end
     end;
-sub_atom_search(_Codes, _Total, _Before, _Length, _B0, _L0, _Af0, _S0, _Next, St) ->
+sub_chars_search(_Codes, _Total, _Before, _Length, _B0, _L0, _Af0, _S0, _Next, St, _ToTerm) ->
     fail(St).
 
 %% Resumed on backtrack: #cp{}'s own saved bs/vn are the bindings from
 %% BEFORE the candidate that just succeeded, exactly like
 %% erlog_lib_lists:fail_append_3/6 restores Bs0/Vn from the choice point
 %% rather than trusting whatever St carries at backtrack time.
-fail_sub_atom_5(#cp{next = Next, bs = Bs0, vn = Vn}, Cps, St, Codes, Total, Before, Length, B0, L0, Af0, S0) ->
-    sub_atom_search(Codes, Total, Before, Length, B0, L0, Af0, S0, Next, St#est{cps = Cps, bs = Bs0, vn = Vn}).
+fail_sub_chars(#cp{next = Next, bs = Bs0, vn = Vn}, Cps, St, Codes, Total, Before, Length, B0, L0, Af0, S0, ToTerm) ->
+    sub_chars_search(Codes, Total, Before, Length, B0, L0, Af0, S0, Next, St#est{cps = Cps, bs = Bs0, vn = Vn}, ToTerm).
 
 %% next_split(Before, Length, Total) -> {NBefore,NLength} | done.
 %%  Enumeration order: Before 0..Total, and for each Before, Length
@@ -137,7 +196,8 @@ try_unify4(B0, Before, L0, Length, Af0, After, S0, Sub, Bs0) ->
         fail -> fail
     end.
 
-%% deref/2 is exported from erlog_int but this module only needs it once,
-%% right at entry — imported narrowly here rather than in the top-level
-%% -import to keep that list matching what's actually used more than once.
+%% deref/2 is exported from erlog_int but only needed right at entry, once
+%% each in sub_atom_5/3 and sub_text_5/3 — imported narrowly here rather
+%% than in the top-level -import to keep that list matching what's used
+%% more than twice.
 deref(Term, Bs) -> erlog_int:deref(Term, Bs).

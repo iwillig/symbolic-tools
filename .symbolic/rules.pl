@@ -1,6 +1,18 @@
 %% Default derived-predicate library — auto-consulted by `symbolic query`
 %% (override with -rules/-no-rules). calls/5 = calls(Caller, CallerArity,
 %% CallSpec, File, Line); most rules below leave CallerArity unbound.
+%%
+%% A real, sharp gotcha for editing comments in this file, confirmed by
+%% breaking this file with it: a slash immediately followed by a star,
+%% anywhere in a `%%` comment line — including inside ordinary prose
+%% about a glob path — opens erlog_scan.xrl's block-comment rule
+%% (`{BC}`), which is tried alongside the line-comment rule as part of
+%% the same whitespace class, not shadowed by it. It then silently
+%% swallows everything up to the next star-then-slash anywhere later in
+%% the file (here, a genuinely unrelated JSDoc example three hundred
+%% lines down), corrupting parsing of everything in between with no
+%% error anywhere near the real cause. Never write those two characters
+%% adjacently in a comment; put a space or a word between them instead.
 
 %% Sentinel: keeps calls/5 defined so a tree with zero function-call sites
 %% at all fails cleanly instead of raising existence_error, same
@@ -177,6 +189,42 @@ module_dependency(CallerFile, CalleeModule) :-
 
 all_module_dependencies(Edges) :-
     findall(CallerFile-CalleeModule, module_dependency(CallerFile, CalleeModule), Raw),
+    sort(Raw, Edges).
+
+%% Turning all_module_dependencies/1's raw edge list into an actual C4
+%% component diagram needs two things: dropping OTP/stdlib noise (most
+%% edges are calls into `lists`, `io`, `erlang`, and the like — real, but
+%% not "components" for this diagram), and classifying what's left as
+%% this project's own code versus a genuine external dependency. Both are
+%% real Prolog now — `sub_atom/5` (this project's own native addition to
+%% erlog, docs/erlog-missing-builtins.md) can check a naming-convention
+%% prefix, and stdlib exclusion never needed anything beyond `member/2` —
+%% so this doesn't have to be left to whatever consumes the query result
+%% the way docs/lint-queries.md's "Module dependency graph" section used
+%% to say it did.
+stdlib_noise(Mod) :-
+    member(Mod, [lists, maps, io, io_lib, erlang, gen_server, filename,
+                 file, string, os, logger, proplists, unicode, sets,
+                 supervisor, application, code, ets, filelib, base64,
+                 crypto, binary, dets, re, erlog_int, erlog_io]).
+
+%% This project's own naming conventions (the actual module names under
+%% src/), not a general "looks like an OTP app" heuristic — a project
+%% with different naming would need a different own_component/1, same as
+%% banned_target/2 or restricted_module/1 are project decisions to edit,
+%% not facts to work around.
+own_component(Mod) :- sub_atom(Mod, 0, _, _, symbolic_).
+own_component(Mod) :- sub_atom(Mod, 0, _, _, prolog_session).
+own_component(Mod) :- sub_atom(Mod, 0, _, _, ts_extract).
+
+component_dependency(File, Mod, Kind) :-
+    all_module_dependencies(Edges),
+    member(File-Mod, Edges),
+    \+ stdlib_noise(Mod),
+    ( own_component(Mod) -> Kind = internal ; Kind = external ).
+
+all_component_dependencies(Edges) :-
+    findall(File-Mod-Kind, component_dependency(File, Mod, Kind), Raw),
     sort(Raw, Edges).
 
 %% --- ESLint-style structural checks, on top of the library above ---

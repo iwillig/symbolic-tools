@@ -511,10 +511,39 @@ Edges = [["-","src/prolog_session.erl","erlang"], ...]
 
 Every edge in `Edges` is `File-Module`, printed the JSON way `["-",
 File, Module]` (`prolog-store.md` §7). Two kinds of filtering turn this
-raw edge list into an actual diagram, and erlog can't do either one
-itself (no `atom_concat`/`sub_atom` to classify an atom by its text —
-`docs/erlang-mcp-design.md` §6) — both belong in whatever consumes the
-result, not the query:
+raw edge list into an actual diagram — dropping OTP/stdlib noise, and
+splitting what's left into this project's own code versus a genuine
+external dependency. This used to say erlog couldn't do either one
+itself and both belonged in whatever consumes the result, not the
+query. That was wrong on both counts, confirmed by actually building
+it, not just reconsidering the claim: stdlib exclusion never needed
+anything beyond `member/2`, and `sub_atom/5` — this project's own native
+addition to erlog, `docs/erlog-missing-builtins.md` — can check a
+naming-convention prefix directly. `component_dependency/3` in
+`.symbolic/rules.pl` does both:
+
+```prolog
+stdlib_noise(Mod) :-
+    member(Mod, [lists, maps, io, io_lib, erlang, gen_server, filename,
+                 file, string, os, logger, proplists, unicode, sets,
+                 supervisor, application, code, ets, filelib, base64,
+                 crypto, binary, dets, re, erlog_int, erlog_io]).
+
+own_component(Mod) :- sub_atom(Mod, 0, _, _, symbolic_).
+own_component(Mod) :- sub_atom(Mod, 0, _, _, prolog_session).
+own_component(Mod) :- sub_atom(Mod, 0, _, _, ts_extract).
+
+component_dependency(File, Mod, Kind) :-
+    all_module_dependencies(Edges),
+    member(File-Mod, Edges),
+    \+ stdlib_noise(Mod),
+    ( own_component(Mod) -> Kind = internal ; Kind = external ).
+```
+
+```sh
+$ symbolic query -db facts.dets 'all_component_dependencies(Edges), length(Edges, N)'
+N = 42
+```
 
 1. **Drop OTP/stdlib noise.** Most edges are calls into `lists`, `maps`,
    `io`, `erlang`, `gen_server`, `filename`, and the like — real, but
@@ -524,7 +553,9 @@ result, not the query:
    `prolog_session*`, `ts_extract*`) are internal components; the
    handful of named library dependencies left over (`jsx`, `erlog`,
    `erlmcp_stdio`, `argparse`) are external boxes worth keeping, not
-   noise.
+   noise. The hand-filtered table below predates `component_dependency/3`
+   — `component_dependency(File, Mod, internal)` regenerates the same
+   rows directly now, rather than needing to be kept in sync by hand.
 
 The internal-to-internal edges, filtered by hand from a real run:
 

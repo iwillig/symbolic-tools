@@ -59,7 +59,8 @@ against a live session, not just written down:
 | `flatten/2` | recursive list-of-lists walk with `append/3` | `append/3` |
 | `permutation/2` | classic select-and-recurse | `append/3` |
 | `atom_concat/3` | `atom_concat(A,B,C) :- atom_codes(A,X), atom_codes(B,Y), append(X,Y,Z), atom_codes(C,Z).` | `atom_codes/2`, `append/3` |
-| `sub_atom/5` | **shipped** — as a real native Erlang builtin, `src/symbolic_prolog_lib.erl`, not a `.symbolic/rules.pl` shim (see "A better tier: extend erlog itself, no fork needed" below for why that turned out to be possible at all). Verified live with `defines(Name, _, _, _, _), sub_atom(Name, _, _, _, session)` against this repo's own source. Covers ATOM fields only (function/module/file names, ...) — see the note below on why free-text binaries are still out of reach. | `erlog_int:unify/3`, `add_compiled_proc/4` — no Prolog-level builtins needed at all |
+| `sub_atom/5` | **shipped** — as a real native Erlang builtin, `src/symbolic_prolog_lib.erl`, not a `.symbolic/rules.pl` shim (see "A better tier: extend erlog itself, no fork needed" below for why that turned out to be possible at all). Verified live with `defines(Name, _, _, _, _), sub_atom(Name, _, _, _, session)` against this repo's own source. Covers ATOM fields only (function/module/file names, ...); a binary argument raises `type_error(atom, ...)` — see `sub_text/5` below for the free-text equivalent. | `erlog_int:unify/3`, `add_compiled_proc/4` — no Prolog-level builtins needed at all |
+| `sub_text/5` | **shipped** — same file, same `add_compiled_proc/4` registration, same search, over a binary instead of an atom: `comment/3`, `doc/5`, and `paragraph/3`'s free-text `Text` field. `Sub` comes back as a code list, not a binary — a double-quoted goal literal is always a code list under erlog's `double_quotes(codes)` default (verified against `erlog_scan.xrl`/`erlog_parse.erl`), so a binary `Sub` could never unify against a needle a caller can actually type. Verified live with `comment(_, _, Text), sub_text(Text, Before, Length, After, "comment")` against this repo's own `test/symbolic_query_tests.erl` fixture. | `erlog_int:unify/3`, `add_compiled_proc/4` — no Prolog-level builtins needed at all |
 | `char_code/2` | `char_code(Char,Code) :- atom_codes(Char,[Code]).` | `atom_codes/2` |
 | `upcase_atom/2`, `downcase_atom/2` | map each code: `C2 is C - 32` when `C` is in `0'a..0'z` (and the mirror for downcase) | `atom_codes/2`, `is/2` |
 | `atomic_list_concat/2,3` | fold `atom_concat/3` (above) over the list, inserting the separator for the 3-arg form | the `atom_concat/3` shim above |
@@ -191,7 +192,10 @@ once: `sub_atom/5` is **done** — as a native `erlog:load/2` module
 (`src/symbolic_prolog_lib.erl`), not a `.symbolic/rules.pl` shim; it was
 the single most common thing an LLM agent reached for, confirmed by
 repeated real `sub_atom(Name, _, _, _, '...')` attempts against a live
-codebase before this fix. `atom_concat/3` is the natural next
+codebase before this fix. `sub_text/5` is **also done**, the same file
+and mechanism, closing the free-text half of the same gap (`comment`/
+`doc`/`paragraph`'s `Text`, a binary `sub_atom/5` itself can't touch).
+`atom_concat/3` is the natural next
 candidate for the same treatment (same `erlog:load/2` mechanism, same
 `unify/3`/`add_compiled_proc/4` shape sub_atom_5/3 already
 demonstrates), followed by `between/3`/`numlist/3` (generating a range

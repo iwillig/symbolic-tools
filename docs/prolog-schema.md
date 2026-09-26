@@ -252,16 +252,18 @@ Calling `node_is_null/1` on `undefined` raises `badarg`. See
 **Shared caveat on `Text`'s type: binary, not atom, and unbounded.**
 `comment/3` and `doc/5`'s `Text` — and `heading/4`/`paragraph/3`'s
 `Text` and `config_value/4`'s `Value` below — are Erlang **binaries**
-(`ts_extract_text:to_text/1`), not atoms. Free text like this is never
-unified against a literal a person types in a query, unlike an
-identifier atom (a function name, a file path), so there's no reason to
-force it through `list_to_atom/1` at all. That used to truncate at 200
-characters (Erlang atoms are capped at 255 bytes, hit for real during
-dogfooding on a long doc-comment run) — as a binary it no longer needs
-to. **Identifier-like atoms elsewhere in this schema are still
-truncated at 200 characters** the same way (`ts_extract_text:to_atom/1`)
-— that's a genuinely different helper, kept separate for exactly this
-reason.
+(`ts_extract_text:to_text/1`), not atoms. Free text like this is
+substring-searched with `sub_text/5` (`src/symbolic_prolog_lib.erl`), a
+separate native predicate from `sub_atom/5` rather than a shared one
+with a loose type check — precisely because it's a binary, unlike an
+identifier atom (a function name, a file path), and there's no reason to
+force it through `list_to_atom/1` to make one predicate cover both. That
+used to truncate at 200 characters (Erlang atoms are capped at 255
+bytes, hit for real during dogfooding on a long doc-comment run) — as a
+binary it no longer needs to. **Identifier-like atoms elsewhere in this
+schema are still truncated at 200 characters** the same way
+(`ts_extract_text:to_atom/1`) — that's a genuinely different helper,
+kept separate for exactly this reason.
 
 ### `doc_tag(Function, Arity, TagName, Type, Name, Description, File, Line)`
 

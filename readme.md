@@ -129,9 +129,10 @@ emit the same `CallSpec` shapes.
 Two things to know before writing your own goals: identifiers are atoms
 (`defines(cli, ...)` matches; `defines("cli", ...)` doesn't), while free
 text (`doc`/`comment`'s `Text`) is a binary — the two never unify with each
-other, and there's no substring search over a binary yet
-(`docs/erlog-missing-builtins.md`). And `File` is always the absolute path
-`parse` walked, not a repo-relative one.
+other. Substring search over an atom is `sub_atom/5`; over free text it's
+`sub_text/5` — two native predicates, not one, because they're two
+different real types (`docs/erlog-missing-builtins.md`). And `File` is
+always the absolute path `parse` walked, not a repo-relative one.
 
 Derived predicates — everything in `.symbolic/rules.pl` — aren't a
 different kind of thing from the raw facts, just more clauses over them,

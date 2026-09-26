@@ -245,10 +245,23 @@ of these failing loudly — read the `error`, don't guess.
 
 Three traps that bite here specifically:
 
-1. **Atoms vs binaries.** Function names, modules and file paths in facts
-   are erlog atoms; a double-quoted string is a binary and will not unify.
+1. **Atoms vs binaries vs code lists.** Function names, modules and file
+   paths in facts are erlog atoms; a double-quoted goal literal is neither
+   a binary nor an atom, so it will not unify against one. It's a plain
+   Erlang **code list** — erlog's ISO-default `double_quotes(codes)`
+   behavior, verified directly against erlog's own vendored scanner/parser
+   (`erlog_scan.xrl`'s string rule, `erlog_parse.erl`'s `term/3`), not
+   assumed; there is no Prolog syntax for a binary literal here at all.
    `defines(cli, A, _, _, _)` matches, `defines("cli", _, _, _, _)` answers
-   `count: 0`. A dotted path can't be a bare atom, so single-quote it — and
+   `count: 0` — true, but for that reason, not because `"cli"` is a binary.
+   The free-text fields (`comment`/`doc`'s `Text`, `paragraph`) genuinely
+   *are* binaries — constructed directly by the extractor
+   (`ts_extract_text:to_text/1`, `list_to_binary/1`), bypassing the reader
+   entirely — so `sub_atom/5` (atom-only) and `sub_text/5` (binary-only,
+   `Sub` comes back as a code list to unify against a double-quoted
+   needle) are two different predicates for two different real types, not
+   one predicate with a loose type check. A dotted path can't be a bare
+   atom, so single-quote it — and
    note `File` is stored as the **absolute** path `parse` walked (`overview`
    and `parse` report only the file *count*, not the paths themselves — a
    large project could return thousands of them), not a repo-relative one:
@@ -340,9 +353,15 @@ Three traps that bite here specifically:
    `.symbolic/rules.pl` and re-`parse` (see `<workflow>` step 4).
 
 Free text (`doc`/`comment`'s `Text`, `paragraph`) is a binary, and
-`atom_codes/2` demands an atom — so substring search over doc text is not
-expressible in pure Prolog against this fact base yet. Say so rather than
-working around it with grep.
+`atom_codes/2` demands an atom — so it errors on free text, same as
+`sub_atom/5` does (`type_error`, not a silent `No.`). Substring search
+over it is `sub_text/5`, a native compiled predicate
+(`src/symbolic_prolog_lib.erl`, the same `erlog:load/2` extension
+mechanism `sub_atom/5` already uses, no fork): `sub_text(Text, Before,
+Length, After, "needle")`. `Sub`/the needle is a code list, not a binary
+— a double-quoted goal literal is always a code list here (see trap 1),
+so `sub_text/5` builds `Sub` the same way rather than a binary that could
+never unify against one.
 </dialect>
 
 <facts>
@@ -384,6 +403,8 @@ one of these before writing it inline. What each one actually asserts:
 
   call graph   callees/2 callers/3 calls_object/2 fan_out/3 fan_in/3
                top_fan_out/2 top_fan_in/2 module_dependency/2 reaches/2 take/3
+               component_dependency/3 (C4 component-diagram edges, module_dependency/2
+               minus stdlib noise, classified internal/external — docs/lint-queries.md)
   unused/dup   no_local_callers/3 truly_uncalled/3 entry_point/3
                duplicate_name/3 self_recursive/3 mutual_recursion/2 god_file/2
   docs         undocumented/4 undocumented_comment/3 stale_doc_example/4
