@@ -29,6 +29,7 @@
     node_start_byte/1,
     node_end_byte/1,
     node_start_point/1,
+    node_end_point/1,
     node_text/2,
     node_is_null/1,
     node_parent/1,
@@ -71,6 +72,7 @@ node_type(_Node) -> erlang:nif_error(nif_not_loaded).
 node_start_byte(_Node) -> erlang:nif_error(nif_not_loaded).
 node_end_byte(_Node) -> erlang:nif_error(nif_not_loaded).
 node_start_point(_Node) -> erlang:nif_error(nif_not_loaded).
+node_end_point(_Node) -> erlang:nif_error(nif_not_loaded).
 node_is_null(_Node) -> erlang:nif_error(nif_not_loaded).
 node_parent(_Node) -> erlang:nif_error(nif_not_loaded).
 node_named_child(_Node, _Index) -> erlang:nif_error(nif_not_loaded).

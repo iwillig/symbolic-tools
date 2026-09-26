@@ -317,6 +317,13 @@ NIF(node_start_point) {
     return tspoint_to_map(env, ts_node_start_point(node));
 }
 
+NIF(node_end_point) {
+    BADARG_IF(argc != 1);
+    TSNode node;
+    BADARG_IF(!get_node(env, argv[0], &node));
+    return tspoint_to_map(env, ts_node_end_point(node));
+}
+
 NIF(node_is_null) {
     BADARG_IF(argc != 1);
     TSNode node;
@@ -460,6 +467,7 @@ static ErlNifFunc nif_funcs[] = {
     NIF_ENTRY(node_start_byte, 1),
     NIF_ENTRY(node_end_byte, 1),
     NIF_ENTRY(node_start_point, 1),
+    NIF_ENTRY(node_end_point, 1),
     NIF_ENTRY(node_is_null, 1),
     NIF_ENTRY(node_parent, 1),
     NIF_ENTRY(node_named_child, 2),

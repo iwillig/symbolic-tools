@@ -634,19 +634,34 @@ still-open inline-grammar/`link/4` work this doesn't cover).
 
 ### `heading(File, Level, Text, Line)`
 
-- **`Level`** — 1–6, from the number of `#` characters.
+- **`Level`** — 1–6 for an ATX (`#`) heading, from the number of `#`
+  characters; 1 or 2 for a setext heading (`Title` on one line, a
+  `===`/`---` underline on the next — CommonMark only ever gives setext
+  two levels).
 - **`Text`** — the heading's own text, trimmed. A binary, not an atom —
   see the shared caveat under `doc/5` above.
 
-**ATX (`#`) headings only** — the underline (setext) style isn't
-handled. A real, not hypothetical, scope limit: this repo's own docs
-never use setext headings.
+### `section(File, Level, StartLine, EndLine)`
+
+A heading plus everything under it — the block grammar's own `section`
+node, nested by level exactly like a real CommonMark document outline
+(confirmed against a real fixture: a `# H1`/`## H2`/`# H1b` sequence
+nests the `## H2` section INSIDE the `# H1` one, not as a sibling; a
+level-1 heading's own section only ends at the next level-1 heading, so
+it can span the rest of the document if no second one exists). This is
+the one fact here that relates anything to *which heading it's under* —
+every other markdown fact is otherwise flat. `EndLine` is tree-sitter's
+own end point row used directly as a 1-based number, no `+1` the way
+every `StartLine` here gets — the 0-based row of the first EXCLUDED
+line is numerically identical to the 1-based number of the LAST
+included one.
 
 ### `code_block(File, Lang, Line)`
 
 - **`Lang`** — the fence's declared language tag as an atom (`erlang`,
-  `sh`, `ts`), or the atom `none` for a bare ``` fence with no tag.
-- **`Line`** — the fence's own opening line.
+  `sh`, `ts`), or the atom `none` for a bare ``` fence with no tag, or
+  for an indented code block (which never declares one at all).
+- **`Line`** — the fence's (or indented block's) own opening line.
 
 ### `paragraph(File, Text, Line)`
 
@@ -660,6 +675,45 @@ never use setext headings.
 item's own content as a `paragraph` node, so list-item text shows up as
 `paragraph/3` facts too — extracted as the grammar actually names
 things, not a hand-picked notion of "real" paragraphs.
+
+### `list_item(File, Ordered, Checked, Line)`
+
+Additive to `paragraph/3` above, not a replacement for it.
+
+- **`Ordered`** — `ordered` (a `1.`/`1)` marker) or `unordered` (`-`/`+`/
+  `*`).
+- **`Checked`** — `checked`/`unchecked` for a GFM task-list item
+  (`- [x] ...`/`- [ ] ...`), or `none` for an ordinary item.
+
+### `table(File, Line)` / `table_row(File, TableLine, RowIndex, Line)` / `table_cell(File, TableLine, Row, Col, Text, Line)`
+
+A GFM pipe table. `TableLine` (the table's own opening line) is the join
+key across all three, since one file can hold more than one table.
+`RowIndex`/`Row` 0 is always the header row; the `| --- | --- |`
+delimiter row is skipped entirely — it names no real column data, so it
+gets no `table_row`/`table_cell` facts at all. `Text` is trimmed (a
+pipe table's own cell text keeps its column-alignment padding
+otherwise).
+
+### `blockquote(File, Text, Line)`
+
+Not `paragraph/3`'s free `node_text/2` span: the grammar only excludes
+a `>` block quote's own FIRST line's marker (a separate sibling node);
+a continuation line's own `> ` stays embedded in whatever contains it,
+confirmed directly against a real two-line quote. `blockquote/3` strips
+a leading `>` (and one following space, if present) from every line
+itself before the usual multi-line collapse, rather than trusting the
+grammar to have already done it.
+
+### `link_definition(File, Label, Destination, Title, Line)`
+
+A reference-style link *definition* (`[label]: destination "title"`),
+not a *use* — see `docs/tree-sitter-markdown.md` for why a real inline
+`[text](url)` link still needs the (unbuilt) inline grammar while this
+doesn't. `Label`/`Destination`/`Title` have their wrapping punctuation
+(`[`/`]`, `<`/`>`, and whichever of `"..."`/`'...'`/`(...)` the title
+used) stripped before becoming a fact. `Title` is the atom `none` when
+the definition gives none.
 
 ## Markdown example facts: re-extracting fenced code
 

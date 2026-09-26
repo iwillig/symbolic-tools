@@ -38,3 +38,26 @@ deploy() {
   build
 }
 ```
+
+## More Structure
+
+- unordered one
+- unordered two
+
+1. ordered one
+2. ordered two
+
+- [ ] todo item
+- [x] done item
+
+> a quoted line
+> a continued quote
+
+| Col A | Col B |
+| ----- | ----- |
+| x     | 1     |
+| y     | 2     |
+
+    an indented example
+
+[a ref]: https://example.com/ref "Ref Title"

@@ -6,16 +6,24 @@ This document covers extending the tree-sitter extraction layer
 fenced-code-block languages) becomes Prolog facts the same way source-code
 definitions and call sites do.
 
-**Status: partially implemented.** `heading/4`, `code_block/3`,
-`paragraph/3`, and `example_defines/5`/`example_calls/5` (facts
-re-extracted from a fenced code block's own contents — see §4) are real
-today via `symbolic parse`, using only the **block** grammar — see
-`src/ts_extract_markdown.erl`. `link/4` (§4) is **not implemented yet**;
+**Status: partially implemented.** `heading/4` (ATX and setext),
+`section/4`, `code_block/3` (fenced and indented), `paragraph/3`,
+`list_item/4`, `table/2` + `table_row/4` + `table_cell/6`,
+`blockquote/3`, `link_definition/5`, and `example_defines/5`/
+`example_calls/5` (facts re-extracted from a fenced code block's own
+contents — see §4) are real today via `symbolic parse`, all from the
+**block** grammar alone — see `src/ts_extract_markdown.erl`. A real
+inline-link *use* (`link/4`, `[text](url)`) is **still not implemented**;
 it needs the separate *inline* grammar plus a NIF function
 (`ts_parser_set_included_ranges`) that `symbolic_ts` — the project's own
 small NIF, `c_src/symbolic_ts_nif.c`, see
 [`tree-sitter-erlang.md`](tree-sitter-erlang.md) §2 — doesn't expose at
-all yet, since nothing has needed it so far.
+all yet, since nothing has needed it so far. A link *definition*
+(`[label]: url "title"`) is a different story — that's its own
+block-grammar node, `link_reference_definition`, needing none of that;
+`link_definition/5` closes it as a genuinely separate, already-available
+capability nobody had split out from the inline-link blocker until
+this pass looked for it directly.
 
 **Recommendation up front:** use
 [`tree-sitter-grammars/tree-sitter-markdown`](https://github.com/tree-sitter-grammars/tree-sitter-markdown)
@@ -71,7 +79,17 @@ pattern as most language grammars). Follows CommonMark plus GFM extensions
 Same pattern as adding any language
 ([`tree-sitter-erlang.md`](tree-sitter-erlang.md) §5) — except this is
 **two grammars for one file**, not one. **The block half is done**;
-the inline half (needed only for `link/4`) is not:
+the inline half (needed only for a real `link/4`) is not.
+
+One real NIF addition landed alongside the block-grammar fact work
+below, worth calling out on its own: `node_end_point/1`
+(`c_src/symbolic_ts_nif.c`), mirroring the already-existing
+`node_start_point/1` wrapper exactly — one more call to tree-sitter's
+own C API (`ts_node_end_point`, the counterpart to `ts_node_start_point`
+that wrapper already calls), not a new grammar or a new dependency.
+`section/4` below needed a real end line and had no way to get one
+otherwise; every `Line` fact elsewhere in this codebase only ever needed
+a *start* point, so nothing had asked for this before.
 
 1. ~~Vendor both grammar submodules~~ — done for the **block** grammar
    only, vendored at `c_src/grammars/markdown/` (`parser.c`, `scanner.c`,
@@ -113,12 +131,27 @@ simplification `defines/5`/`calls/5` already made (see
 not a byte range:
 
 - **`heading(File, Level, Text, Line)`** — implemented, from the block
-  grammar (`src/ts_extract_markdown.erl`). ATX (`#`) headings only —
-  this repo's own docs never use the underline (setext) style, so that's
-  a real scope limit, not a hypothetical one.
+  grammar (`src/ts_extract_markdown.erl`). Both ATX (`# Title`) and
+  setext (`Title` + a `===`/`---` underline) headings — the underline
+  form was a real, not hypothetical, scope limit as long as this
+  project's own docs were the only thing being scanned; a general-
+  purpose tool doesn't get to assume every markdown file it's pointed at
+  shares that habit.
+- **`section(File, Level, StartLine, EndLine)`** — implemented, from the
+  block grammar's own `section` node: a heading plus everything under
+  it, nested by level exactly like a real CommonMark document outline
+  (confirmed against a real `# H1`/`## H2`/`# H1b` fixture — the `## H2`
+  section came back nested INSIDE the `# H1` one, not a sibling). This
+  is what lets any other fact here be related to *which heading it's
+  under* at all — every other fact in this file is otherwise flat, with
+  no containment relationship to anything.
 - **`code_block(File, Lang, Line)`** — implemented, from the block
   grammar. `Lang` is the fenced code block's declared language (e.g.
-  `erlang`, `sh`) as an atom, or the atom `none` for a bare ``` fence.
+  `erlang`, `sh`) as an atom, or the atom `none` for a bare ``` fence or
+  an indented code block (which never declares one at all — invisible
+  to this predicate before this pass, a real correctness gap, not just a
+  missing feature: an indented block was silent nothing, not `Lang =
+  none`).
 - **`paragraph(File, Text, Line)`** — implemented, from the block
   grammar. A `paragraph` node's own `node_text/2` already spans its full
   text (no `heading_content`-style field to dig for), and a soft-wrapped
@@ -127,6 +160,33 @@ not a byte range:
   kept rather than filtered: this grammar also parses a list item's
   content as a `paragraph` node, so list-item text shows up as
   `paragraph/3` facts too.
+- **`list_item(File, Ordered, Checked, Line)`** — implemented, additive
+  to `paragraph/3` above, not a replacement for it. `Ordered` is
+  `ordered`/`unordered`, by which marker type introduces the item
+  (`list_marker_dot`/`_parenthesis` vs `list_marker_minus`/`_plus`/
+  `_star`). `Checked` is `checked`/`unchecked` for a GFM task-list item
+  (`- [x] ...`/`- [ ] ...`), or `none` for an ordinary item.
+- **`table(File, Line)` / `table_row(File, TableLine, RowIndex, Line)` /
+  `table_cell(File, TableLine, Row, Col, Text, Line)`** — implemented,
+  from the block grammar's `pipe_table` node (GFM). `RowIndex` 0 is
+  always the header row; the `| --- | --- |` delimiter row is skipped
+  entirely, since it names no real column data.
+- **`blockquote(File, Text, Line)`** — implemented. Not as simple as
+  `paragraph/3`'s free `node_text/2` span: only a `> ` block quote's own
+  FIRST line has its marker excluded by the grammar as a separate
+  sibling node; a continuation line's own `> ` stays embedded in
+  whatever node contains it (confirmed directly — a two-line quote's
+  inner text came back as `"first line\n> second line"`, the second
+  line's marker very much still there). `blockquote/3` strips a leading
+  `>` from every line itself rather than trusting the grammar to have
+  already done it.
+- **`link_definition(File, Label, Destination, Title, Line)`** —
+  implemented, from the block grammar's `link_reference_definition`
+  node (`[label]: destination "title"`) — genuinely available without
+  any of the inline-grammar work below, once actually looked for; `Title`
+  is `none` when the definition gives none. This is a *definition*, not a
+  *use* — see the next paragraph for why a real inline `[text](url)` link
+  is still blocked.
 - **`link(File, Text, Target, Line)`** — **not implemented.** Needs the
   inline grammar (§3); `Target` would be the raw link destination (a URL,
   or a relative path like `cli-erlang.md` or `cli-erlang.md#5-testing`).
@@ -180,13 +240,16 @@ for a real run of this against a doc and source file parsed together.
 
 Given the maintainers' own correctness caveat (§2), do not rely on this
 grammar for anything that needs exact CommonMark semantics — rendering
-Markdown to HTML, or anything sensitive to edge cases like link-reference
-definitions or nested-list lazy continuation. Headings, inline links, and
-fenced-code-block language tags are simple, well-supported node types where
-the caveat is unlikely to bite; that is deliberately all §4 asks for.
-`heading/4` and `code_block/3` (block grammar only) are within that safe
-zone and implemented; `link/4` (inline grammar) is designed but not yet
-built, per §3/§4.
+Markdown to HTML, or resolving a link reference's own use against its
+definition (which needs matching the two by label, a real cross-
+reference lookup, not a node shape). Extracting a link *definition*'s own
+label/destination/title as a flat fact carries none of that resolution
+risk — it's exactly the "simple, well-supported node type" §4's
+structural facts already stay within, same as a heading or a fenced
+block's language tag. `heading/4`, `section/4`, `code_block/3`,
+`list_item/4`, the table facts, `blockquote/3`, and `link_definition/5`
+(all block grammar) are within that safe zone and implemented; a real
+inline `link/4` (inline grammar) is designed but not yet built, per §3/§4.
 
 ## 6. Suggested path
 
@@ -201,9 +264,21 @@ built, per §3/§4.
    done: `src/ts_extract.erl` dispatches `.md` to
    `ts_extract_markdown:file/1`, and `src/symbolic_parse.erl`'s folder
    walk picks up `.md` files alongside `.erl`/`.ts`.
-4. **Remaining:** implement `ts_parser_set_included_ranges` for real (§3),
-   vendor the inline grammar, add `link/4`, then write the `broken_link/2`
-   check from §4 as its first consumer.
+4. ~~Represent as much of the block grammar's own data model as
+   possible~~ — done: `section/4`, `list_item/4`, the table facts,
+   `blockquote/3`, and `link_definition/5` all added in one pass, plus
+   setext headings folded into `heading/4` and indented code blocks
+   into `code_block/3`. Every real node type the vendored block
+   grammar produces (confirmed via its own `parser.c` symbol table, not
+   assumed from upstream docs) is now either a fact or a documented,
+   deliberate non-fact (`document`/`block_continuation`, pure structural
+   glue; `backslash_escape`/`entity_reference`/`numeric_character_reference`,
+   inline text-encoding detail `node_text/2` already resolves for free;
+   `minus_metadata`/`plus_metadata`, YAML/TOML frontmatter, real but
+   absent from every fixture on hand to verify a shape against).
+5. **Remaining:** implement `ts_parser_set_included_ranges` for real (§3),
+   vendor the inline grammar, add a real inline `link/4`, then write the
+   `broken_link/2` check from §4 as its first consumer.
 
 ## References
 

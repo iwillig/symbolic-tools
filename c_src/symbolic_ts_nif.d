@@ -1,4 +1,6 @@
-c_src/symbolic_ts_nif.o: c_src/symbolic_ts_nif.c \
+c_src/symbolic_ts_nif.o: \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/SDKSettings.json \
+  c_src/symbolic_ts_nif.c \
   /opt/homebrew/Cellar/erlang/29.1.1/lib/erlang/erts-17.1/include/erl_nif.h \
   /opt/homebrew/Cellar/erlang/29.1.1/lib/erlang/erts-17.1/include/erl_drv_nif.h \
   /opt/homebrew/Cellar/erlang/29.1.1/lib/erlang/erts-17.1/include/erl_int_sizes_config.h \

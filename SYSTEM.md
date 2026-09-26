@@ -289,9 +289,11 @@ Three traps that bite here specifically:
    `existence_error`, rendered by the server as `no such predicate`. The
    library papers over it with sentinel clauses
    (`branch(none, 0, none, none, 0) :- fail.`) so code-fact families fail
-   cleanly; the documentation families (`heading/4`, `paragraph/3`,
-   `code_block/3`, `config_value/4`, `config_section/3`) have no sentinel,
-   so an error there means you scanned a tree without its `.md`/`.toml` —
+   cleanly; the documentation families (`heading/4`, `section/4`,
+   `code_block/3`, `paragraph/3`, `list_item/4`, `table/2`,
+   `table_row/4`, `table_cell/6`, `blockquote/3`, `link_definition/5`,
+   `config_value/4`, `config_section/3`) have no sentinel, so an error
+   there means you scanned a tree without its `.md`/`.toml` —
    fix `path`, don't write it off as "no results". Failure and error are
    different answers; report which you got.
 3. **No catch, no tabling, 5 s — and even the first solution can lie.** A
@@ -387,8 +389,11 @@ these your scan actually produced.
   stmt_block/6 + stmt/6, last_switch_case/1, braceless_body/5, return_stmt/5
       statement position within a block (TS only)
   example_defines/5, example_calls/5  code fenced in .md, re-parsed as code
-  heading/4, paragraph/3, code_block/3 (Markdown) · config_value/4,
-  config_section/3 (TOML + JSON, same two predicates for both)
+  heading/4 (ATX + setext), section/4, code_block/3 (fenced + indented),
+      paragraph/3, list_item/4, table/2 + table_row/4 + table_cell/6,
+      blockquote/3, link_definition/5 (Markdown, block grammar only —
+      no inline-link `link/4` yet, see docs/tree-sitter-markdown.md)
+  config_value/4, config_section/3 (TOML + JSON, same two predicates for both)
 
 Languages with real extractors: TypeScript, JavaScript, Erlang, Bash,
 Markdown, TOML, JSON. YAML is deliberately unsupported.
