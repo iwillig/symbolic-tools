@@ -55,7 +55,10 @@ serve_test_() ->
         fun parse_with_broken_rules_override_is_friendly_error/1,
         fun parsing_two_dirs_keeps_both_queryable_by_path/1,
         fun query_with_unknown_path_is_friendly_error/1,
-        fun overview_with_unknown_path_is_friendly_error/1
+        fun overview_with_unknown_path_is_friendly_error/1,
+        fun overview_reports_version_before_parse/1,
+        fun parse_reports_version/1,
+        fun parse_omits_file_list/1
     ]}.
 
 overview_before_parse(_Setup) ->
@@ -176,6 +179,41 @@ overview_reports_rules_file(_Setup) ->
         Json = decode(symbolic_serve:handle_overview(#{})),
         #{<<"ok">> := Ok} = Json,
         ?assertMatch(<<_/binary>>, maps:get(<<"rules_file">>, Ok))
+    end.
+
+%% The running server's own build identity — distinct from anything a
+%% parse computes — should be answerable even before anything has been
+%% parsed at all, so an agent can check "which commit is this node
+%% running" first, before deciding whether to trust cached facts.
+overview_reports_version_before_parse(_Setup) ->
+    fun() ->
+        Json = decode(symbolic_serve:handle_overview(#{})),
+        ?assertMatch(#{<<"ok">> := #{<<"loaded">> := false,
+                                      <<"vsn">> := <<_/binary>>,
+                                      <<"git_sha">> := <<_/binary>>}}, Json)
+    end.
+
+%% Same build-identity fields on `parse`'s own response, so upgrading the
+%% MCP tool (rebuilding + restarting the server) is visible without a
+%% separate `overview` round trip.
+parse_reports_version(_Setup) ->
+    fun() ->
+        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)})),
+        #{<<"ok">> := Ok} = Json,
+        ?assertMatch(<<_/binary>>, maps:get(<<"vsn">>, Ok)),
+        ?assertMatch(<<_/binary>>, maps:get(<<"git_sha">>, Ok))
+    end.
+
+%% Regression guard for the fix that dropped the full parsed-file-path
+%% array from this response (a large project could return thousands of
+%% paths and overwhelm the calling harness) — `files` (a count) stays,
+%% `file_list` must not reappear.
+parse_omits_file_list(_Setup) ->
+    fun() ->
+        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)})),
+        #{<<"ok">> := Ok} = Json,
+        ?assert(is_integer(maps:get(<<"files">>, Ok))),
+        ?assertNot(maps:is_key(<<"file_list">>, Ok))
     end.
 
 %% The concrete proof that the MCP tool an agent actually calls can now

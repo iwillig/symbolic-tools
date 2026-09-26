@@ -249,8 +249,9 @@ Three traps that bite here specifically:
    are erlog atoms; a double-quoted string is a binary and will not unify.
    `defines(cli, A, _, _, _)` matches, `defines("cli", _, _, _, _)` answers
    `count: 0`. A dotted path can't be a bare atom, so single-quote it — and
-   note `File` is stored as the **absolute** path `parse` walked, exactly as
-   `overview` echoes it in `file_list`, not a repo-relative one:
+   note `File` is stored as the **absolute** path `parse` walked (`overview`
+   and `parse` report only the file *count*, not the paths themselves — a
+   large project could return thousands of them), not a repo-relative one:
    `defines(F, _, _, '/abs/root/src/symbolic_cli.erl', _)` matches, the same
    goal with `'src/symbolic_cli.erl'` answers `count: 0`. Both print as
    `"cli"` in JSON — the encoding hides the atom/binary distinction, so only

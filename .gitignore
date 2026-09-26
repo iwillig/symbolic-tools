@@ -20,3 +20,7 @@ tree-sitter.pc
 # Derived Prolog fact database — deterministic rebuild from source via
 # `symbolic parse`, not something to version (docs/prolog-store.md §7).
 .pi/facts.dets
+
+# Regenerated on every build by scripts/gen_git_sha.sh (rebar.config
+# pre_hook) — the running commit's SHA, not something to version.
+priv/git_sha

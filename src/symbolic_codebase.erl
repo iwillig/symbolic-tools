@@ -381,8 +381,12 @@ compute_meta(Files, Facts, RulesPath, NormDir, ElapsedMs) ->
         loaded => true,
         path => NormDir,
         parse_ms => ElapsedMs,
+        %% `files` is a count, not the full path list — a large project can
+        %% have thousands of paths, and dumping every one into the MCP
+        %% response (and into the per-directory cache below) risked
+        %% blowing up the calling harness. Nothing else in this codebase
+        %% reads a `file_list` key, so it's intentionally not stored here.
         files => length(Files),
-        file_list => Files,
         languages => languages_from_files(Files),
         facts_by_predicate => counts_by_predicate(Facts),
         total_facts => length(Facts),

@@ -338,7 +338,7 @@ handle_overview(Params) ->
         ?LOG_INFO("overview: path=~p", [Path]),
         case symbolic_codebase:overview(Path) of
             {ok, Meta} -> json(#{ok => meta_to_json(Meta)});
-            {not_parsed, NotParsed} -> json(#{ok => NotParsed});
+            {not_parsed, NotParsed} -> json(#{ok => maps:merge(version_json(), NotParsed)});
             {error, Reason} -> json(#{error => error_str(Reason)})
         end
     catch
@@ -383,12 +383,11 @@ var_name_key(A) when is_atom(A) -> atom_to_binary(A, utf8);
 var_name_key(N) when is_integer(N) -> <<"_">> ++ integer_to_binary(N).
 
 meta_to_json(Meta) ->
-    #{
+    maps:merge(version_json(), #{
         loaded => maps:get(loaded, Meta),
         path => jstr(maps:get(path, Meta)),
         parse_ms => maps:get(parse_ms, Meta),
         files => maps:get(files, Meta),
-        file_list => [jstr(F) || F <- maps:get(file_list, Meta)],
         %% languages are Erlang charlists; jsx encodes a bare int-list as a
         %% number-array, so convert to binaries so they render as JSON strings.
         languages => [jstr(L) || L <- maps:get(languages, Meta)],
@@ -403,7 +402,16 @@ meta_to_json(Meta) ->
             undefined -> null;
             RulesPath -> jstr(RulesPath)
         end
-    }.
+    }).
+
+%% The running server's own build identity (symbolic_version:info/0),
+%% shared by every `parse`/`overview` response — including the
+%% not-parsed-yet shape, so "which commit is this node running" is
+%% answerable before anything has been parsed at all. Merged into (not
+%% nested under) the rest of the map, matching how `loaded`/`files`/...
+%% already sit at the top level here.
+version_json() ->
+    symbolic_version:info().
 
 %% Error strings — JSON-safe (always a binary), human/LLM-readable.
 %%
