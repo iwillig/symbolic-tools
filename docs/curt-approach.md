@@ -25,14 +25,13 @@ design/research document only — nothing here is implemented.
   declarative statements about code relationships ("X depends on Y") — is
   the ground-fact case, which stays inside plain Prolog resolution and
   needs none of that machinery.
-- **Reuse Curt's `readings`/`history` pattern**: a dynamic Prolog predicate
-  that `assert`/`retract` grows as sentences come in, exactly the "natural
-  language database of facts" being asked for — mapped onto the existing
-  `prolog_session` from [`erlang-mcp-design.md`](erlang-mcp-design.md).
-- **Open verification item, first**: confirm `erlog` supports `assert/1`,
-  `assertz/1`, and `retract/1` on dynamic predicates before committing to
-  this — `erlang-mcp-design.md` §6's predicate-coverage table doesn't list
-  them explicitly (see §5).
+- **Curt's `readings`/`history` pattern does not map onto this project's
+  actual session model.** It needs a dynamic predicate that persists and
+  grows *across* separate calls as a dialogue proceeds — verified,
+  directly, that nothing asserted here survives between separate MCP
+  `query` calls at all (see §5). `assert`/`retract` themselves are real
+  and callable; it's Curt's specific "grow a database over a whole
+  dialogue" assumption that doesn't hold, not the underlying builtins.
 
 ## 1. The actual pipeline
 
@@ -131,15 +130,32 @@ seven increasingly capable versions, each in the book's example code:
   it needs exactly the machinery `symbolic-tools` doesn't want to adopt.
   "X depends on Y" has no such problem.
 
-## 5. Open question: does `erlog` support `assert`/`retract`?
+## 5. Answered: does `erlog` support `assert`/`retract`? Yes, with two real caveats
 
-Curt's core mechanism — a dynamic predicate grown with `assert`/`retract`
-as the dialogue proceeds — is load-bearing for the whole approach. `erlog`
-is confirmed to have DCGs and `findall/3` (`erlang-mcp-design.md` §6), but
-that table does not explicitly confirm `assert/2`/`assertz/1`/`retract/1`.
-**Verify this before committing to this architecture** — if missing, it's
-likely Tier 1 or Tier 2 work (`erlang-mcp-design.md` §7) to add, but that's
-unverified.
+Verified directly, not left open — `asserta/1`/`assertz/1`/`retract/1` are
+all present and callable (`SYSTEM.md`'s `<dialect>` lists all three). Two
+caveats specific to Curt's own mechanism, though, found while building on
+this directly (`reviewing-llm-output.md` §3.1):
+
+- **Nothing asserted survives between separate MCP `query` calls.** Each
+  call proves against the base fact store fresh — `assertz` inside one
+  call's goal is gone by the next call (verified: asserting a marker
+  fact in one call, then checking `current_predicate/1` for it in a
+  following call, answers `count: 0`). Load-bearing for Baby Curt's own
+  `readings`/`history` design, which assumes state persists *across*
+  turns of a dialogue — that assumption doesn't hold here at all. Usable
+  only as scratch state *within* one comma-chained goal.
+- **A DCG rule (`-->`) specifically needs `consult`, not `assertz`, to
+  actually take effect.** `assertz((sentence(X) --> ...))` inside a live
+  query *silently succeeds* without registering the translated clause —
+  `phrase/2` against it then fails with `existence_error`. Loading the
+  identical rule via `consult` (a rules file) works correctly. Not a gap
+  in `erlog` — DCG translation is a consult-time transformation, and
+  `assertz` never runs it — but it does mean a claim-grammar has to live
+  in a committed rules file, never something built dynamically from
+  natural language mid-session, which rules out treating this as a
+  live-growing "database of facts" the way Baby Curt's own architecture
+  intends.
 
 ## 6. Suggested path
 

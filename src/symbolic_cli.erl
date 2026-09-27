@@ -19,7 +19,8 @@ cli() ->
         commands => #{
             "query" => query_cmd(),
             "parse" => parse_cmd(),
-            "serve" => serve_cmd()
+            "serve" => serve_cmd(),
+            "extract" => extract_cmd()
         }
     }.
 
@@ -72,5 +73,18 @@ serve_cmd() ->
         help => "Start the MCP server over stdio (parse / query / overview)",
         handler => fun(_) ->
             symbolic_serve:run()
+        end
+    }.
+
+extract_cmd() ->
+    #{
+        help => "Parse a short, bounded-vocabulary sentence into an svo(Subject, Verb, Object) "
+                "claim (see docs/reviewing-llm-output.md)",
+        arguments => [
+            #{name => sentence, help => "Sentence to extract, e.g. \"foo/2 calls bar/1\""}
+        ],
+        handler => fun(Args) ->
+            #{sentence := Sentence} = Args,
+            symbolic_extract:run(Sentence)
         end
     }.

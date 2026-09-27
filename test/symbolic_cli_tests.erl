@@ -4,16 +4,16 @@
 %% cli/0 builds the argparse command tree; its structure (help text,
 %% required flags) is asserted directly. Each subcommand's `handler`
 %% closure calls straight into symbolic_query:run/4, symbolic_parse:run/2,
-%% or symbolic_serve:run/0 — all of which halt() or run forever — so
-%% those three modules are meck-mocked here to verify the handler
-%% extracts and forwards its Args map correctly, without ever running
-%% the real (halting) implementation. main/1 itself (argparse:run/3) is
-%% NOT tested here for the same reason: it dispatches straight to these
-%% same handlers.
+%% symbolic_serve:run/0, or symbolic_extract:run/1 — all of which halt()
+%% or run forever — so those four modules are meck-mocked here to verify
+%% the handler extracts and forwards its Args map correctly, without ever
+%% running the real (halting) implementation. main/1 itself
+%% (argparse:run/3) is NOT tested here for the same reason: it dispatches
+%% straight to these same handlers.
 
 cli_structure_test() ->
     #{commands := Commands} = symbolic_cli:cli(),
-    ?assertEqual(["parse", "query", "serve"], lists:sort(maps:keys(Commands))).
+    ?assertEqual(["extract", "parse", "query", "serve"], lists:sort(maps:keys(Commands))).
 
 query_cmd_requires_db_and_goal_test() ->
     #{commands := #{"query" := #{arguments := Args}}} = symbolic_cli:cli(),
@@ -90,6 +90,22 @@ serve_handler_calls_run_test() ->
     Handler(#{}),
     ?assert(meck:called(symbolic_serve, run, [])),
     meck:unload(symbolic_serve).
+
+extract_cmd_sentence_is_positional_and_required_test() ->
+    #{commands := #{"extract" := #{arguments := Args}}} = symbolic_cli:cli(),
+    #{sentence := Sentence} = args_by_name(Args),
+    %% Positional (no `long`), so no `required` key at all — argparse
+    %% treats every positional as required by default, same as `query`'s
+    %% own `goal` argument.
+    ?assertEqual(false, maps:is_key(required, Sentence)).
+
+extract_handler_forwards_sentence_test() ->
+    meck:new(symbolic_extract),
+    meck:expect(symbolic_extract, run, fun(_Sentence) -> ok end),
+    #{commands := #{"extract" := #{handler := Handler}}} = symbolic_cli:cli(),
+    Handler(#{sentence => "foo/2 calls bar/1"}),
+    ?assert(meck:called(symbolic_extract, run, ["foo/2 calls bar/1"])),
+    meck:unload(symbolic_extract).
 
 args_by_name(Args) ->
     maps:from_list([{maps:get(name, A), A} || A <- Args]).

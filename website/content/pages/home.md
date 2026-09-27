@@ -17,7 +17,26 @@ answer proven by resolution, not guessed from a snippet.
 The five examples below are live queries against this project's own
 source, not made up. The last two are things an ESLint-style, per-file
 AST rule has no way to express at all, not just a rule nobody wrote
-yet.
+yet. Every result on this page is shown exactly as the MCP server
+returns it — the same JSON an agent gets back from a real tool call.
+
+## Get started
+
+```sh
+brew tap iwillig/symbolic-tools https://github.com/iwillig/symbolic-tools
+brew trust iwillig/symbolic-tools
+brew install symbolic-tools
+```
+
+```sh
+claude mcp add symbolic -- symbolic serve
+```
+
+`/mcp` inside Claude Code shows `symbolic` connected, with its three
+tools: `parse`, `query`, `overview`. Building from source instead, or
+wiring a project-shared `.mcp.json` for a whole team? See
+`docs/claude-code-mcp-setup.md` in the
+[GitHub repository](https://github.com/iwillig/symbolic-tools).
 
 ## Why Prolog
 
@@ -33,7 +52,9 @@ base once. Let a query prove the answer against it.
     <p>A rules library sits on top of the raw facts. It finds dead code,
     duplicate names, mutual recursion, undocumented functions, and
     oversized or overly complex definitions. Each rule is a few more
-    Prolog clauses over the same facts.</p>
+    Prolog clauses over the same facts. See the
+    <a href="pages/schema.html">full fact schema</a> for every predicate
+    and a real, live example of each.</p>
   </div>
   <div>
     <img src="theme/img/architecture.svg" alt="Architecture: source files are parsed by a tree-sitter extractor into facts, loaded into a Prolog session (erlog), queried by an MCP server or the symbolic CLI">
@@ -44,16 +65,40 @@ base once. Let a query prove the answer against it.
 
 ```prolog
 ?- calls(Caller, CallerArity, local(git_sha, 0), File, Line).
-Caller = info, CallerArity = 0,
-File = 'src/symbolic_version.erl', Line = 18.
+```
+
+```json
+{
+  "count": 1,
+  "limit": 50,
+  "truncated": false,
+  "solutions": [
+    {
+      "Caller": "info",
+      "CallerArity": 0,
+      "File": "src/symbolic_version.erl",
+      "Line": 18
+    }
+  ]
+}
 ```
 
 ## Which functions have no doc comment
 
 ```prolog
 ?- undocumented(walk_pair, Arity, File, Line).
-Arity = 4, File = 'src/ts_extract_json.erl', Line = 69 ;
-Arity = 4, File = 'src/ts_extract_toml.erl', Line = 85.
+```
+
+```json
+{
+  "count": 2,
+  "limit": 50,
+  "truncated": false,
+  "solutions": [
+    { "Arity": 4, "File": "src/ts_extract_json.erl", "Line": 69 },
+    { "Arity": 4, "File": "src/ts_extract_toml.erl", "Line": 85 }
+  ]
+}
 ```
 
 `walk_pair` is defined once in the JSON extractor and once in the TOML
@@ -75,14 +120,26 @@ Combined with a mutual-recursion check, one goal proves both halves of
 the claim at once:
 
 ```prolog
-?- mutual_recursion(walk_object, walk_pair),
-   undocumented(walk_object, Arity, File, Line).
-Arity = 4, File = 'src/ts_extract_json.erl', Line = 64.
+?- once((mutual_recursion(walk_object, walk_pair),
+         undocumented(walk_object, Arity, File, Line))).
+```
+
+```json
+{
+  "count": 1,
+  "limit": 50,
+  "truncated": false,
+  "solutions": [
+    { "Arity": 4, "File": "src/ts_extract_json.erl", "Line": 64 }
+  ]
+}
 ```
 
 `walk_object` and `walk_pair` call each other, and `walk_object` has no
 doc comment. The engine performs the join. Nothing here was pieced
-together from two separate lookups.
+together from two separate lookups. (`once/1` here only trims duplicate
+solutions from the same fact appearing on more than one call site — not
+hiding a different answer.)
 
 ## Does this function eventually touch the filesystem or a shell
 
@@ -102,7 +159,17 @@ hidden_risky_call(Fun, Module, Target) :-
 
 ```prolog
 ?- hidden_risky_call(scan, Module, Target).
-Module = file, Target = list_dir.
+```
+
+```json
+{
+  "count": 1,
+  "limit": 50,
+  "truncated": false,
+  "solutions": [
+    { "Module": "file", "Target": "list_dir" }
+  ]
+}
 ```
 
 `scan/1` never calls `file:list_dir` itself. It calls `walk/3`, which
@@ -118,13 +185,32 @@ because a linter's rule model can't ask it:
 
 ```prolog
 ?- top_fan_in(3, Top).
-Top = [45-line/1, 34-to_atom/1, 19-caller_info/2].
+```
+
+```json
+{
+  "count": 1,
+  "limit": 50,
+  "truncated": false,
+  "solutions": [
+    {
+      "Top": [
+        ["-", ["-", 45, "line"], 1],
+        ["-", ["-", 34, "to_atom"], 1],
+        ["-", ["-", 19, "caller_info"], 2]
+      ]
+    }
+  ]
+}
 ```
 
 `line/1` — a small line-number helper — is called from 45 distinct
 places across the codebase. Ranking every function in the project by
 how many places call it is one goal, not a separate static-analysis
-pass.
+pass. `Top`'s own shape is real too, not simplified for this page:
+erlog keeps Prolog's `-` as an ordinary 2-argument functor, so
+`45-line/1` prints as nested `["-", ...]` arrays, the same way every
+other `-`-joined result on this site's own examples would if shown raw.
 
 ## Status
 
