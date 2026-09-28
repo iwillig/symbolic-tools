@@ -20,7 +20,8 @@ cli() ->
             "query" => query_cmd(),
             "parse" => parse_cmd(),
             "serve" => serve_cmd(),
-            "extract" => extract_cmd()
+            "extract" => extract_cmd(),
+            "check" => check_cmd()
         }
     }.
 
@@ -81,10 +82,42 @@ extract_cmd() ->
         help => "Parse a short, bounded-vocabulary sentence into an svo(Subject, Verb, Object) "
                 "claim (see docs/reviewing-llm-output.md)",
         arguments => [
-            #{name => sentence, help => "Sentence to extract, e.g. \"foo/2 calls bar/1\""}
+            #{name => sentence, help => "Sentence to extract, e.g. \"foo/2 calls bar/1\""},
+            #{name => model, long => "model", required => false,
+              help => "GGUF model path -- used only when the bounded grammar can't parse "
+                      "the sentence (see docs/reviewing-llm-output.md §4, "
+                      "docs/symbolic-extract-llm-setup.md)"}
         ],
         handler => fun(Args) ->
             #{sentence := Sentence} = Args,
-            symbolic_extract:run(Sentence)
+            symbolic_extract:run(Sentence, maps:get(model, Args, undefined))
+        end
+    }.
+
+check_cmd() ->
+    #{
+        help => "Extract a claim from a sentence and check it against a fact database "
+                "in one step (see docs/reviewing-llm-output.md)",
+        arguments => [
+            #{name => db, long => "db", required => true,
+              help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
+            #{name => rules, long => "rules", required => false,
+              help => "Hand-written Prolog rule file (.pl) to consult alongside the facts. "
+                      "Defaults to the nearest .symbolic/rules.pl, searched upwards from the "
+                      "fact database and then the current directory"},
+            #{name => no_rules, long => "no-rules", type => boolean, default => false,
+              help => "Skip the automatic .symbolic/rules.pl lookup (an explicit -rules still "
+                      "applies) -- check_claim/2 itself lives there, so this makes every claim "
+                      "unverifiable unless -rules points somewhere else that defines it"},
+            #{name => model, long => "model", required => false,
+              help => "GGUF model path -- used only when the bounded grammar can't parse "
+                      "the sentence (see docs/reviewing-llm-output.md §4, "
+                      "docs/symbolic-extract-llm-setup.md)"},
+            #{name => sentence, help => "Sentence to extract and check, e.g. \"foo/2 calls bar/1\""}
+        ],
+        handler => fun(Args) ->
+            #{db := Db, sentence := Sentence} = Args,
+            symbolic_check:run(Db, maps:get(rules, Args, undefined),
+                maps:get(no_rules, Args, false), Sentence, maps:get(model, Args, undefined))
         end
     }.

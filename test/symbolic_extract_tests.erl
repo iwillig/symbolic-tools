@@ -64,3 +64,44 @@ run_result_unrecognized_outside_bounded_vocabulary_test() ->
 run_result_bad_token_is_a_tokenize_error_test() ->
     ?assertEqual({error, {tokenize_error, {bad_token, "Foo/2"}}},
         symbolic_extract:run_result("Foo/2 calls bar/1")).
+
+%% --- run_result/2: §4.2 Phase 3's fallback chaining onto
+%% symbolic_extract_llm. DCG first, always; the LLM tier is only ever
+%% consulted on `unrecognized`, and only when a model path is given.
+
+%% A DCG-recognized sentence must never touch the LLM tier at all --
+%% proved here with a deliberately nonexistent model path: if the
+%% fallback branch ran, model_opts/1 would fail on the missing file and
+%% surface as {error, {model_error, _}} instead of the real DCG result.
+run_result_2_never_falls_back_when_the_dcg_recognizes_it_test() ->
+    ?assertEqual({ok, {svo, {'/', foo, 2}, calls, {'/', bar, 1}}},
+        symbolic_extract:run_result("foo/2 calls bar/1", "/no/such/model.gguf")).
+
+%% Unrecognized by the DCG, no model configured: same as run_result/1
+%% alone -- no fallback attempted, no error about a missing model either.
+run_result_2_unrecognized_with_no_model_configured_test() ->
+    ?assertEqual(unrecognized,
+        symbolic_extract:run_result("foo/2 improves performance", undefined)).
+
+%% Unrecognized by the DCG, a model path given, but the file doesn't
+%% exist -- the fallback really was attempted (not silently skipped),
+%% and its own failure is reported, not swallowed as `unrecognized`.
+run_result_2_reports_a_real_model_load_failure_test() ->
+    ?assertMatch({error, {model_error, _}},
+        symbolic_extract:run_result("foo/2 improves performance", "/no/such/model.gguf")).
+
+%% Unrecognized by the DCG, a model configured: the LLM tier's own
+%% result is what comes back, verbatim -- meck-mocked so this proves the
+%% composition wiring, not symbolic_extract_llm's own logic (that's
+%% symbolic_extract_llm_tests.erl's job).
+run_result_2_returns_the_llm_tiers_result_when_the_dcg_cant_parse_it_test() ->
+    meck:new(symbolic_extract_llm),
+    meck:expect(symbolic_extract_llm, model_opts, fun(_Path) -> {ok, #{model_path => "m"}} end),
+    meck:expect(symbolic_extract_llm, run_result, fun(_Sentence, _Opts) ->
+        {ok, {svo, {'/', foo, 2}, removed, none}}
+    end),
+    Result =
+        try symbolic_extract:run_result("foo/2 improves performance", "/some/model.gguf")
+        after meck:unload(symbolic_extract_llm)
+        end,
+    ?assertEqual({ok, {svo, {'/', foo, 2}, removed, none}}, Result).

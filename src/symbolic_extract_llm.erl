@@ -22,7 +22,7 @@
 %%% `chat_not_supported` branch), and meck-mocked `erllama:chat/3` for
 %%% every other response shape — see that file's own header comment.
 -module(symbolic_extract_llm).
--export([run/2]).
+-export([run/2, model_opts/1]).
 %% Exported for symbolic_extract_llm_tests.erl.
 -export([run_result/2, decode_call/1, parse_ident/1, parse_verb/1, tools/0]).
 
@@ -60,9 +60,23 @@ run(Sentence, ModelOpts) ->
 %% and symbolic_extract:run_result/1's own prolog_session — the only
 %% viable shape for a one-shot CLI invocation anyway, no long-running
 %% server to keep a model warm across calls.
+%% erllama's own supervision tree (erllama_model_sup and the rest) only
+%% exists once the application is actually started, not merely on the
+%% code path -- confirmed directly, twice, in two different contexts:
+%% `rebar3 eunit` doesn't auto-start a dependency application even with
+%% it declared in symbolic_tools.app.src's own `applications` list, and
+%% neither does the released CLI binary's own one-shot invocation
+%% (`bin/symbolic extract ... -model ...` crashed the whole runtime
+%% during boot with `{noproc, {gen_server, call, [erllama_model_sup,
+%% ...]}}` before this fix, since a one-shot CLI command evals straight
+%% into symbolic_cli:main/1 rather than running a full supervised
+%% release boot). Started here, in the one function every caller (CLI,
+%% both test suites) already goes through, rather than requiring every
+%% caller to remember it themselves. ensure_all_started/1 is idempotent.
 -spec run_result(unicode:chardata(), map()) ->
     {ok, term()} | unrecognized | {error, term()}.
 run_result(Sentence, ModelOpts) ->
+    {ok, _} = application:ensure_all_started(erllama),
     case erllama:load_model(ModelOpts) of
         {ok, Model} ->
             Result = chat_result(Model, Sentence),
@@ -70,6 +84,21 @@ run_result(Sentence, ModelOpts) ->
             Result;
         {error, Reason} ->
             {error, {load_model_error, Reason}}
+    end.
+
+%% Build the erllama load_model/1 config map for a plain GGUF path —
+%% factored out so a caller (the CLI's `--model` flag, chained through
+%% symbolic_extract:run_result/2's fallback logic — §4.2 Phase 3) and
+%% test/symbolic_extract_llm_manual_tests.erl don't each recompute the
+%% same file:read_file/sha256 boilerplate.
+-spec model_opts(file:filename()) -> {ok, map()} | {error, term()}.
+model_opts(Path) ->
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            {ok, #{model_path => Path, fingerprint => crypto:hash(sha256, Bin),
+                   model_opts => #{n_gpu_layers => 99}}};
+        {error, Reason} ->
+            {error, {read_model_error, Reason}}
     end.
 
 chat_result(Model, Sentence) ->
@@ -93,8 +122,16 @@ chat_result(Model, Sentence) ->
 %% `verb` keeps the relation vocabulary as narrow as check_claim/1
 %% itself, enforced during sampling by erllama's own lazy tool-call
 %% grammar (guides/tool-calls.md) — not just requested in a prompt.
-%% `object` is not `required`: a `removed` claim has no real object (the
-%% same asymmetry priv/nlp_grammar.pl's own DCG clauses encode).
+%%
+%% `object` is schema-`required` even though a `removed` claim has no
+%% real object (decode_call/1 ignores it entirely on that branch) —
+%% found the hard way against a real model (§4.2 Phase 2), not assumed:
+%% with `object` merely optional, a real Qwen2.5-3B-Instruct correctly
+%% picked `subject`/`verb` for "foo/2 calls bar/1" and then simply left
+%% `object` out of the call altogether, a schema-valid tool call that
+%% still lost the one field the whole claim was about. Marking it
+%% required forces the model to always attempt a value; for `removed`
+%% it can put anything there since decode_call/1 never reads it.
 -spec tools() -> [map()].
 tools() ->
     [#{name => <<"extract_svo">>,
@@ -107,12 +144,20 @@ tools() ->
            type => object,
            properties => #{
                subject => #{type => string,
-                            description => <<"Function/Arity, e.g. \"foo/2\"">>},
+                            description =>
+                                <<"The function the sentence is ABOUT, as "
+                                  "Function/Arity (e.g. \"foo/2\"). Always fill this "
+                                  "in, for every verb, including \"removed\" -- this "
+                                  "field is never left blank.">>},
                verb => #{type => string, 'enum' => ?KNOWN_VERBS},
                object => #{type => string,
                            description =>
-                               <<"Function/Arity for \"calls\"; omit for \"removed\"">>}},
-           required => [subject, verb]}}].
+                               <<"Only meaningful for \"calls\": the function BEING "
+                                 "called, as Function/Arity (e.g. \"bar/1\") -- the "
+                                 "one on the right of the word \"calls\", never the "
+                                 "same value as subject. For \"removed\", this field "
+                                 "is unused; put \"none\".">>}},
+           required => [subject, verb, object]}}].
 
 %% Turn one tool_calls entry into the same {svo, Subject, Verb, Object}
 %% shape symbolic_extract:run_result/1 (the DCG tier) already returns —

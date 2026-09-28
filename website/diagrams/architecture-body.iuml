@@ -1,0 +1,25 @@
+' Shared diagram content for architecture-light.puml and
+' architecture-dark.puml — only the color skinparams differ between the
+' two; the actual system/container/person/relationship definitions live
+' here once so they can't drift apart between themes.
+
+System_Ext(source, "Source tree", "The codebase being analyzed")
+
+System_Boundary(st, "symbolic-tools") {
+    Container(extractor, "tree-sitter extractor", "NIF, in-process", "Parses source files into facts: defines, calls, docs, branches, ...")
+    Container(prolog, "Prolog session", "erlog, on the BEAM", "Holds the fact base; answers queries by unification and resolution")
+    Container(mcp, "MCP server", "erlmcp")
+    Container(cli, "symbolic CLI", "escript")
+}
+
+Person(agent, "LLM agent", "over MCP")
+Person(human, "Human", "over argv")
+
+Rel(source, extractor, "read by")
+Rel(extractor, prolog, "loads facts into")
+Rel(mcp, prolog, "queries")
+Rel(cli, prolog, "queries")
+Rel(agent, mcp, "calls parse/query/overview")
+Rel(human, cli, "runs parse/query/serve")
+
+SHOW_LEGEND()

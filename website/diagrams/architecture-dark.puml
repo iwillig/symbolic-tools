@@ -1,0 +1,46 @@
+@startuml architecture-dark
+!include <C4/C4_Container>
+
+' Every color below is a real @picocss/pico v2 default-theme token, read
+' directly out of pico.css's own `@media (prefers-color-scheme: dark)`
+' block, not guessed:
+'   --pico-card-background-color: #181c25  (opaque backdrop, not the
+'                                           page background itself --
+'                                           distinguishes this image as
+'                                           a card sitting on the page,
+'                                           same reasoning the original
+'                                           single-theme diagram's own
+'                                           "opaque, not transparent"
+'                                           comment already gave)
+'   --pico-color:       #c2c7d0
+'   --pico-muted-color: #7b8495
+' Container/Person reuse the SAME hex values as the light theme:
+' --pico-primary-background (#0172ad), --pico-primary-inverse (#fff) and
+' --pico-secondary-background (#525f7a) are identical in both of pico's
+' own themes, verified directly, not assumed.
+'
+' external_system is the one color that does NOT reuse a raw token
+' as-is: white text on the real dark --pico-muted-color (#7b8495)
+' measures 3.77:1, below AA (4.5:1) -- so, same move the original
+' diagram already made once for C4's own default container blue, it's
+' darkened here, from #7B8495 toward #181C25, until white clears AA
+' (#5B6473, 5.97:1). The boundary's own thin border/label text uses the
+' real, unmodified dark muted-color (#7B8495 on #181C25, 4.53:1, a real
+' AA pass) -- only a color used as a large FILLED background needs the
+' extra darkening; the same token used as text against the page
+' background already clears the bar on its own.
+skinparam backgroundColor #181C25
+skinparam defaultTextColor #C2C7D0
+skinparam wrapWidth 200
+skinparam defaultFontSize 11
+skinparam ArrowFontSize 11
+skinparam legendFontSize 11
+LAYOUT_LEFT_RIGHT()
+
+UpdateElementStyle("container", $bgColor="#0172AD", $fontColor="#FFFFFF")
+UpdateElementStyle("person", $bgColor="#525F7A", $fontColor="#FFFFFF")
+UpdateElementStyle("external_system", $bgColor="#5B6473", $fontColor="#FFFFFF")
+UpdateBoundaryStyle("system", $bgColor="#181C25", $fontColor="#7B8495", $borderColor="#7B8495")
+
+!include architecture-body.iuml
+@enduml

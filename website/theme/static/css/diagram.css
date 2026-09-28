@@ -1,0 +1,17 @@
+/* Swaps between the light- and dark-themed architecture diagram SVGs
+   (website/diagrams/architecture-{light,dark}.puml) to match Pico's own
+   `prefers-color-scheme` switch -- the same light/dark split
+   pygments.css already uses for code blocks, applied to an image
+   instead of a stylesheet. */
+.diagram-dark {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .diagram-light {
+    display: none;
+  }
+  .diagram-dark {
+    display: inline;
+  }
+}

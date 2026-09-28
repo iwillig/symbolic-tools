@@ -1,7 +1,8 @@
 %%% Extends the erlog Prolog engine with sub_atom/5 (ISO's substring
-%%% predicate) and sub_text/5 (the same shape, over a binary instead of
-%%% an atom), implemented as real Erlang code, executed inside erlog's
-%%% own resolution engine — not a `.symbolic/rules.pl` shim.
+%%% predicate), sub_text/5 (the same shape, over a binary instead of an
+%%% atom), and atom_from_binary/2 (a binary->atom bridge, §2.1 below),
+%%% implemented as real Erlang code, executed inside erlog's own
+%%% resolution engine — not a `.symbolic/rules.pl` shim.
 %%%
 %%% erlog has no `sub_atom/5` natively (docs/erlog-missing-builtins.md),
 %%% and it is the single most common thing an LLM agent reaches for that
@@ -60,16 +61,17 @@
 -include_lib("erlog/src/erlog_int.hrl").
 
 -export([load/1]).
--export([sub_atom_5/3, sub_text_5/3]).
+-export([sub_atom_5/3, sub_text_5/3, atom_from_binary_2/3]).
 
 -import(erlog_int, [prove_body/2, fail/1, unify/3, add_compiled_proc/4]).
 
 %% load(Database) -> Database.
-%%  Register sub_atom/5 and sub_text/5 as compiled procedures — same
-%%  shape as erlog_lib_lists:load/1.
+%%  Register sub_atom/5, sub_text/5 and atom_from_binary/2 as compiled
+%%  procedures — same shape as erlog_lib_lists:load/1.
 load(Db0) ->
     Db1 = add_compiled_proc({sub_atom, 5}, ?MODULE, sub_atom_5, Db0),
-    add_compiled_proc({sub_text, 5}, ?MODULE, sub_text_5, Db1).
+    Db2 = add_compiled_proc({sub_text, 5}, ?MODULE, sub_text_5, Db1),
+    add_compiled_proc({atom_from_binary, 2}, ?MODULE, atom_from_binary_2, Db2).
 
 %% sub_atom_5(Head, NextGoal, State) -> void.
 %%
@@ -196,8 +198,49 @@ try_unify4(B0, Before, L0, Length, Af0, After, S0, Sub, Bs0) ->
         fail -> fail
     end.
 
+%% atom_from_binary_2(Head, NextGoal, State) -> void.
+%%
+%% atom_from_binary(Binary, Atom) — the docs/reviewing-llm-output.md §2.1
+%% binary->atom bridge: converts a binary (e.g. a Markdown table_cell/6's
+%% claimed function-name text) to the atom defines/5's own Function
+%% values already are, so a claim like "the reference table says
+%% Function=foo" can finally be cross-checked against real defines/5
+%% facts at all — erlog has no built-in path from a binary to an atom
+%% (docs/erlog-missing-builtins.md), the same gap sub_atom/5 left open
+%% for atoms alone.
+%%
+%% Deliberately `binary_to_existing_atom/2`, never `binary_to_atom/2`:
+%% this project already stores free text (comment/3, doc/5, paragraph/3)
+%% as binaries specifically so an arbitrary-length string never leaks
+%% into the BEAM's atom table (this module's own header comment).
+%% `binary_to_existing_atom/2` only ever succeeds for a binary that
+%% names an atom ALREADY interned — which a real defines/5 Function
+%% value already is, by virtue of being a fact — and fails cleanly, not
+%% a crash, for any binary that never named a real atom anywhere. That
+%% makes this predicate structurally incapable of growing the atom
+%% table itself, no matter what text is fed to it: Binary bound to
+%% Atom, only mode this project needs (the direction table_cell/6's own
+%% claimed text actually flows).
+atom_from_binary_2({atom_from_binary, Bin0, Atom0}, Next, #est{bs = Bs} = St) ->
+    case deref(Bin0, Bs) of
+        Bin when is_binary(Bin) ->
+            case catch binary_to_existing_atom(Bin, utf8) of
+                {'EXIT', _} ->
+                    fail(St);
+                A ->
+                    case unify(Atom0, A, Bs) of
+                        {succeed, Bs1} -> prove_body(Next, St#est{bs = Bs1});
+                        fail -> fail(St)
+                    end
+            end;
+        {_} ->
+            erlog_int:instantiation_error(St);
+        Other ->
+            erlog_int:type_error(binary, Other, St)
+    end.
+
 %% deref/2 is exported from erlog_int but only needed right at entry, once
-%% each in sub_atom_5/3 and sub_text_5/3 — imported narrowly here rather
-%% than in the top-level -import to keep that list matching what's used
-%% more than twice.
+%% each in sub_atom_5/3, sub_text_5/3 and atom_from_binary_2/3 — imported
+%% narrowly here rather than in the top-level -import to keep that list
+%% matching what's used more than twice.
 deref(Term, Bs) -> erlog_int:deref(Term, Bs).

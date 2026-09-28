@@ -17,20 +17,26 @@
 %%% `assertz((sentence(_) --> ...))` would silently register nothing
 %%% usable.
 -module(symbolic_extract).
--export([run/1]).
-%% Exported for symbolic_extract_tests.erl — run_result/1 is the
+-export([run/1, run/2]).
+%% Exported for symbolic_extract_tests.erl — run_result/1,2 are the
 %% halt-free core; tokenize/1 is its own pure, independently-tested piece.
--export([run_result/1, tokenize/1]).
+-export([run_result/1, run_result/2, tokenize/1]).
 
 -define(GRAMMAR_FILE, "nlp_grammar.pl").
 
 %% halt() belongs only here, at the CLI's edge — see symbolic_query.erl's
 %% own run/4 doc comment for why (erlang:halt/0,1 deep in business logic
-%% is a well-known anti-pattern; run_result/1 stays a plain-term-returning
-%% function so EUnit can exercise it directly).
+%% is a well-known anti-pattern; run_result/1,2 stay plain-term-returning
+%% functions so EUnit can exercise them directly).
 -spec run(unicode:chardata()) -> no_return().
-run(Sentence) ->
-    case run_result(Sentence) of
+run(Sentence) -> run(Sentence, undefined).
+
+%% ModelPath enables §4.2 Phase 3's fallback chaining onto
+%% symbolic_extract_llm — `undefined` (no `--model` flag given) keeps
+%% this identical to run/1: DCG only, `unrecognized` reported as-is.
+-spec run(unicode:chardata(), file:filename() | undefined) -> no_return().
+run(Sentence, ModelPath) ->
+    case run_result(Sentence, ModelPath) of
         {ok, Fact} ->
             io:format("~ts~n", [jsx:encode(symbolic_term_json:encode_term(Fact))]),
             halt(0);
@@ -51,6 +57,28 @@ run_result(Sentence) ->
     case tokenize(Sentence) of
         {ok, TokensText} -> run_checked(TokensText);
         {error, Reason} -> {error, {tokenize_error, Reason}}
+    end.
+
+%% The bounded grammar tries first, always — free, deterministic,
+%% always available. The open-vocabulary tier (symbolic_extract_llm) is
+%% only ever consulted when the DCG comes back `unrecognized`, and only
+%% when ModelPath is given: a DCG success or a real tokenize/grammar
+%% error never falls through, and no model is loaded at all unless the
+%% bounded grammar genuinely couldn't parse the sentence. Exactly the
+%% two-tier design docs/reviewing-llm-output.md §3.1 already states in
+%% words, as actual fallback logic (§4.2 Phase 3).
+-spec run_result(unicode:chardata(), file:filename() | undefined) ->
+    {ok, term()} | unrecognized | {error, term()}.
+run_result(Sentence, ModelPath) ->
+    case run_result(Sentence) of
+        unrecognized when ModelPath =/= undefined -> run_with_model(Sentence, ModelPath);
+        Other -> Other
+    end.
+
+run_with_model(Sentence, ModelPath) ->
+    case symbolic_extract_llm:model_opts(ModelPath) of
+        {ok, Opts} -> symbolic_extract_llm:run_result(Sentence, Opts);
+        {error, Reason} -> {error, {model_error, Reason}}
     end.
 
 run_checked(TokensText) ->

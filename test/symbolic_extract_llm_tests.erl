@@ -81,13 +81,12 @@ decode_call_unexpected_tool_name_is_an_error_test() ->
 %% exists once the application is actually started, not merely on the
 %% code path — confirmed directly: without this, load_model/1 fails with
 %% `{noproc, {gen_server, call, [erllama_model_sup, ...]}}` rather than
-%% ever reaching the stub backend at all. `rebar3 eunit` doesn't start it
-%% automatically even with `erllama` declared in symbolic_tools.app.src's
-%% own `applications` list, so it's started explicitly here;
-%% ensure_all_started/1 is idempotent, so this is safe to call from every
-%% test run regardless of ordering.
+%% ever reaching the stub backend at all. Also confirmed to bite the
+%% released CLI binary's own one-shot invocation, not just `rebar3
+%% eunit` — so run_result/2 itself now calls
+%% application:ensure_all_started(erllama) before doing anything else
+%% (see its own doc comment); nothing extra needed here any more.
 run_result_against_stub_backend_reports_chat_not_supported_test() ->
-    {ok, _} = application:ensure_all_started(erllama),
     ?assertMatch({error, {chat_not_supported, _}},
         symbolic_extract_llm:run_result(<<"foo/2 calls bar/1">>,
             #{backend => erllama_model_stub})).

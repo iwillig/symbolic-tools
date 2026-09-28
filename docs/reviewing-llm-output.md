@@ -112,10 +112,74 @@ type bridge that doesn't exist. Confirmed directly against `erlog`'s own
 source, not assumed: `erlog_bips.erl`'s `atom_codes/2` hard-requires
 `is_atom` on its first argument and raises `type_error(atom, ...)`
 otherwise — there is no built-in path from a binary to an atom or a code
-list anywhere in `erlog`. Closing it is the same technique already used
-twice (`sub_atom_5`/`sub_text_5`, `src/symbolic_prolog_lib.erl`) — a
-small native `add_compiled_proc/4` addition, no fork — but it doesn't
-exist yet.
+list anywhere in `erlog`.
+
+**Now built**: `atom_from_binary/2` (`src/symbolic_prolog_lib.erl`), the
+same native `add_compiled_proc/4` technique already used twice
+(`sub_atom_5`/`sub_text_5`). Deliberately `binary_to_existing_atom/2`,
+never `binary_to_atom/2` — this project stores free text as binaries
+specifically to keep it out of the BEAM's permanent atom table, so the
+bridge has to fail cleanly for text that never named a real atom rather
+than silently interning one; `binary_to_existing_atom/2` only ever
+succeeds for a binary naming an atom already real (which a genuine
+`defines/5` Function value already is), making this predicate
+structurally incapable of growing the atom table itself.
+
+**Built by writing the implementation plan first, then checking every
+claim in it against the resulting code with this project's own tool** —
+`symbolic check`, the same one built in §4.2/§7 for reviewing an LLM's
+claims about this codebase, turned on a plan for *this* codebase's own
+next change:
+
+```sh
+$ symbolic check "atom_from_binary_2/3 calls unify/3" -db facts.dets
+{"fact":["svo",["/","atom_from_binary_2",3],"calls",["/","unify",3]],"verdict":"true"}
+$ symbolic check "atom_from_binary_2/3 calls binary_to_atom/2" -db facts.dets
+{"fact":["svo",["/","atom_from_binary_2",3],"calls",["/","binary_to_atom",2]],"verdict":"false"}
+```
+
+The second line was a deliberately wrong claim written into the plan
+before any code existed, specifically to prove the checker catches a
+false prediction rather than only ever confirming true ones — it does.
+All 6 of the plan's claims (see the module's own doc comment for the
+full list) matched the implementation exactly.
+
+### 2.2 The table-cell cross-check and `stale_doc_call/4` — both done, one real bug found live
+
+`stale_doc_table_cell/5` (`.symbolic/rules.pl`) is the table-cell
+cross-check §2.1's bridge unlocked but didn't build yet: `table_cell/6`
+→ `atom_from_binary/2` → `\+ defines/5`. `stale_doc_call/4` is the
+`calls/5` mirror of `stale_doc_example/4` — §7 step 1. Both built TDD,
+both with their own small fixture (a real hit, an invented one, and a
+guard case each), both verified live against this project's own real
+docs afterward, not just the fixture.
+
+**The live run caught a real bug in the plan's first draft, not just in
+the code.** `stale_doc_call/4`'s very first version came back with 286
+hits against this project's real docs+src — almost all of them
+`Fun/Arity = undefined/undefined`. Traced directly, not guessed: a bare
+top-level line inside a ```sh/```bash example (a plain `$ symbolic
+extract "..."` command, no enclosing shell function) has
+`ts_extract_bash` attribute the call to no function at all, so both
+`Fun` and `Arity` come back as the literal atom `undefined` — there is
+no function here for a "this call is stale" claim to be about. A guard
+was added — and the *first* guard checked the wrong field entirely
+(`Callee \= undefined`, the callee position), which left the live count
+completely unchanged at 286, itself a real, verified negative result,
+not assumed correct because the fix compiled and the unit tests it was
+written against happened to pass. Only re-running the live count and
+finding it unmoved caught it. The real fix guards `Fun`, not `Callee`:
+`Fun \= undefined`. After that, the same live count dropped to **29**
+real hits — genuine doc-drift, the same character as
+`stale_doc_example/4`'s own N=26 (`charge/2 calls validateCard/1` in
+illustrative pseudocode, `formatName/2 calls capitalize/1`, and others,
+all real examples that never matched real code). `stale_doc_table_cell/5`
+found **12** real hits against this project's own docs on the first try,
+no similar surprise.
+
+Both predicates' own doc comments in `.symbolic/rules.pl` tell the same
+story in full, including the wrong-guard-then-right-guard sequence —
+this section is the short version.
 
 ## 3. Extracting a claim from free prose
 
@@ -193,19 +257,109 @@ side gets picked:**
 - **A dedicated in-process model does it unattended** — real new work,
   covered in §4.
 
-A small dispatch library is the concrete, buildable piece either way —
-a normalized `svo(Subject, Verb, Object)` term routed to the right real
-check, so extraction logic and validation logic stay separate:
+**Now built, not just sketched**: `check_claim/2`, in `.symbolic/rules.pl`
+(the shared, committed rules library both extraction tiers already sit
+next to), tested via its own fixture in
+`test/symbolic_query_tests.erl` (6 cases, one per clause branch):
 
 ```prolog
-check_claim(svo(F/A, calls, G/B), true)  :- calls(F, A, local(G, B), _, _), !.
-check_claim(svo(F/A, calls, G/B), false) :- \+ calls(F, A, local(G, B), _, _), !.
-check_claim(svo(F, calls, G), unverifiable) :-   % arity elided by the prose
+check_claim(svo(F/A, calls, G/B), true) :-
+    calls(F, A, local(G, B), _, _), !.
+check_claim(svo(F/A, calls, G/B), false) :-
+    \+ calls(F, A, local(G, B), _, _), !.
+check_claim(svo(F, calls, _G), unverifiable) :-   % arity elided by the prose
     \+ (F = _/_), !.
-check_claim(svo(F/A, removed, _), true)  :- \+ defines(F, A, _, _, _), !.
-check_claim(svo(F/A, removed, _), false) :- defines(F, A, _, _, _), !.
+check_claim(svo(F/A, removed, _), true) :-
+    \+ defines(F, A, _, _, _), !.
+check_claim(svo(F/A, removed, _), false) :-
+    defines(F, A, _, _, _), !.
 check_claim(_, unverifiable).            % no relation we know how to check
 ```
+
+Live, against this project's own real source (`calls/5` really has
+`info/0` calling `local(git_sha, 0)`; `frobnicate_widget/7` is not a
+real function anywhere in this repo):
+
+```prolog
+?- check_claim(svo(info/0, calls, git_sha/0), V).
+```
+```json
+{"count":1,"limit":50,"truncated":false,"solutions":[{"V":"true"}]}
+```
+```prolog
+?- check_claim(svo(info/0, calls, nonexistent_helper/3), V).
+```
+```json
+{"count":1,"limit":50,"truncated":false,"solutions":[{"V":"false"}]}
+```
+```prolog
+?- check_claim(svo(frobnicate_widget/7, removed, none), V).
+```
+```json
+{"count":1,"limit":50,"truncated":false,"solutions":[{"V":"true"}]}
+```
+
+Both `symbolic_extract:run_result/1` (the DCG tier) and
+`symbolic_extract_llm:run_result/2` (the tool-calling tier) already
+produce exactly this `svo/3` shape as their result — nothing about
+either extractor needs to change to feed this.
+
+**The convenience wire-up is done too**: `symbolic check "<sentence>"
+-db <facts.dets> [-model <path>]` (`src/symbolic_check.erl`) chains
+extraction and checking into one call — pure composition, no new Prolog
+and no new extraction logic, reusing `symbolic_extract`'s own fallback
+chaining and `symbolic_query:run_result/3` for the actual proof. The one
+new piece it needed: the extracted term has to round-trip back through
+erlog's surface syntax to be embedded in a `check_claim/2` goal string
+against a *separate* fact-base session — `erlog_io:writeq1/1` (a real,
+existing erlog function already vendored by this project, the reverse
+of `read_string/1` used everywhere else here) does this, verified
+directly rather than assumed (it renders `{'/', foo, 2}` as `"foo / 2"`,
+spaced, confirmed live against this project's own real fact base that
+the extra whitespace around an infix operator doesn't change how the
+term parses back). Verified end-to-end against this project's own real
+source, through the released binary:
+
+```sh
+$ symbolic check "info/0 calls git_sha/0" -db facts.dets
+{"fact":["svo",["/","info",0],"calls",["/","git_sha",0]],"verdict":"true"}
+$ symbolic check "info/0 calls nonexistent_helper/3" -db facts.dets
+{"fact":["svo",["/","info",0],"calls",["/","nonexistent_helper",3]],"verdict":"false"}
+$ symbolic check "info/0 makes a call to git_sha/0" -db facts.dets
+Unrecognized.
+$ symbolic check "info/0 makes a call to git_sha/0" -db facts.dets -model <path>
+{"fact":["svo",["/","info",0],"calls",["/","git_sha",0]],"verdict":"true"}
+```
+
+The last two lines are the whole design in miniature: phrasing the
+bounded grammar can't parse at all, correctly reported as
+`Unrecognized.` with no model configured, and correctly extracted
+*and* checked against real facts once one is.
+
+**A real bug found by actually using this on this project's own code,
+not by inspection or a unit test fixture.** A battery of real checks
+against this project's own real call graph (`symbolic check`, a real
+`.dets` built from `src/`) got 8 of 9 right immediately — true/false
+calls, true/false removals, both bounded and open-vocabulary phrasing.
+The ninth, `"check/3 calls writeq1/1"`, is a real, true relationship
+(confirmed directly: `calls(check, 3, remote(erlog_io, writeq1, 1), _,
+_)` proves) that came back `false` — a false negative. Root cause:
+`check_claim/2`'s `calls` clauses only ever matched `local(G, B)`,
+never `remote(Mod, G, B)`. Every fixture in
+`test/symbolic_query_tests.erl` up to that point happened to use a
+same-module call, so nothing caught it — this project's own call
+graph is mostly cross-module, and a claim's own `svo/3` shape never
+names which module the callee lives in anyway, so a real call has to
+be accepted regardless of which shape it's stored as. Fixed in
+`check_claim/2` (`.symbolic/rules.pl`): a `calls` claim now matches
+either shape via `;`. Two new tests added to the fixture
+(`check_claim_true_for_a_real_remote_call_test`,
+`check_claim_false_for_a_remote_call_that_never_happened_test`) —
+confirmed failing against the old code before the fix, confirmed
+passing after, confirmed live again against the real released binary:
+`check/3 calls writeq1/1` now correctly reports `true`, and an invented
+remote call (`check/3 calls format/2`) still correctly reports `false`,
+so the fix closed the gap without overcorrecting to "always true."
 
 Three-valued on purpose — `true`/`false`/`unverifiable`, not just
 pass/fail. This mirrors a distinction this project already insists on
@@ -406,21 +560,69 @@ produced a given claim.
   "mock the impure boundary" pattern `symbolic_cli_tests.erl` already
   uses for `symbolic_query`/`symbolic_parse`/`symbolic_serve`. 15/15
   passing, 453/453 across the full suite.
-- **Phase 2 — a real model, gated and manual.** Model acquisition is
-  documented (a new file, e.g. `docs/symbolic-extract-llm-setup.md`),
-  never automated or committed — multi-gigabyte GGUF weights are a
-  different scale from anything Homebrew's formula currently vendors. A
-  small number of real-model tests gated behind an env var (e.g.
-  `SYMBOLIC_LLM_MODEL_PATH`), skipped by default, run explicitly — these
-  are accuracy checks against real sentences from this repo's own
-  docs/PRs (the `stale_doc_example/4` dogfooding pattern again), not
-  plumbing-correctness checks, which Phase 1 already owns.
-- **Phase 3 — fallback chaining.** `symbolic extract` tries the bounded
-  DCG (§3.1) first — free, deterministic, always available. Only on
-  `unrecognized`, and only when a model path is configured (an optional
-  `--model <path>` flag), fall through to `symbolic_extract_llm`. Exactly
-  the two-tier design §3.1 already states in words, now actual fallback
-  logic.
+- **Phase 2 — done.** Model acquisition documented in
+  `docs/symbolic-extract-llm-setup.md`, never automated or committed —
+  a real `Qwen/Qwen2.5-3B-Instruct-GGUF` (Q4_K_M, ~2GB, official repo)
+  downloaded and fingerprinted for real, loading in ~6s on Metal
+  (Apple M-series). A gated test module,
+  `test/symbolic_extract_llm_manual_tests.erl`, contributes zero real
+  tests by default (EUnit has no first-class "skip" — confirmed by
+  actually trying `{skip, Reason}` and getting a "bad test descriptor"
+  before switching to an empty-list generator, the documented no-op
+  shape) and one always-run `?debugMsg` status line so the absence is
+  visible, not silent; run for real with `SYMBOLIC_LLM_MODEL_PATH` set,
+  5/5 pass.
+
+  **Two rounds of real schema iteration happened getting a real model
+  to behave, both driven by actually running it, not guessed at in
+  advance**: a first `tools/0` schema swapped `subject`/`object` for a
+  plain "foo/2 calls bar/1" (the model put the callee first); fixing
+  that with clearer field descriptions then regressed the `removed`
+  case (subject left blank). Both fixed in the current schema (see the
+  module's own comment for the exact before/after).
+
+  **One real accuracy limit surfaced that iteration doesn't fix, and
+  isn't expected to**: "foo/2 improves performance" — a real-shaped
+  function name, no real relation — can be confidently misclassified as
+  `removed` rather than declined. More surprising than the failure
+  itself: repeating the identical call across separate real runs, same
+  sentence, same `temperature => 0.0`, produced *both* a wrong
+  `{ok, ...}` and a correct `unrecognized`. Most likely `erllama`'s own
+  byte-exact KV cache taking a warm-restored path on a repeat load
+  versus a cold prefill on a fresh one, with a floating-point
+  computation-order difference a temperature-0 sampler can't fully
+  erase. The gated test asserts only what's actually stable (the call
+  completes, never crashes) rather than overstating either outcome as
+  reliable.
+- **Phase 3 — done.** `symbolic_extract:run_result/2` tries the bounded
+  DCG (§3.1) first — free, deterministic, always available — and only
+  on `unrecognized`, and only when a model path is given, falls through
+  to `symbolic_extract_llm:run_result/2`. `symbolic extract` gained an
+  optional `-model <path>` flag (argparse's real single-dash syntax, not
+  `--model`); the CLI handler just forwards it, `undefined` when
+  absent. Verified end-to-end through the real released binary, not
+  just EUnit: a DCG-recognized sentence with `-model` given never loads
+  a model at all (proved with a deliberately nonexistent model path in
+  the unit tests, confirmed by wall-clock time in practice — the
+  DCG-only path returns in ~1.3s, all BEAM startup, versus ~3.3s once a
+  real model actually loads); a sentence outside the bounded grammar
+  ("run_result/2 makes a call to chat_result/2") reports `Unrecognized.`
+  with no `-model`, and correctly extracts the true relationship through
+  the LLM tier once one is given.
+
+  **A second real boot-order bug turned up building this, beyond
+  Phase 1/2's own EUnit-only fix**: the released CLI binary's one-shot
+  `symbolic extract ... -model ...` crashed the whole runtime during
+  boot with the identical `{noproc, {gen_server, call,
+  [erllama_model_sup, ...]}}` `rebar3 eunit` had already hit — a one-shot
+  CLI command evals straight into `symbolic_cli:main/1` rather than
+  running a full supervised release boot, so `erllama` never started
+  there either, declared application dependency or not. Fixed once,
+  centrally, inside `symbolic_extract_llm:run_result/2` itself
+  (`application:ensure_all_started(erllama)`, idempotent) rather than
+  requiring every caller — CLI, both test suites — to remember it
+  separately; the two test files' own now-redundant copies of the same
+  call were removed.
 - **What no phase changes**: the semantic-fidelity ceiling (§5) and the
   three-valued `check_claim/1` requirement are unaffected by any of this
   — a schema-typed tool call is a syntax guarantee, never a truth one.
@@ -469,19 +671,24 @@ identical §3 question, not a new one.
 
 0. ~~Build the bounded-vocabulary DCG extractor as a CLI tool.~~ **Done**
    — `symbolic extract`, §3.1.
-1. Build `stale_doc_call/4` — one line, the same proven pattern as
-   `stale_doc_example/4`, no new capability required.
-2. Build the binary→atom bridge (§2.1), unlocking table-cell
-   cross-checks against `table_cell/6`.
-3. Wire §3.2's `check_claim/1` dispatch to `symbolic extract`'s own
-   output — the extraction half is done; only the checking half (proving
-   the resulting `svo/3` term against `calls/5`/`defines/5`) remains.
-4. In parallel with, not strictly after, step 3: build
-   `symbolic_extract_llm` per §4.2's phased plan — Phase 0 (dependency +
-   build), Phase 1 (TDD against `erllama_model_stub`, no model needed),
-   Phase 2 (a real model, gated, manual), Phase 3 (fallback chaining onto
-   `symbolic extract`). Needs no new C code through Phase 2, so it
-   doesn't have to wait behind anything.
+1. ~~Build `stale_doc_call/4`.~~ **Done** — see §2.2, including a real
+   guard bug found live (286 hits, almost all noise) and fixed (29 real
+   hits after).
+2. ~~Build the binary→atom bridge (§2.1) and the table-cell
+   cross-check it unlocks.~~ **Done** —
+   `atom_from_binary/2` (`src/symbolic_prolog_lib.erl`) and
+   `stale_doc_table_cell/5` (§2.1/§2.2). The bridge's own implementation
+   plan was written first and every claim in it verified against the
+   built code with `symbolic check`.
+3. ~~Build `check_claim/2`, wire it to both extractors' shared `svo/3`
+   output shape, and chain extraction + checking into one CLI
+   command.~~ **Done** — `check_claim/2` (`.symbolic/rules.pl`) and
+   `symbolic check` (`src/symbolic_check.erl`), §3.2.
+4. ~~Build `symbolic_extract_llm` through Phase 0–3.~~ **Done** —
+   dependency + build (Phase 0), TDD against `erllama_model_stub` +
+   meck (Phase 1), a real model with gated accuracy tests (Phase 2),
+   fallback chaining onto `symbolic extract` via `-model` (Phase 3), all
+   §4.2, all needing no new C code.
 5. Only revisit extending `erllama` for real grammar-constrained decoding
    once §4.2's Phase 2 is running and its failure rate is an actual
    observed problem worth hardening against — not a prerequisite to

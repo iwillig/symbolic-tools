@@ -47,18 +47,17 @@ base once. Let a query prove the answer against it.
 
 ## How it works
 
-<div class="grid">
-  <div>
-    <p>A rules library sits on top of the raw facts. It finds dead code,
-    duplicate names, mutual recursion, undocumented functions, and
-    oversized or overly complex definitions. Each rule is a few more
-    Prolog clauses over the same facts. See the
-    <a href="pages/schema.html">full fact schema</a> for every predicate
-    and a real, live example of each.</p>
-  </div>
-  <div>
-    <img src="theme/img/architecture.svg" alt="Architecture: source files are parsed by a tree-sitter extractor into facts, loaded into a Prolog session (erlog), queried by an MCP server or the symbolic CLI">
-  </div>
+<p>A rules library sits on top of the raw facts. It finds dead code,
+duplicate names, mutual recursion, undocumented functions, and
+oversized or overly complex definitions. Each rule is a few more Prolog
+clauses over the same facts. See the
+<a href="pages/schema.html">full fact schema</a> for every predicate
+and a real, live example of each.</p>
+
+<div>
+  <img class="diagram-light" src="theme/img/architecture-light.svg" alt="Architecture: source files are parsed by a tree-sitter extractor into facts, loaded into a Prolog session (erlog), queried by an MCP server or the symbolic CLI">
+  <img class="diagram-dark" src="theme/img/architecture-dark.svg" alt="Architecture: source files are parsed by a tree-sitter extractor into facts, loaded into a Prolog session (erlog), queried by an MCP server or the symbolic CLI">
+</div>
 </div>
 
 ## What calls this function
@@ -211,6 +210,53 @@ pass. `Top`'s own shape is real too, not simplified for this page:
 erlog keeps Prolog's `-` as an ordinary 2-argument functor, so
 `45-line/1` prints as nested `["-", ...]` arrays, the same way every
 other `-`-joined result on this site's own examples would if shown raw.
+
+## Did the implementation match the plan
+
+A plan is a claim about code that doesn't exist yet. Once the code
+exists, it's exactly as checkable as any other claim.
+
+Before writing `atom_from_binary/2` (a small addition bridging free
+text back to a real function name — see the
+[fact schema](pages/schema.html) for why the two need bridging at all),
+the plan named six specific things the new code would do, including one
+written in on purpose to be wrong:
+
+```
+atom_from_binary_2/3 calls unify/3
+atom_from_binary_2/3 calls binary_to_existing_atom/2
+atom_from_binary_2/3 calls binary_to_atom/2      <- written in wrong, on purpose
+```
+
+After writing the code, each line became a real check against it, not a
+re-reading of the diff:
+
+```sh
+$ symbolic check "atom_from_binary_2/3 calls unify/3" -db facts.dets
+```
+
+```json
+{
+  "fact": ["svo", ["/", "atom_from_binary_2", 3], "calls", ["/", "unify", 3]],
+  "verdict": "true"
+}
+```
+
+```sh
+$ symbolic check "atom_from_binary_2/3 calls binary_to_atom/2" -db facts.dets
+```
+
+```json
+{
+  "fact": ["svo", ["/", "atom_from_binary_2", 3], "calls", ["/", "binary_to_atom", 2]],
+  "verdict": "false"
+}
+```
+
+The second one is the point. Written into the plan deliberately wrong,
+before any code existed, to check that this catches a bad prediction
+and not just confirms good ones. It did. Every other claim in the plan
+matched what actually shipped.
 
 ## Status
 

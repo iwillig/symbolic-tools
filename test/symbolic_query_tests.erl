@@ -203,6 +203,12 @@ library_fixture() ->
         {calls, foo, 1, {member, client, charge, 1}, 'f.erl', 5},
         {doc, bar, 1, 'f.erl', 5, <<"bar does things">>},
         {comment, 'f.erl', 1, <<"loose comment">>},
+        %% Real binaries for atom_from_binary/2's own test cases below —
+        %% erlog has no goal-level binary literal syntax at all (`sub_text/5`'s
+        %% own header comment already covers this), so a bound Text has to
+        %% come from a real fact, never written directly in a goal string.
+        {comment, 'f.erl', 7, <<"foo">>},
+        {comment, 'f.erl', 8, <<"zzz_never_an_atom_anywhere_9f8e7d">>},
         {example_defines, ghost, 1, <<"()">>, 'd.md', 3}].
 
 %% {Goal, expected run_result/3 outcome}. no_solution cases double as
@@ -265,7 +271,20 @@ library_cases() ->
         %% is the only bound binary available here.
         {"comment(_, _, Text), sub_text(Text, Before, Length, After, \"comment\")",
             {solutions, [{'Text', <<"loose comment">>}, {'Before', 6}, {'Length', 7}, {'After', 0}]}},
-        {"comment(_, _, Text), sub_text(Text, _, _, _, \"lisp\")", no_solution}].
+        {"comment(_, _, Text), sub_text(Text, _, _, _, \"lisp\")", no_solution},
+        %% atom_from_binary/2 — the §2.1 binary->atom bridge. `foo` is
+        %% already a real atom in this session purely by being a
+        %% defines/5 Function value (library_fixture/0's own {defines,
+        %% foo, 1, ...} fact), so binary_to_existing_atom/2 succeeds
+        %% without ever interning anything new; the second comment's
+        %% Text was never an atom anywhere, so it fails cleanly instead
+        %% of silently creating one (the whole point: this predicate can
+        %% never grow the atom table). Text has to come from a real
+        %% fact either way — no goal-level binary literal syntax exists
+        %% here at all (see sub_text/5's own header comment above).
+        {"comment(_, 7, Text), atom_from_binary(Text, A)",
+            {solutions, [{'A', foo}, {'Text', <<"foo">>}]}},
+        {"comment(_, 8, Text), atom_from_binary(Text, _)", no_solution}].
 
 %% --- ESLint-style rules added on top of the library above ---
 %%
@@ -363,6 +382,169 @@ component_dependency_excludes_stdlib_noise_test() ->
              {calls, foo, 0, {remote, os, getenv, 1}, 'p.erl', 2}], fun() ->
         ?assertEqual(no_solution,
             symbolic_query:run_result(?DB, real_rules(), "component_dependency(File, os, Kind)"))
+    end).
+
+%% --- check_claim/2: reviewing-llm-output.md §3.2, the checking half of
+%% the svo(Subject, Verb, Object) claim shape both symbolic_extract (the
+%% DCG tier) and symbolic_extract_llm (the tool-calling tier) already
+%% produce --- its own small fixture, same reasoning as
+%% hidden_risky_call/component_dependency above: one function (foo/2)
+%% that calls bar/1 locally and os:getenv/1 remotely, with no defines/5
+%% fact for bar/1 at all (a called function need not be defined in the
+%% same fact set), and nothing named ghost anywhere.
+
+check_claim_fixture() ->
+    [{defines, foo, 2, <<"(a,b)">>, 'p.erl', 1},
+     {calls, foo, 2, {local, bar, 1}, 'p.erl', 2},
+     {calls, foo, 2, {remote, os, getenv, 1}, 'p.erl', 3}].
+
+check_claim_true_for_a_real_call_test() ->
+    with_db(check_claim_fixture(), fun() ->
+        ?assertEqual({solutions, [{'V', true}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "check_claim(svo(foo/2, calls, bar/1), V)"))
+    end).
+
+check_claim_false_for_a_call_that_never_happened_test() ->
+    with_db(check_claim_fixture(), fun() ->
+        ?assertEqual({solutions, [{'V', false}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "check_claim(svo(foo/2, calls, baz/1), V)"))
+    end).
+
+%% Found by actually running this tool against this project's own real
+%% (mostly cross-module) call graph, not by inspection: a claim about a
+%% real REMOTE call used to come back `false` -- a false negative, since
+%% the original check_claim/2 only ever matched `local(G, B)`. A claim
+%% never names which module the callee lives in, so a real call must be
+%% accepted regardless of shape.
+check_claim_true_for_a_real_remote_call_test() ->
+    with_db(check_claim_fixture(), fun() ->
+        ?assertEqual({solutions, [{'V', true}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "check_claim(svo(foo/2, calls, getenv/1), V)"))
+    end).
+
+check_claim_false_for_a_remote_call_that_never_happened_test() ->
+    with_db(check_claim_fixture(), fun() ->
+        ?assertEqual({solutions, [{'V', false}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "check_claim(svo(foo/2, calls, setenv/2), V)"))
+    end).
+
+check_claim_true_for_a_function_that_was_really_removed_test() ->
+    with_db(check_claim_fixture(), fun() ->
+        ?assertEqual({solutions, [{'V', true}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "check_claim(svo(ghost/3, removed, none), V)"))
+    end).
+
+check_claim_false_for_removed_when_the_function_still_exists_test() ->
+    with_db(check_claim_fixture(), fun() ->
+        ?assertEqual({solutions, [{'V', false}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "check_claim(svo(foo/2, removed, none), V)"))
+    end).
+
+%% Arity elided by the prose (a bare atom subject, not Function/Arity) --
+%% not checkable, not silently false.
+check_claim_unverifiable_when_arity_is_elided_test() ->
+    with_db(check_claim_fixture(), fun() ->
+        ?assertEqual({solutions, [{'V', unverifiable}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "check_claim(svo(foo, calls, bar), V)"))
+    end).
+
+%% A relation neither extractor's closed vocabulary produces, but
+%% nothing stops a hand-written claim from trying it.
+check_claim_unverifiable_for_an_unknown_relation_test() ->
+    with_db(check_claim_fixture(), fun() ->
+        ?assertEqual({solutions, [{'V', unverifiable}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "check_claim(svo(foo/2, improves, bar/1), V)"))
+    end).
+
+%% --- stale_doc_call/4: the calls/5 mirror of stale_doc_example/4 ---
+%% Its own small fixture rather than library_fixture/0 or
+%% check_claim_fixture/0, same reasoning as component_dependency's own
+%% above: one real call site (foo/1 -> bar/1) plus two example_calls/5
+%% facts, one that matches it exactly (not stale) and one that names a
+%% callee the real code never actually calls (stale).
+
+stale_doc_call_fixture() ->
+    [{defines, foo, 1, <<"(x)">>, 'f.erl', 1},
+     {calls, foo, 1, {local, bar, 1}, 'f.erl', 2},
+     {example_calls, foo, 1, {local, bar, 1}, 'd.md', 10},
+     {example_calls, foo, 1, {local, ghost_callee, 2}, 'd.md', 20},
+     %% A top-level script line with no enclosing function at all --
+     %% ts_extract_bash's own real shape for this, found live against
+     %% this project's own docs (a bare `$ symbolic extract "..."`
+     %% command line, not inside any shell function): Fun and Arity
+     %% both come back as the literal atom `undefined`, since there is
+     %% no enclosing function to attribute the call to. Never a
+     %% checkable claim about a SPECIFIC function -- there is no
+     %% function here at all -- so it must never be flagged, no matter
+     %% what its own CallSpec looks like. (A first attempt at this guard
+     %% checked the wrong field entirely -- Callee, not Fun -- caught by
+     %% re-running the live count and finding it completely unchanged.)
+     {example_calls, undefined, undefined, {local, echo, 1}, 'd.md', 30}].
+
+stale_doc_call_does_not_flag_a_real_example_test() ->
+    with_db(stale_doc_call_fixture(), fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(),
+                "stale_doc_call(foo, 1, 'd.md', 10)"))
+    end).
+
+stale_doc_call_flags_an_invented_example_test() ->
+    with_db(stale_doc_call_fixture(), fun() ->
+        ?assertEqual({solutions, [{'DocFile', 'd.md'}, {'Line', 20}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "stale_doc_call(foo, 1, DocFile, Line)"))
+    end).
+
+stale_doc_call_does_not_flag_a_call_with_no_enclosing_function_test() ->
+    with_db(stale_doc_call_fixture(), fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(),
+                "stale_doc_call(undefined, undefined, 'd.md', 30)"))
+    end).
+
+%% --- stale_doc_table_cell/5: table_cell/6 cross-checked against
+%% defines/5, via atom_from_binary/2 (docs/reviewing-llm-output.md §2.1)
+%% --- one real function name, one invented one, and one ordinary-prose
+%% cell that never names a function at all.
+
+stale_doc_table_cell_fixture() ->
+    [{defines, real_fun, 2, <<"(a,b)">>, 'f.erl', 1},
+     {table_cell, 'd.md', 5, 1, 0, <<"real_fun">>, 6},
+     {table_cell, 'd.md', 5, 2, 0, <<"ghost_fun">>, 7},
+     {table_cell, 'd.md', 5, 3, 0, <<"just some prose text">>, 8}].
+
+stale_doc_table_cell_does_not_flag_a_real_function_test() ->
+    with_db(stale_doc_table_cell_fixture(), fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(),
+                "stale_doc_table_cell('d.md', 5, 1, 0, real_fun)"))
+    end).
+
+stale_doc_table_cell_flags_an_invented_function_test() ->
+    with_db(stale_doc_table_cell_fixture(), fun() ->
+        ?assertEqual({solutions, [{'Fun', ghost_fun}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "stale_doc_table_cell('d.md', 5, 2, 0, Fun)"))
+    end).
+
+%% Ordinary prose cell text is not a stale claim -- it's not a claim
+%% about a function at all. atom_from_binary/2 fails cleanly on it
+%% (nothing in the atom table is named "just some prose text"), so
+%% stale_doc_table_cell/5 must fail too, not silently treat "couldn't
+%% even parse this as a function name" as "this function is stale".
+stale_doc_table_cell_does_not_flag_ordinary_prose_test() ->
+    with_db(stale_doc_table_cell_fixture(), fun() ->
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, real_rules(),
+                "stale_doc_table_cell('d.md', 5, 3, 0, _)"))
     end).
 
 too_many_params_flags_over_the_threshold_test() ->

@@ -1,0 +1,32 @@
+@startuml architecture-light
+!include <C4/C4_Container>
+
+' Every color below is a real @picocss/pico v2 default-theme token,
+' read directly out of pico.css's own :root block, not guessed —
+' website/theme/templates/base.html links this exact stylesheet.
+'   --pico-background-color: #fff
+'   --pico-color:            #373c44
+'   --pico-muted-color:      #646b79
+'   --pico-primary-background: #0172ad   (Container fill)
+'   --pico-primary-inverse:    #fff      (Container text)
+'   --pico-secondary-background: #525f7a (Person fill)
+' Every pairing below was measured for real WCAG contrast (not eyeballed):
+' white/#0172AD 5.23:1, white/#525F7A 6.41:1, white/#646B79 5.36:1,
+' #646B79/#FFFFFF (boundary label) 5.36:1 — all clear AA (4.5:1) for
+' normal-size text, the same bar the original single-theme diagram's own
+' container-color fix was measured against.
+skinparam backgroundColor #FFFFFF
+skinparam defaultTextColor #373C44
+skinparam wrapWidth 200
+skinparam defaultFontSize 11
+skinparam ArrowFontSize 11
+skinparam legendFontSize 11
+LAYOUT_LEFT_RIGHT()
+
+UpdateElementStyle("container", $bgColor="#0172AD", $fontColor="#FFFFFF")
+UpdateElementStyle("person", $bgColor="#525F7A", $fontColor="#FFFFFF")
+UpdateElementStyle("external_system", $bgColor="#646B79", $fontColor="#FFFFFF")
+UpdateBoundaryStyle("system", $bgColor="#FFFFFF", $fontColor="#646B79", $borderColor="#646B79")
+
+!include architecture-body.iuml
+@enduml

@@ -4,16 +4,17 @@
 %% cli/0 builds the argparse command tree; its structure (help text,
 %% required flags) is asserted directly. Each subcommand's `handler`
 %% closure calls straight into symbolic_query:run/4, symbolic_parse:run/2,
-%% symbolic_serve:run/0, or symbolic_extract:run/1 — all of which halt()
-%% or run forever — so those four modules are meck-mocked here to verify
-%% the handler extracts and forwards its Args map correctly, without ever
-%% running the real (halting) implementation. main/1 itself
-%% (argparse:run/3) is NOT tested here for the same reason: it dispatches
-%% straight to these same handlers.
+%% symbolic_serve:run/0, symbolic_extract:run/2, or symbolic_check:run/5
+%% — all of which halt() or run forever — so those five modules are
+%% meck-mocked here to verify the handler extracts and forwards its Args
+%% map correctly, without ever running the real (halting) implementation.
+%% main/1 itself (argparse:run/3) is NOT tested here for the same reason:
+%% it dispatches straight to these same handlers.
 
 cli_structure_test() ->
     #{commands := Commands} = symbolic_cli:cli(),
-    ?assertEqual(["extract", "parse", "query", "serve"], lists:sort(maps:keys(Commands))).
+    ?assertEqual(["check", "extract", "parse", "query", "serve"],
+        lists:sort(maps:keys(Commands))).
 
 query_cmd_requires_db_and_goal_test() ->
     #{commands := #{"query" := #{arguments := Args}}} = symbolic_cli:cli(),
@@ -99,13 +100,62 @@ extract_cmd_sentence_is_positional_and_required_test() ->
     %% own `goal` argument.
     ?assertEqual(false, maps:is_key(required, Sentence)).
 
-extract_handler_forwards_sentence_test() ->
+%% --model enables §4.2 Phase 3's fallback chaining onto
+%% symbolic_extract_llm — optional, so a missing flag must default to
+%% `undefined`, not crash on maps:get, the same shape query_cmd's own
+%% `rules` already established.
+extract_cmd_model_is_an_optional_flag_test() ->
+    #{commands := #{"extract" := #{arguments := Args}}} = symbolic_cli:cli(),
+    #{model := Model} = args_by_name(Args),
+    ?assertEqual("model", maps:get(long, Model)),
+    ?assertEqual(false, maps:get(required, Model)).
+
+extract_handler_forwards_sentence_and_defaults_missing_model_test() ->
     meck:new(symbolic_extract),
-    meck:expect(symbolic_extract, run, fun(_Sentence) -> ok end),
+    meck:expect(symbolic_extract, run, fun(_Sentence, _ModelPath) -> ok end),
     #{commands := #{"extract" := #{handler := Handler}}} = symbolic_cli:cli(),
     Handler(#{sentence => "foo/2 calls bar/1"}),
-    ?assert(meck:called(symbolic_extract, run, ["foo/2 calls bar/1"])),
+    ?assert(meck:called(symbolic_extract, run, ["foo/2 calls bar/1", undefined])),
     meck:unload(symbolic_extract).
+
+extract_handler_forwards_the_model_flag_when_given_test() ->
+    meck:new(symbolic_extract),
+    meck:expect(symbolic_extract, run, fun(_Sentence, _ModelPath) -> ok end),
+    #{commands := #{"extract" := #{handler := Handler}}} = symbolic_cli:cli(),
+    Handler(#{sentence => "foo/2 improves performance", model => "/models/x.gguf"}),
+    ?assert(meck:called(symbolic_extract, run,
+        ["foo/2 improves performance", "/models/x.gguf"])),
+    meck:unload(symbolic_extract).
+
+check_cmd_requires_db_and_sentence_test() ->
+    #{commands := #{"check" := #{arguments := Args}}} = symbolic_cli:cli(),
+    #{db := Db, rules := Rules, no_rules := NoRules, model := Model, sentence := Sentence} =
+        args_by_name(Args),
+    ?assertEqual(true, maps:get(required, Db)),
+    ?assertEqual(false, maps:get(required, Rules)),
+    ?assertEqual(boolean, maps:get(type, NoRules)),
+    ?assertEqual(false, maps:get(default, NoRules)),
+    ?assertEqual(false, maps:get(required, Model)),
+    ?assertEqual(false, maps:is_key(required, Sentence)).
+
+check_handler_forwards_all_args_test() ->
+    meck:new(symbolic_check),
+    meck:expect(symbolic_check, run, fun(_Db, _Rules, _NoRules, _Sentence, _Model) -> ok end),
+    #{commands := #{"check" := #{handler := Handler}}} = symbolic_cli:cli(),
+    Handler(#{db => "facts.dets", rules => "rules.pl", no_rules => false,
+              model => "/models/x.gguf", sentence => "foo/2 calls bar/1"}),
+    ?assert(meck:called(symbolic_check, run,
+        ["facts.dets", "rules.pl", false, "foo/2 calls bar/1", "/models/x.gguf"])),
+    meck:unload(symbolic_check).
+
+check_handler_defaults_missing_rules_and_model_test() ->
+    meck:new(symbolic_check),
+    meck:expect(symbolic_check, run, fun(_Db, _Rules, _NoRules, _Sentence, _Model) -> ok end),
+    #{commands := #{"check" := #{handler := Handler}}} = symbolic_cli:cli(),
+    Handler(#{db => "facts.dets", sentence => "foo/2 calls bar/1"}),
+    ?assert(meck:called(symbolic_check, run,
+        ["facts.dets", undefined, false, "foo/2 calls bar/1", undefined])),
+    meck:unload(symbolic_check).
 
 args_by_name(Args) ->
     maps:from_list([{maps:get(name, A), A} || A <- Args]).

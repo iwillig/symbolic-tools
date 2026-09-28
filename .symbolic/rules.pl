@@ -51,6 +51,33 @@ stale_doc_example(Fun, Arity, DocFile, Line) :-
     example_defines(Fun, Arity, _Params, DocFile, Line),
     \+ defines(Fun, Arity, _, _, _).
 
+%% The calls/5 mirror of stale_doc_example/4 above: a Markdown code
+%% sample that shows a call the real code no longer (or never actually)
+%% makes. Same shape, same technique, the other half of the fenced
+%% "is this example still real" check
+%% (docs/reviewing-llm-output.md §7 step 1).
+%%
+%% Fun \= undefined found the hard way, running this live against this
+%% project's own real docs, not assumed -- and found TWICE: a first
+%% guard checked Callee \= undefined instead (the callee position),
+%% which left the live count completely unchanged (still 286) because
+%% that was never where the noise was. The real shape: a bare top-level
+%% script line inside a ```sh/```bash example with no enclosing shell
+%% function at all (readme.md's own CLI usage lines, among many others)
+%% has ts_extract_bash attribute the call to no function whatsoever --
+%% Fun and Arity both come back as the literal atom `undefined`, not
+%% Callee. There is no function here for the claim to be about, so it
+%% can never be a checkable "is this call stale" claim in the first
+%% place -- the same principle stale_doc_table_cell/5's ordinary-prose
+%% guard already uses, just on the caller side instead of the callee
+%% side. Without this, every top-level line in every shell example in
+%% the whole project's docs comes back "stale" at once, drowning the
+%% real hits underneath.
+stale_doc_call(Fun, Arity, DocFile, Line) :-
+    example_calls(Fun, Arity, local(Callee, CalleeArity), DocFile, Line),
+    Fun \= undefined,
+    \+ calls(Fun, Arity, local(Callee, CalleeArity), _, _).
+
 %% Same function/arity defined in more than one file.
 duplicate_name(Fun, Arity, Files) :-
     defines(Fun, Arity, _, _, _),
@@ -1593,3 +1620,63 @@ all_prefer_templates(Triples) :-
 %% for/while branch/5 fact in the same function") would produce false
 %% positives on any async function that merely CONTAINS both a loop and
 %% an unrelated top-level await, so it's left unbuilt rather than wrong.
+
+%% --- check_claim/2: reviewing what an LLM says, not just the code ---
+%% (docs/reviewing-llm-output.md §3.2). Both `symbolic extract` (the
+%% bounded DCG grammar, src/symbolic_extract.erl) and
+%% `symbolic_extract_llm` (the open-vocabulary tool-calling tier) produce
+%% the same svo(Subject, Verb, Object) term shape; this is the other
+%% half neither of them builds — proving one against the real facts
+%% already loaded in this session, never against a re-assertion of the
+%% claim itself. Deliberately narrow: exactly the two relations both
+%% extractors know how to produce, `calls` and `removed` — a relation
+%% outside that set falls through every clause to the catch-all below.
+%%
+%% Three-valued on purpose, not just pass/fail — true/false/unverifiable
+%% mirrors the count-0-vs-error distinction this project insists on
+%% everywhere else (SYSTEM.md's <errors>). A verb this predicate has no
+%% clause for, or a subject with no arity at all ("arity elided by the
+%% prose" — a claim not shaped like Function/Arity), comes back
+%% unverifiable, loudly, not a silently wrong false: a false for a claim
+%% nobody built a check for would be indistinguishable from a real
+%% defect in the code the claim describes.
+%%
+%% `calls` matches either a `local(G, B)` or a `remote(_, G, B)` call —
+%% found the hard way, running this tool against this project's OWN real
+%% (mostly cross-module) call graph, not by inspection: `local(G, B)`
+%% alone missed every real cross-module call, a false negative on a
+%% genuinely true claim (docs/reviewing-llm-output.md §4.2's own
+%% "real use cases" pass caught `check/3 calls writeq1/1` — a real
+%% remote call — reporting `false`). Neither extractor's `svo/3` term
+%% names which module the callee lives in, so a real call has to be
+%% accepted regardless of which shape it's stored as.
+check_claim(svo(F/A, calls, G/B), true) :-
+    ( calls(F, A, local(G, B), _, _)
+    ; calls(F, A, remote(_, G, B), _, _)
+    ), !.
+check_claim(svo(F/A, calls, G/B), false) :-
+    \+ calls(F, A, local(G, B), _, _),
+    \+ calls(F, A, remote(_, G, B), _, _), !.
+check_claim(svo(F, calls, _G), unverifiable) :-
+    \+ (F = _/_), !.
+check_claim(svo(F/A, removed, _), true) :-
+    \+ defines(F, A, _, _, _), !.
+check_claim(svo(F/A, removed, _), false) :-
+    defines(F, A, _, _, _), !.
+check_claim(_, unverifiable).
+
+%% A Markdown table cell that claims a function name the real code no
+%% longer (or never actually) has — the table_cell/6 mirror of
+%% stale_doc_example/4 and stale_doc_call/4 above, unlocked by
+%% atom_from_binary/2 (§2.1: table_cell/6's own Text is a binary,
+%% defines/5's Function is an atom, and erlog has no built-in bridge
+%% between the two). A cell whose text was never a real function name
+%% at all -- ordinary prose, not a claim about code -- fails
+%% atom_from_binary/2 cleanly rather than reaching the \+ defines/5
+%% check, so it is correctly not flagged: "couldn't even parse this as
+%% a function name" and "this function is stale" are different things,
+%% and this rule only ever asserts the second.
+stale_doc_table_cell(File, TableLine, Row, Col, Fun) :-
+    table_cell(File, TableLine, Row, Col, Text, _),
+    atom_from_binary(Text, Fun),
+    \+ defines(Fun, _, _, _, _).
