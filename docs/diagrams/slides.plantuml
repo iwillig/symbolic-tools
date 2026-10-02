@@ -1,0 +1,15 @@
+@startuml
+left to right direction
+node "source files" as source
+node "tree-sitter\n(symbolic_ts NIF)" as ts
+node "facts\ndefines/5, calls/5, ..." as facts
+node "erlog\nProlog session" as erlog
+node "MCP server\nsymbolic serve" as mcp
+node "symbolic CLI" as cli
+
+source --> ts
+ts --> facts
+facts --> erlog
+erlog --> mcp
+erlog --> cli
+@enduml

@@ -1,0 +1,24 @@
+@startuml
+left to right direction
+
+actor "LLM\nagent" as agent
+rectangle "SYSTEM.md\ncustom system prompt" as prompt
+rectangle "source tree" as src
+rectangle "tree-sitter NIF\nsymbolic_ts" as ts
+rectangle "facts\ndefines/5, calls/5, ..." as facts
+rectangle "erlog\nProlog session" as erlog
+rectangle ".symbolic/rules.pl\n88 lint checks" as rules
+rectangle "MCP server\nsymbolic serve\n3 tools: parse,\noverview, query" as mcp
+rectangle "symbolic CLI" as cli
+actor "human" as human
+
+agent --> prompt : reads once
+agent --> mcp : JSON-RPC over stdio
+mcp --> ts : symbolic_parse
+ts --> facts
+facts --> erlog
+mcp --> erlog : symbolic_query\ngoals in, bindings out
+rules --> erlog : consulted at parse
+human --> cli
+cli --> erlog
+@enduml

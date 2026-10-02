@@ -31,3 +31,7 @@ priv/git_sha
 # default, so there's no local venv/ dir here to ignore.
 website/output/
 website/cache/
+
+# Built slide decks (Justfile `build-presentations`) — one portable HTML
+# file per docs/presentations/*.md, regenerated from source, not versioned.
+docs/presentations/*.html
