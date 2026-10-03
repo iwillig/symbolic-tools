@@ -126,3 +126,34 @@ extracts_link_definition_test() ->
         {link_definition, Path, <<"a ref">>, <<"https://example.com/ref">>,
          <<"Ref Title">>, 63},
         Facts)).
+
+%% YAML frontmatter at the top of a document produces a `section` node
+%% with NO heading child — the frontmatter's closing `---` swallows the
+%% line that would otherwise begin real content — so section_fact/2's
+%% "a section's own first named child is always its heading" invariant
+%% is false for it. Before the fix this file killed the whole VM rather
+%% than failing a test: a zero-child section makes node_named_child/2
+%% return a null TSNode, and node_type/1 on a null node dereferenced
+%% NULL inside the NIF (SIGSEGV, not a caught error). Every deck under
+%% docs/presentations/ is this shape, so this fixture is why `symbolic
+%% parse docs/` works at all — see
+%% docs/research-yaml-frontmatter-and-tree-sitter-yaml.md §1.
+extracts_frontmatter_document_test() ->
+    Facts = ts_extract_markdown:file("test/fixtures/frontmatter.md"),
+    Path = list_to_atom("test/fixtures/frontmatter.md"),
+    ?assert(lists:member({heading, Path, 2, <<"The problem">>, 6}, Facts)),
+    ?assert(lists:member({section, Path, 2, 6, 8}, Facts)),
+    ?assert(lists:member(
+        {paragraph, Path, <<"An agent that wants to know something greps for text.">>, 8},
+        Facts)).
+
+%% The degenerate frontmatter section has no heading, so it must yield
+%% NO section fact at all — the guard, not just crash avoidance: a
+%% section with no level and no heading is not a section the fact base
+%% can ask anything about. What must remain is the real content section
+%% at line 6.
+frontmatter_yields_no_headingless_section_fact_test() ->
+    Facts = ts_extract_markdown:file("test/fixtures/frontmatter.md"),
+    Path = list_to_atom("test/fixtures/frontmatter.md"),
+    ?assertEqual([], [F || {section, P, _, Start, _} = F <- Facts,
+                           P =:= Path, Start < 6]).

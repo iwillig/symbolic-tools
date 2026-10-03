@@ -289,10 +289,27 @@ NIF(tree_root_node) {
 
 /* ---- node ---- */
 
+/* Every accessor below dereferences its TSNode, and tree-sitter's own
+   API contract is that a null node must never be passed to one:
+   ts_node__subtree() is literally `*(const Subtree *)self.id` (a NULL
+   deref), and ts_node_type() also reads self.tree. Null nodes are
+   reachable for real — node_named_child/2 past the last child returns
+   one, because make_node_term_always/2 deliberately does not collapse
+   them to `undefined` — and a Markdown document with YAML frontmatter
+   produced exactly that shape in ts_extract_markdown:section_fact/2,
+   SIGSEGV'ing the whole BEAM on `symbolic parse docs/`
+   (docs/research-yaml-frontmatter-and-tree-sitter-yaml.md §1). The
+   guard mirrors what node_text/2 already does on the Erlang side and
+   what make_node_term/2 does for sibling navigation: a null node is
+   `undefined`, never a crash the caller cannot catch. */
+#define NULL_NODE_IF_NULL(node) \
+    if (ts_node_is_null(node)) return atom_undefined;
+
 NIF(node_type) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return enif_make_string(env, ts_node_type(node), ERL_NIF_LATIN1);
 }
 
@@ -300,6 +317,7 @@ NIF(node_start_byte) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return enif_make_uint(env, ts_node_start_byte(node));
 }
 
@@ -307,6 +325,7 @@ NIF(node_end_byte) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return enif_make_uint(env, ts_node_end_byte(node));
 }
 
@@ -314,6 +333,7 @@ NIF(node_start_point) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return tspoint_to_map(env, ts_node_start_point(node));
 }
 
@@ -321,6 +341,7 @@ NIF(node_end_point) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return tspoint_to_map(env, ts_node_end_point(node));
 }
 
@@ -335,6 +356,7 @@ NIF(node_parent) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return make_node_term_always(env, ts_node_parent(node));
 }
 
@@ -344,6 +366,7 @@ NIF(node_named_child) {
     BADARG_IF(!get_node(env, argv[0], &node));
     unsigned int index;
     BADARG_IF(!enif_get_uint(env, argv[1], &index));
+    NULL_NODE_IF_NULL(node);
     return make_node_term_always(env, ts_node_named_child(node, index));
 }
 
@@ -351,6 +374,7 @@ NIF(node_named_child_count) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return enif_make_uint(env, ts_node_named_child_count(node));
 }
 
@@ -358,6 +382,7 @@ NIF(node_child_by_field_name) {
     BADARG_IF(argc != 2);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     char *name = NULL;
     unsigned int name_len;
     BADARG_IF(!get_owned_string(env, argv[1], &name, &name_len));
@@ -376,6 +401,7 @@ NIF(node_next_sibling) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return make_node_term(env, ts_node_next_sibling(node));
 }
 
@@ -383,6 +409,7 @@ NIF(node_prev_sibling) {
     BADARG_IF(argc != 1);
     TSNode node;
     BADARG_IF(!get_node(env, argv[0], &node));
+    NULL_NODE_IF_NULL(node);
     return make_node_term(env, ts_node_prev_sibling(node));
 }
 

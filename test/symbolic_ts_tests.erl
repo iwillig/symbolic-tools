@@ -65,3 +65,29 @@ node_text_is_undefined_for_a_null_node_test() ->
     NullNode = symbolic_ts:node_named_child(Root, 99),
     ?assertEqual(undefined, symbolic_ts:node_text(NullNode, Source)),
     ?assertEqual(undefined, symbolic_ts:node_text(NullNode, list_to_binary(Source))).
+
+%% A null TSNode — node_named_child/2 past the last child returns one,
+%% because make_node_term_always/2 deliberately does NOT collapse it to
+%% `undefined` (c_src/symbolic_ts_nif.c, so callers can node_is_null/1
+%% themselves) — must make every node accessor return `undefined`
+%% without ever reaching C. node_type on a null node used to deref
+%% ts_node__subtree(NULL.id) and SIGSEGV the whole BEAM, verified live
+%% against a frontmatter-shaped Markdown document
+%% (docs/research-yaml-frontmatter-and-tree-sitter-yaml.md §1); the same
+%% guard node_text/2 already applies on the Erlang side, extended here
+%% to every NIF that dereferences a node.
+null_node_accessors_return_undefined_test() ->
+    Root = parse("f() -> hello_world.\n"),
+    Null = symbolic_ts:node_named_child(Root, 99),
+    ?assertEqual(true, symbolic_ts:node_is_null(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_type(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_start_byte(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_end_byte(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_start_point(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_end_point(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_named_child_count(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_named_child(Null, 0)),
+    ?assertEqual(undefined, symbolic_ts:node_child_by_field_name(Null, "name")),
+    ?assertEqual(undefined, symbolic_ts:node_parent(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_next_sibling(Null)),
+    ?assertEqual(undefined, symbolic_ts:node_prev_sibling(Null)).

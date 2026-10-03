@@ -276,12 +276,26 @@ code_lang(Node, Src) ->
 sections(Lang, Root, _Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?SECTION_QUERY),
     Caps = symbolic_ts:query_capture(Root, Q),
-    Nodes = lists:usort([N || {"s", N} <- Caps]),
+    %% A headingless section is skipped, not indexed into — see
+    %% section_fact/2's comment for the frontmatter shape that produces
+    %% one, and why indexing into it used to SIGSEGV the VM.
+    Nodes = lists:usort(
+        [N || {"s", N} <- Caps, symbolic_ts:node_named_child_count(N) > 0]),
     lists:usort([section_fact(N, PathAtom) || N <- Nodes]).
 
 %% A section's own first named child is always its heading (atx_heading
 %% or setext_heading) — the rest is whatever falls under it, nested
 %% sections for subheadings included (see this module's header comment).
+%% EXCEPT a document with YAML frontmatter: the grammar groups the
+%% lines after the frontmatter's closing `---` into a `section` with NO
+%% heading child, and this clause's "always" is false for it. That
+%% shape used to SIGSEGV the whole VM — node_named_child/2 on the empty
+%% section returns a null TSNode, and node_type/1 on a null node
+%% dereferenced NULL inside the NIF (the guards added alongside this
+%% fix in c_src/symbolic_ts_nif.c return `undefined` instead, but a
+%% headingless section is not a section the fact base can ask anything
+%% about, so sections/4 skips it before this clause runs at all). See
+%% docs/research-yaml-frontmatter-and-tree-sitter-yaml.md §1.
 section_fact(Node, PathAtom) ->
     Heading = symbolic_ts:node_named_child(Node, 0),
     Level = heading_level_of(Heading),
