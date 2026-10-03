@@ -13,6 +13,13 @@ class SymbolicTools < Formula
 
   depends_on "erlang"
   depends_on "rebar3" => :build
+  # erllama (the symbolic_extract_llm model runtime) vendors llama.cpp,
+  # whose first compile runs cmake — Homebrew's build sandbox does not put
+  # an undeclared cmake on PATH, and the build dies in erllama's
+  # do_cmake.sh with `cmake: command not found` (verified live while
+  # cutting v0.1.4; the repo's own Brewfile already listed cmake for the
+  # same reason). See docs/reviewing-llm-output.md §4.2 Phase 0.
+  depends_on "cmake" => :build
 
   def install
     system "rebar3", "release"
