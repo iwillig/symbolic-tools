@@ -1,0 +1,16 @@
+[package]
+name = "symbolic_ts"
+version = "0.2.0"
+edition = "2021"
+publish = false
+description = "Rustler NIF for symbolic-tools: a small, purpose-built tree-sitter binding"
+
+[lib]
+name = "symbolic_ts"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.38"
+
+[build-dependencies]
+cc = "1"

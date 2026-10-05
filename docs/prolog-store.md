@@ -278,7 +278,7 @@ list of facts *before* that one write happens:
   gets the same speedup. Safe because every extractor calls
   `symbolic_ts:parser_new/0` fresh per file — no shared mutable parser
   state across concurrent NIF calls (confirmed against
-  `c_src/symbolic_ts_nif.c`: its own globals are read-only atoms/
+  `native/symbolic_ts/src/lib.rs`: its own globals are read-only atoms/
   resource-type handles set once at NIF load time). A crash in any one
   file's extraction is re-raised in the caller (`error({parse_worker_crashed,
   Reason})`) rather than silently dropped, so parallelizing the common

@@ -1,6 +1,9 @@
-%%% Thin NIF wrapper around symbolic_ts_nif.c — the ~20 tree-sitter C API
-%%% functions this project actually uses, ported from (and replacing)
-%%% the vendored `erl_ts` fork. See docs/tree-sitter-erlang.md.
+%%% Thin Erlang wrapper around the symbolic_ts Rustler NIF
+%%% (native/symbolic_ts — previously c_src/symbolic_ts_nif.c) — the ~25
+%%% tree-sitter functions this project actually uses, ported from (and
+%%% replacing) the vendored `erl_ts` fork. The .so is built by
+%%% scripts/build_nif.sh via rebar3's compile pre-hook. See
+%%% docs/tree-sitter-erlang.md.
 %%%
 %%% Same names/arities as the erl_ts functions this replaces, so
 %%% ts_extract_erlang.erl / ts_extract_typescript.erl / ts_extract_markdown.erl

@@ -92,7 +92,7 @@
 %%% several clauses) — confirmed the path is
 %%% node_next_sibling(Comment) -> fun_decl,
 %%% node_named_child(FunDecl, 0) -> function_clause, then the same
-%%% node_child_by_field_name(_, "name") lookup defines/3 already uses.
+%%% node_child_by_field_name(_, <<"name">>) lookup defines/3 already uses.
 %%%
 %%% Confirmed by testing, not assumed: node_next_sibling/1 and
 %%% node_prev_sibling/1 return the plain atom `undefined` when there's
@@ -103,24 +103,24 @@
 -export([file/1, text/2]).
 -import(ts_extract_text, [to_atom/1, to_text/1]).
 
--define(DEF_QUERY, "(function_clause name: (atom) @fun_name)").
--define(LOCAL_CALL_QUERY, "(call expr: (atom) @callee)").
--define(REMOTE_CALL_QUERY, "(call expr: (remote) @call)").
--define(COMMENT_QUERY, "(comment) @c").
+-define(DEF_QUERY, <<"(function_clause name: (atom) @fun_name)">>).
+-define(LOCAL_CALL_QUERY, <<"(call expr: (atom) @callee)">>).
+-define(REMOTE_CALL_QUERY, <<"(call expr: (remote) @call)">>).
+-define(COMMENT_QUERY, <<"(comment) @c">>).
 
 %% One fact per element of every `-export([...])` list — the query binds
 %% the whole attribute and `export_facts/3` reads its `fa` children, so a
 %% 5-function list yields 5 facts and the two node-walk conventions
 %% (multi-capture queries double their matches; `fa` has no addressable
 %% fields) never have to be fought. See ?DEF_QUERY's module header.
--define(EXPORT_QUERY, "(export_attribute) @e").
+-define(EXPORT_QUERY, <<"(export_attribute) @e">>).
 
 %% `fun Name/Arity` — an internal_fun node (children [atom, arity
 %% [integer]], all confirmed by dumping the tree). The OTHER two fun
 %% shapes are deliberately NOT captured: external_fun is a different
 %% module's function (not a reference to a local one) and anonymous_fun
 %% names nothing.
--define(FUN_REF_QUERY, "(internal_fun) @fun").
+-define(FUN_REF_QUERY, <<"(internal_fun) @fun">>).
 
 %% One query per decision-point construct, for real (McCabe-style)
 %% complexity instead of the fan_out/3-based proxy too_complex/3 uses.
@@ -133,9 +133,9 @@
 %% TypeScript's binary_expression does hasn't been verified — see
 %% .symbolic/rules.pl's real_complexity/4 doc comment.
 -define(BRANCH_QUERIES, [
-    {cr_clause, "(cr_clause) @b"},
-    {if_clause, "(if_clause) @b"},
-    {receive_after, "(receive_after) @b"}
+    {cr_clause, <<"(cr_clause) @b">>},
+    {if_clause, <<"(if_clause) @b">>},
+    {receive_after, <<"(receive_after) @b">>}
 ]).
 
 %% binary_op_expr/unary_op_expr have NO addressable fields at all —
@@ -151,23 +151,23 @@
 %% operators (what the motivating ESLint rules need); arithmetic/
 %% bitwise are the same mechanism, just unbuilt.
 -define(BINARY_OP_QUERIES, [
-    {'==', "(binary_op_expr \"==\") @b"},
-    {'/=', "(binary_op_expr \"/=\") @b"},
-    {'=:=', "(binary_op_expr \"=:=\") @b"},
-    {'=/=', "(binary_op_expr \"=/=\") @b"},
-    {'<', "(binary_op_expr \"<\") @b"},
-    {'>', "(binary_op_expr \">\") @b"},
-    {'>=', "(binary_op_expr \">=\") @b"},
-    {'=<', "(binary_op_expr \"=<\") @b"},
-    {'and', "(binary_op_expr \"and\") @b"},
-    {'or', "(binary_op_expr \"or\") @b"},
-    {'andalso', "(binary_op_expr \"andalso\") @b"},
-    {'orelse', "(binary_op_expr \"orelse\") @b"}
+    {'==', <<"(binary_op_expr \"==\") @b">>},
+    {'/=', <<"(binary_op_expr \"/=\") @b">>},
+    {'=:=', <<"(binary_op_expr \"=:=\") @b">>},
+    {'=/=', <<"(binary_op_expr \"=/=\") @b">>},
+    {'<', <<"(binary_op_expr \"<\") @b">>},
+    {'>', <<"(binary_op_expr \">\") @b">>},
+    {'>=', <<"(binary_op_expr \">=\") @b">>},
+    {'=<', <<"(binary_op_expr \"=<\") @b">>},
+    {'and', <<"(binary_op_expr \"and\") @b">>},
+    {'or', <<"(binary_op_expr \"or\") @b">>},
+    {'andalso', <<"(binary_op_expr \"andalso\") @b">>},
+    {'orelse', <<"(binary_op_expr \"orelse\") @b">>}
 ]).
 
 -define(UNARY_OP_QUERIES, [
-    {'-', "(unary_op_expr \"-\") @b"},
-    {'not', "(unary_op_expr \"not\") @b"}
+    {'-', <<"(unary_op_expr \"-\") @b">>},
+    {'not', <<"(unary_op_expr \"not\") @b">>}
 ]).
 
 -spec file(file:filename()) -> [tuple()].
@@ -190,17 +190,17 @@ text(Path, Src0) ->
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_erlang(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    %% parser_parse_string's NIF decodes its argument via enif_get_string,
-    %% which requires a real Erlang list — it cannot take a binary
-    %% directly (confirmed against c_src/symbolic_ts_nif.c). Every
-    %% node_text/2 call below this point, by contrast, wants a binary for
-    %% its own O(1) slice — so both forms are produced once, up front,
-    %% and node_text/2's own consumers (Src) get the binary.
-    {SrcList, Src} = case Src0 of
-        B when is_binary(B) -> {binary_to_list(B), B};
-        L when is_list(L) -> {L, list_to_binary(L)}
+    %% parser_parse_string's NIF takes a binary — the source's actual UTF-8
+    %% bytes, handed straight to tree-sitter (the old C NIF took a char list
+    %% it decoded Latin-1, which silently truncated codepoints > 255). List
+    %% input is still accepted here: ts_extract_markdown forwards
+    %% node_text/2 output (a list) from fenced code blocks into this
+    %% function.
+    Src = case Src0 of
+        B when is_binary(B) -> B;
+        L when is_list(L) -> list_to_binary(L)
     end,
-    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
+    Tree = symbolic_ts:parser_parse_string(Parser, Src),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =
@@ -285,7 +285,7 @@ defines(Lang, Root, Src, PathAtom) ->
 
 define_fact(NameNode, Src, PathAtom) ->
     Clause = symbolic_ts:node_parent(NameNode),
-    {Arity, Params} = args_shape(Clause, "args", Src),
+    {Arity, Params} = args_shape(Clause, <<"args">>, Src),
     {defines, to_atom(symbolic_ts:node_text(NameNode, Src)), Arity, Params,
      PathAtom, line(NameNode)}.
 
@@ -309,7 +309,7 @@ local_call_facts(N, Src, PathAtom) ->
             [];
         {true, {Caller, CallerArity}} ->
             CallNode = symbolic_ts:node_parent(N),
-            {ArgCount, _Params} = args_shape(CallNode, "args", Src),
+            {ArgCount, _Params} = args_shape(CallNode, <<"args">>, Src),
             CallSpec = {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
             [{calls, Caller, CallerArity, CallSpec, PathAtom, line(N)}
              | call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom)]
@@ -331,11 +331,11 @@ remote_call_facts(RemoteNode, Src, PathAtom) ->
         false ->
             [];
         {true, {Caller, CallerArity}} ->
-            ModNode = symbolic_ts:node_child_by_field_name(RemoteNode, "module"),
-            ModAtomNode = symbolic_ts:node_child_by_field_name(ModNode, "module"),
-            FunNode = symbolic_ts:node_child_by_field_name(RemoteNode, "fun"),
+            ModNode = symbolic_ts:node_child_by_field_name(RemoteNode, <<"module">>),
+            ModAtomNode = symbolic_ts:node_child_by_field_name(ModNode, <<"module">>),
+            FunNode = symbolic_ts:node_child_by_field_name(RemoteNode, <<"fun">>),
             CallNode = symbolic_ts:node_parent(RemoteNode),
-            {ArgCount, _Params} = args_shape(CallNode, "args", Src),
+            {ArgCount, _Params} = args_shape(CallNode, <<"args">>, Src),
             CallSpec = {remote, to_atom(symbolic_ts:node_text(ModAtomNode, Src)),
                 to_atom(symbolic_ts:node_text(FunNode, Src)), ArgCount},
             [{calls, Caller, CallerArity, CallSpec, PathAtom, line(RemoteNode)}
@@ -353,7 +353,7 @@ remote_call_facts(RemoteNode, Src, PathAtom) ->
 %% this makes NO new query and cannot disagree with calls/5's own count.
 call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom) ->
     Id = node_id(PathAtom, CallNode),
-    ArgsNode = symbolic_ts:node_child_by_field_name(CallNode, "args"),
+    ArgsNode = symbolic_ts:node_child_by_field_name(CallNode, <<"args">>),
     N = symbolic_ts:node_named_child_count(ArgsNode),
     ExprFact = {expr, Id, Caller, CallerArity, call, PathAtom, line(CallNode)},
     OpFact = {expr_operator, Id, CallSpec},
@@ -565,8 +565,8 @@ definition_name(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "fun_decl" ->
             Clause = symbolic_ts:node_named_child(Node, 0),
-            NameNode = symbolic_ts:node_child_by_field_name(Clause, "name"),
-            {Arity, _Params} = args_shape(Clause, "args", Src),
+            NameNode = symbolic_ts:node_child_by_field_name(Clause, <<"name">>),
+            {Arity, _Params} = args_shape(Clause, <<"args">>, Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         _ ->
             false
@@ -581,8 +581,8 @@ definition_name(Node, Src) ->
 caller_info(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_clause" ->
-            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
-            {Arity, _Params} = args_shape(Node, "args", Src),
+            NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+            {Arity, _Params} = args_shape(Node, <<"args">>, Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         _ ->
             Parent = symbolic_ts:node_parent(Node),

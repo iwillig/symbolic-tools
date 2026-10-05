@@ -25,7 +25,7 @@
 %% is what makes this shareable (comment attachment is one of the few
 %% things every grammar spells identically).
 comment_nodes(Lang, Root) ->
-    {Q, _, _} = symbolic_ts:query_new(Lang, "(comment) @c"),
+    {Q, _, _} = symbolic_ts:query_new(Lang, <<"(comment) @c">>),
     Caps = symbolic_ts:query_capture(Root, Q),
     lists:usort([N || {"c", N} <- Caps]).
 

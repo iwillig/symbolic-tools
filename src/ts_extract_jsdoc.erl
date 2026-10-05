@@ -52,11 +52,17 @@
 -export([tags/5]).
 -import(ts_extract_text, [to_atom/1, to_text/1]).
 
--spec tags(atom(), non_neg_integer(), atom(), pos_integer(), string()) -> [tuple()].
-tags(Function, Arity, PathAtom, StartLine, Src) ->
+-spec tags(atom(), non_neg_integer(), atom(), pos_integer(), string() | binary()) -> [tuple()].
+tags(Function, Arity, PathAtom, StartLine, Src0) ->
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_jsdoc(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
+    %% parser_parse_string's NIF takes a binary; the caller hands this
+    %% function a node_text/2-extracted comment, which is a list.
+    Src = case Src0 of
+        B when is_binary(B) -> B;
+        L when is_list(L) -> list_to_binary(L)
+    end,
     Tree = symbolic_ts:parser_parse_string(Parser, Src),
     Root = symbolic_ts:tree_root_node(Tree),
     N = symbolic_ts:node_named_child_count(Root),

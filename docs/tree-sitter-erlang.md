@@ -6,22 +6,32 @@ sites, positions) fed into the Prolog database. It is the Erlang counterpart
 to the code-graph extraction in `readme.md` and the closure step in
 [`erlang-mcp-design.md`](erlang-mcp-design.md).
 
-**Status: implemented.** `symbolic_ts` (`c_src/symbolic_ts_nif.c` +
-`src/symbolic_ts.erl`) is a small, purpose-built NIF wrapping exactly the
-~20 tree-sitter C API functions this project actually calls — not a
-general-purpose binding. It replaces an earlier design (and, for a while,
-an earlier real implementation) built on
-[`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts), a third-party
-binding wrapping close to the entire tree-sitter C API. That dependency
-was vendored and hand-patched all session to add TypeScript and Markdown
-grammar support directly in its C source — but keeping that fork
-untracked in git (to keep it out of this repo) turned out to actively
-block packaging: a fresh `git clone` had no fork to build against, so a
-plain `rebar3 release` would try to fetch the *unmodified* upstream and
-silently produce a broken build. Since this project only ever called a
-small fraction of what `erl_ts` exposed, inlining just that fraction —
-owned and tracked here, no external dependency at all — solved that
-outright. See §2 for what got inlined and why.
+**Status: implemented.** `symbolic_ts` (`native/symbolic_ts`, a
+[Rustler](https://github.com/rustler-lang/rustler) crate, + the thin
+`src/symbolic_ts.erl` wrapper) is a small, purpose-built NIF wrapping
+exactly the ~25 tree-sitter functions this project actually calls — not a
+general-purpose binding. History: it started as a vendored fork of the
+third-party [`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts)
+binding; was inlined as a purpose-built C NIF
+(`c_src/symbolic_ts_nif.c`, gone now but visible in git history) once the
+fork turned out to actively block packaging; and was then ported to Rust,
+because the two crashes the C NIF's own comments documented — a
+tree-freeing use-after-free the C side could only paper over with a
+deliberate one-tree-per-parse leak, and a null-node deref that SIGSEGV'd
+the whole VM — are exactly the failure classes Rust's ownership model
+encodes structurally (see §2.1). The C→Rust port was gated on a fact
+parity check (`scripts/parity_check.sh`): byte-identical fact output
+over this repo's own `src/`, `docs/`, and `test/fixtures/` before and
+after. The erl_ts fork had been vendored and hand-patched all session
+to add TypeScript and Markdown grammar support directly in its C
+source — but keeping that fork untracked in git (to keep it out of this
+repo) turned out to actively block packaging: a fresh `git clone` had no
+fork to build against, so a plain `rebar3 release` would try to fetch
+the *unmodified* upstream and silently produce a broken build. Since
+this project only ever called a small fraction of what `erl_ts` exposed,
+inlining just that fraction — owned and tracked here, no external
+dependency at all — solved that outright, and the Rust port then solved
+what the C version itself couldn't (§2.1, §6).
 
 ## 1. Why a NIF (and not a subprocess)
 
@@ -56,12 +66,35 @@ real C implementation directly, not guessed from its header comments.
   internally, the same as `erl_ts`'s version did, so Erlang never needs
   to hold one. Only 5 resource types exist: `TSLanguage`, `TSParser`,
   `TSTree`, `TSQuery`, `TSNode`.
-- **Build.** Ordinary rebar3 `port_specs` + the standard `pc` (port
-  compiler) hex plugin — the same mechanism many rebar3 NIF packages use
-  (e.g. `jiffy`) — not a hand-rolled Makefile. See `rebar.config`.
-  `c_src/symbolic_ts_nif.c` is the whole NIF; the tree-sitter runtime
-  lives at `c_src/tree-sitter/`, and each grammar at
-  `c_src/grammars/<name>/`.
+- **Build.** Cargo, driven by `scripts/build_nif.sh` through rebar3's
+  compile `pre_hooks` (`rebar.config`) — so every `rebar3 compile`,
+  `eunit`, `shell`, and `release` picks up a freshly built NIF before
+  any beam loads it. The crate compiles the *same* vendored tree-sitter
+  runtime (`c_src/tree-sitter/`) and grammars
+  (`c_src/grammars/<name>/`) the old `pc`-plugin build did, via the `cc`
+  crate (`native/symbolic_ts/build.rs`) — not crates.io grammar
+  crates: the vendored grammars are a mix of ABI 14 and 15, several are
+  revision-pinned behind what's published, and the extracted fact
+  shapes depend on the grammars' node types, so the parity gate depends
+  on zero grammar drift. `native/symbolic_ts/src/lib.rs` is the whole
+  NIF; `src/ffi.rs` is its `#[repr(C)]` mirror of tree-sitter's `api.h`.
+- **Rust ownership is the point, not a style choice** — four things the
+  C NIF couldn't express, now structural:
+  1. Every `NodeRes` pins a `ResourceArc<TreeRes>` of its tree, so
+     `TreeRes`'s `Drop` really calls `ts_tree_delete` — the leak that
+     §6 documents from the C era is gone, with a regression test that
+     measures RSS (measured directly: the C NIF grew ~1 GB over the
+     test's window; the Rust NIF a few MB).
+  2. Null nodes are guarded in one place (`null_guard/2`) — every
+     accessor returns `undefined` for a null *input* node, the contract
+     `test/symbolic_ts_tests.erl` pins.
+  3. `parser_parse_string/2` and `query_capture/2` are scheduled
+     `DirtyCpu`, off the normal schedulers the whole VM shares.
+  4. Source input is a real UTF-8 binary handed to tree-sitter as raw
+     bytes; the C NIF decoded Erlang char lists via `enif_get_string`
+     with `ERL_NIF_LATIN1`, silently truncating codepoints > 255 and
+     desynchronizing every byte offset from the actual file — for
+     non-Latin-1 sources, `node_text/2` sliced the wrong bytes.
 - **Handles are opaque Erlang resources**, same as before: parsers,
   trees, nodes, queries, and languages cross the boundary as
   `#Ref<...>`-backed resource terms; you call back in to read them.
@@ -72,18 +105,22 @@ real C implementation directly, not guessed from its header comments.
 {ok, Parser} = symbolic_ts:parser_new(),
 {ok, Lang}   = symbolic_ts:tree_sitter_erlang(),
 true = symbolic_ts:parser_set_language(Parser, Lang),
-Tree = symbolic_ts:parser_parse_string(Parser, Src),
+Tree = symbolic_ts:parser_parse_string(Parser, Src),  % Src: a binary
 Root = symbolic_ts:tree_root_node(Tree),
 
 {Q, _, _} = symbolic_ts:query_new(Lang,
-                "(function_clause name: (atom) @name)"),
+                <<"(function_clause name: (atom) @name)">>),
 Caps      = symbolic_ts:query_capture(Root, Q),   % [{"name", NodeRef}, ...]
 [symbolic_ts:node_text(N, Src) || {_, N} <- Caps].
 ```
 
-`node_text/2` needs the source string because nodes are (start_byte,
-end_byte) spans, not owned text — so keep the source around for the life
-of the tree.
+`Src` and the query string are **binaries** — the NIF hands their raw
+bytes to tree-sitter (a char list used to be accepted, and silently
+mangled; see §2.1's point 4). `node_text/2` needs the source because
+nodes are (start_byte, end_byte) spans, not owned text — so keep the
+source around for the life of the tree. Capture names and `node_type/1`
+still come back as char lists, matching the original C NIF's return
+shapes.
 
 ## 3. What tree-sitter gives us — and what it doesn't
 
@@ -113,7 +150,8 @@ erlog / Prolog    -->  relational queries over the graph     (the MCP tools)
   → extract → emit facts) tight.
 - **Bundle only the languages we parse.** Each is one grammar directory
   under `c_src/grammars/<name>/`, one `tree_sitter_<name>/0` NIF entry,
-  and a `port_specs` source-list addition. Keep the count deliberate.
+  and one entry in `native/symbolic_ts/build.rs`'s `GRAMMARS` list. Keep
+  the count deliberate.
 - **Manage lifetimes — but know what actually holds what.** `TSNode`
   holds a raw, unretained pointer into the `TSTree` it came from, with no
   reference counting of its own — the tree-sitter C API's documented
@@ -135,24 +173,21 @@ erlog / Prolog    -->  relational queries over the graph     (the MCP tools)
    `grammar.json`/`node-types.json`/bindings/tests; none of that is
    needed to compile. Confirm the grammar's license (MIT for all three
    in use today) and that it's plain C, not C++, before vendoring.
-2. `c_src/symbolic_ts_nif.c` — add the `extern const TSLanguage
-   *tree_sitter_<name>(void);` declaration, a `nif_tree_sitter_<name>`
-   function identical in shape to the existing ones (named with a
-   `nif_` prefix specifically to avoid colliding with the grammar's own
-   real C symbol of the same base name — a real link error hit while
-   inlining Markdown support this way), and register it in
-   `nif_funcs[]` via `NIF_ENTRY_AS("tree_sitter_<name>", 0,
-   nif_tree_sitter_<name>)`.
-3. `src/symbolic_ts.erl` — add `tree_sitter_<name>/0` to both `-export`
-   and the stub-function list (`erlang:nif_error(nif_not_loaded)`) —
-   the C change alone isn't enough; skipping this produces "function not
-   found" at load time.
-4. `rebar.config`'s `port_specs` — add
-   `"c_src/grammars/<name>/parser.c"` and `.../scanner.c"` to the
-   source list. If the grammar's `scanner.c` needs a shared header from
-   its own upstream repo (TypeScript's does — `common/scanner.h`,
-   shared between its `typescript` and `tsx` grammars), vendor that too
-   and add its directory to `port_env`'s `CFLAGS` `-I` list.
+2. `native/symbolic_ts/src/ffi.rs` — add the `extern "C"` declaration
+   `pub fn tree_sitter_<name>() -> *const TSLanguage;` alongside the
+   existing ones (it binds the grammar's own real C symbol).
+3. `native/symbolic_ts/src/lib.rs` — add a `#[rustler::nif]` loader
+   (`tree_sitter_<name>`, identical in shape to the existing ones, with
+   an `unable_to_create_language_<name>` atom in the `atoms!` block),
+   then a matching `tree_sitter_<name>/0` stub to `src/symbolic_ts.erl`'s
+   `-export` and stub-function list (`erlang:nif_error(nif_not_loaded)`)
+   — the Rust change alone isn't enough; skipping the Erlang side
+   produces "function not found" at load time.
+4. `native/symbolic_ts/build.rs` — add `"<name>"` to the `GRAMMARS`
+   list. If the grammar's `scanner.c` needs a shared header from its
+   own upstream repo (TypeScript's does — `common/scanner.h`, shared
+   between its `typescript` and `tsx` grammars), vendor that too and
+   add its directory as a `build.include(...)` in the same script.
 
 Once loaded, the language's own public query names
 (`function_declaration`, `call_expression`, `member_expression` for
@@ -202,11 +237,10 @@ grammar here already happened to use.
 using `std::vector`/namespaces, itself including a second C++ file,
 `schema.generated.cc`) — not just a `.cc` extension on otherwise-C code.
 Every scanner-using grammar needs its external scanner for correct
-tokenization, so this isn't optional to skip. This project's whole
-build (`c_src/symbolic_ts_nif.c`, `rebar.config`'s `pc`-based
-`port_specs`) is pure C with no C++ toolchain wired in at all — adding
-YAML for real means wiring one in first (real, separate scope), not
-something to force through by fighting the build. Its grammar is also
+tokenization, so this isn't optional to skip. This project's whole build (the `cc`-compiled C in
+`native/symbolic_ts/build.rs`) is pure C with no C++ toolchain wired in
+at all — adding YAML for real means wiring one in first (real, separate
+scope), not something to force through by fighting the build. Its grammar is also
 structurally the most complex of the three by a wide margin even
 setting that aside: anchors, aliases, and tags are first-class node
 types that can wrap a value in place of a plain scalar, so a "get the
@@ -293,10 +327,11 @@ for what it's used for.
   (a warning, not a build error, since a NIF `.so` resolves symbols
   lazily), and no such symbol exists anywhere at runtime to satisfy it
   — so it fails at `erlang:load_nif/2` with "undefined symbol:
-  le16toh", not at compile time. `rebar.config`'s `port_env` `CFLAGS`
-  now sets both flags, matching what upstream tree-sitter's own
+  le16toh", not at compile time. `native/symbolic_ts/build.rs`'s `cc`
+  invocation sets both flags, matching what upstream tree-sitter's own
   Makefile always did (lost when this project's build moved onto the
-  `pc` plugin instead of that Makefile).
+  `pc` plugin instead of that Makefile, and preserved through the
+  Rust port — the same flags, verified by a real CI failure first).
 - **Don't call `symbolic_ts:init/0` yourself.** It's the module's
   `-on_load` hook, invoked automatically the first time `symbolic_ts` is
   referenced. Calling it again crashes the runtime with a boot-time
@@ -314,26 +349,30 @@ for what it's used for.
   node of the type you need, rather than relying on multi-capture
   correlation. Also dedupe (`lists:usort/1` over the whole fact list)
   before rendering facts, regardless.
-- **A `TSTree` cannot be safely freed once any `TSNode` from it might
-  still be alive — even from Erlang's own GC's point of view.**
-  Confirmed the hard way: giving the NIF's `TSTree` resource a real
-  `free` callback (`ts_tree_delete`, replacing `erl_ts`'s original
-  no-op) reproduced as a consistent SIGSEGV in
-  `ts_extract_markdown:file/1` — its `Tree` variable is only used once,
-  to compute `Root`, so the BEAM compiler's liveness analysis lets the
-  GC collect the `Tree` resource term well before the function finishes
-  using nodes derived from it. `erl_ts`'s original no-op `free_TSTree`
-  wasn't an oversight — it's the safe (if leaky) choice absent real
-  reference-counting between resource types. `symbolic_ts` intentionally
-  leaks every parsed tree for the life of the process, matching that
-  behavior; harmless for the one-shot CLI, but something to actually fix
-  (e.g. each `Node` resource keeping its owning `Tree` resource term
-  alive via `enif_keep_resource`) before a long-running MCP session
-  parses many files without restarting.
-- **Scheduler threads.** A NIF holds its calling thread for the parse
-  duration. Single-file parses are fast (tree-sitter is ~100s of MB/s), so
-  this is usually a non-issue; for very large files consider `enif_thread_fork`
-  or capping per-parse input size.
+- **`TSTree` lifetime — the C-era trap, now fixed structurally.**
+  Confirmed the hard way in the C NIF era: giving the `TSTree` resource
+  a real `free` callback (`ts_tree_delete`) reproduced as a consistent
+  SIGSEGV in `ts_extract_markdown:file/1` — its `Tree` variable is only
+  used once, to compute `Root`, so the BEAM compiler's liveness analysis
+  lets the GC collect the `Tree` resource term well before the function
+  finishes using nodes derived from it. `TSNode` holds a raw, unretained
+  pointer into its tree; the C NIF therefore deliberately leaked every
+  tree (no-op `free_tree`), which was safe but grew a long-running MCP
+  session monotonically. The Rust NIF fixes the actual lifetime, not
+  the symptom: every `NodeRes` pins a `ResourceArc<TreeRes>` of its
+  tree, so `TreeRes`'s `Drop` really calls `ts_tree_delete` — and can
+  only run once no node resource referencing that tree remains.
+  `test/symbolic_ts_tests.erl`'s
+  `tree_per_parse_does_not_leak_test_` pins it by measuring OS-level
+  RSS (measured against the retired C NIF: ~1 GB of growth over the
+  test's window vs a few MB; note `erlang:memory/1` cannot see this
+  leak at all, since tree-sitter allocates via libc `malloc`).
+- **Scheduler threads.** `parser_parse_string/2` and `query_capture/2`
+  do unbounded CPU work, so the Rust NIF registers them as DirtyCpu
+  NIFs — they run on dirty schedulers and never block a normal one.
+  (The C NIF ran them as ordinary NIFs, violating the ~1 ms
+  normal-NIF budget on every large parse.) Every other NIF in the
+  binding is a trivial accessor and stays normal-scheduled.
 - **A tree-sitter query selects by node *type*, and this grammar reuses
   the code node types inside attributes.** Verified by dumping the parse
   tree: `-spec f(file:filename())` puts a `remote` under
@@ -393,6 +432,12 @@ This is roughly the path actually followed, kept for reference:
    reason about, easier to package (no external fork to keep in sync or
    track in git), and easier to fix bugs in (§6's tree-freeing pitfall
    was found and fixed here, not upstream).
+4. **Port the boundary to Rust (Rustler) once the semantic quirks are
+   pinned by tests** — the two C-era crashes were exactly what Rust's
+   ownership model encodes (§2.1), and the port was gated on
+   zero-diff fact parity (`scripts/parity_check.sh`) plus the full
+   eunit suite. The lesson: do it *after* the behavior is pinned, so
+   "identical" is checkable, not asserted.
 
 ## References
 
@@ -416,8 +461,14 @@ This is roughly the path actually followed, kept for reference:
   third-party binding this project's own NIF was ported from and now
   replaces; credit for the resource-wrapping shape `symbolic_ts` still
   follows.
+- [`rustler-lang/rustler`](https://github.com/rustler-lang/rustler) —
+  the Rust crate `symbolic_ts` builds with (resources via
+  `ResourceArc`, dirty scheduling via the `#[rustler::nif(schedule =
+  "DirtyCpu")]` attribute, panics caught and returned as Erlang errors).
+  The rebar3 integration is a plain compile pre-hook
+  (`scripts/build_nif.sh`) — no Elixir/Mix involvement.
 - [`blt/port_compiler`](https://hex.pm/packages/pc) — the rebar3 plugin
-  `symbolic_ts` builds through.
+  the *previous* C NIF built through, kept as historical context.
 - [`erlang-mcp-design.md`](erlang-mcp-design.md) — the in-process BEAM design
   this plugs into.
 - [`readme.md`](../readme.md) — the four-tool contract.

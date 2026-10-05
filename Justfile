@@ -102,3 +102,18 @@ clean:
 # View a build in a browser: just serve, then open http://localhost:4000.
 serve PORT="4000":
     python3 -m http.server {{PORT}}
+
+# Rebuild just the symbolic_ts Rustler NIF (native/symbolic_ts -> priv/
+# symbolic_ts.so). rebar3's compile pre-hook already does this on every
+# compile; this target exists for iterating on the Rust side alone.
+build-nif:
+    ./scripts/build_nif.sh
+
+# The fact-parity gate: proves a NIF/grammar change did not alter the
+# extracted fact base. Save a baseline once on a known-good build, then
+# check against it after the change. See scripts/parity_check.sh.
+parity-save dir:
+    ./scripts/parity_check.sh save {{dir}}
+
+parity-check dir:
+    ./scripts/parity_check.sh check {{dir}}

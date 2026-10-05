@@ -20,6 +20,11 @@ class SymbolicTools < Formula
   # cutting v0.1.4; the repo's own Brewfile already listed cmake for the
   # same reason). See docs/reviewing-llm-output.md §4.2 Phase 0.
   depends_on "cmake" => :build
+  # The symbolic_ts tree-sitter NIF is a Rustler crate (native/symbolic_ts):
+  # rebar3's compile pre-hook (scripts/build_nif.sh) invokes cargo, so the
+  # Homebrew build sandbox needs a Rust toolchain on PATH — same pattern
+  # as the cmake declaration above for erllama's vendored llama.cpp.
+  depends_on "rust" => :build
 
   def install
     system "rebar3", "release"

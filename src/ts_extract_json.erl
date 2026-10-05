@@ -34,15 +34,11 @@
 
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
-    {ok, Bin} = file:read_file(Path),
-    %% Src stays a binary — see ts_extract_toml:file/1's identical
-    %% comment (symbolic_ts:node_text/2's own comment has the full story).
-    Src = Bin,
-    SrcList = binary_to_list(Bin),
+    {ok, Src} = file:read_file(Path),
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_json(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
+    Tree = symbolic_ts:parser_parse_string(Parser, Src),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =
@@ -69,8 +65,8 @@ walk_object(ObjNode, PathPrefix, Src, PathAtom) ->
 walk_pair(PairNode, PathPrefix, Src, PathAtom) ->
     case symbolic_ts:node_type(PairNode) of
         "pair" ->
-            KeyNode = symbolic_ts:node_child_by_field_name(PairNode, "key"),
-            ValueNode = symbolic_ts:node_child_by_field_name(PairNode, "value"),
+            KeyNode = symbolic_ts:node_child_by_field_name(PairNode, <<"key">>),
+            ValueNode = symbolic_ts:node_child_by_field_name(PairNode, <<"value">>),
             Path = ts_extract_common:join_path(PathPrefix, string_content(KeyNode, Src)),
             Line = line(PairNode),
             case symbolic_ts:node_type(ValueNode) of

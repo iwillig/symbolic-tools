@@ -789,10 +789,13 @@ brew bundle
 rebar3 release
 ```
 
-One command, one run — the tree-sitter NIF (`symbolic_ts`) is built
-in-tree via the standard rebar3 `pc` plugin (see
-`docs/tree-sitter-erlang.md` §2), not a separately vendored dependency
-with its own build quirks to work around. The built CLI is at
+One command, one run — the tree-sitter NIF (`symbolic_ts`, a
+[Rustler](https://github.com/rustler-lang/rustler) crate at
+`native/symbolic_ts` that compiles the vendored tree-sitter core +
+grammars itself) is built in-tree by `scripts/build_nif.sh` through
+rebar3's compile pre-hook (see `docs/tree-sitter-erlang.md` §2), not a
+separately vendored dependency with its own build quirks to work
+around. Requires a Rust toolchain (`brew install rust`). The built CLI is at
 `_build/default/rel/symbolic_tools/bin/symbolic` — run it directly from
 there, or from wherever you copy the whole release tree to (`dev_mode`
 is off, so it's relocatable; see `docs/cli-erlang.md` §4).
@@ -804,8 +807,8 @@ Dependencies:
 - [rebar3](https://rebar3.org/) — build tool
 - [erlog](https://github.com/rvirding/erlog) — the Prolog engine (runs in-process on the BEAM)
 - [erlmcp](https://github.com/erlsci/erlmcp) — MCP server framework
-- [pc](https://hex.pm/packages/pc) — rebar3 port-compiler plugin, builds
-  `symbolic_ts` (this project's own tree-sitter NIF — see
+- [Rust](https://www.rust-lang.org/) + [Rustler](https://github.com/rustler-lang/rustler) —
+  builds `symbolic_ts` (this project's own tree-sitter NIF — see
   `docs/tree-sitter-erlang.md`)
 
 ## Documentation

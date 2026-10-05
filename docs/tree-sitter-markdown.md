@@ -16,7 +16,7 @@ contents — see §4) are real today via `symbolic parse`, all from the
 inline-link *use* (`link/4`, `[text](url)`) is **still not implemented**;
 it needs the separate *inline* grammar plus a NIF function
 (`ts_parser_set_included_ranges`) that `symbolic_ts` — the project's own
-small NIF, `c_src/symbolic_ts_nif.c`, see
+small NIF, `native/symbolic_ts`, see
 [`tree-sitter-erlang.md`](tree-sitter-erlang.md) §2 — doesn't expose at
 all yet, since nothing has needed it so far. A link *definition*
 (`[label]: url "title"`) is a different story — that's its own
@@ -83,7 +83,7 @@ the inline half (needed only for a real `link/4`) is not.
 
 One real NIF addition landed alongside the block-grammar fact work
 below, worth calling out on its own: `node_end_point/1`
-(`c_src/symbolic_ts_nif.c`), mirroring the already-existing
+(`native/symbolic_ts/src/lib.rs`), mirroring the already-existing
 `node_start_point/1` wrapper exactly — one more call to tree-sitter's
 own C API (`ts_node_end_point`, the counterpart to `ts_node_start_point`
 that wrapper already calls), not a new grammar or a new dependency.
@@ -108,14 +108,14 @@ a *start* point, so nothing had asked for this before.
 **Open question, still open.** `ts_parser_set_included_ranges` — the real
 tree-sitter C API function needed to scope a second, inline-grammar parse
 to the byte ranges the block parse marks as inline content — has no NIF
-wrapper in `c_src/symbolic_ts_nif.c` at all yet; `symbolic_ts` was built
+wrapper in `native/symbolic_ts` at all yet; `symbolic_ts` was built
 to cover exactly what's called today (see
 [`tree-sitter-erlang.md`](tree-sitter-erlang.md) §2), and nothing has
 called this one so far. Adding it looks tractable when this is picked
 back up: it needs a small helper converting an Erlang list of
 `#{start_point => ..., end_point => ..., start_byte => ...,
 end_byte => ...}` maps into a `TSRange[]` (the reverse of what
-`tspoint_to_map/2` in `symbolic_ts_nif.c` already does for output), then
+`point_map/2` in `native/symbolic_ts/src/lib.rs` already does for output), then
 one call to the real `ts_parser_set_included_ranges`. That, plus
 vendoring the inline grammar and its own `tree_sitter_markdown_inline/0`
 NIF entry (steps 1-2 above), is what `link/4` needs — deliberately not

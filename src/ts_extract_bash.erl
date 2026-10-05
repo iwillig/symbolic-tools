@@ -48,9 +48,9 @@
 -export([file/1, text/2]).
 -import(ts_extract_text, [to_atom/1, to_text/1]).
 
--define(DEF_QUERY, "(function_definition name: (word) @fun_name)").
--define(CALL_QUERY, "(command name: (command_name) @callee)").
--define(COMMENT_QUERY, "(comment) @c").
+-define(DEF_QUERY, <<"(function_definition name: (word) @fun_name)">>).
+-define(CALL_QUERY, <<"(command name: (command_name) @callee)">>).
+-define(COMMENT_QUERY, <<"(comment) @c">>).
 
 %% One query per decision-point construct, for real (McCabe-style)
 %% complexity instead of the fan_out/3-based proxy too_complex/3 uses.
@@ -66,11 +66,11 @@
 %% an addressable field the way TypeScript's binary_expression is; needs
 %% its own grammar spike.
 -define(BRANCH_QUERIES, [
-    {'if', "(if_statement) @b"},
-    {elif, "(elif_clause) @b"},
-    {'for', "(for_statement) @b"},
-    {'while', "(while_statement) @b"},
-    {case_item, "(case_item) @b"}
+    {'if', <<"(if_statement) @b">>},
+    {elif, <<"(elif_clause) @b">>},
+    {'for', <<"(for_statement) @b">>},
+    {'while', <<"(while_statement) @b">>},
+    {case_item, <<"(case_item) @b">>}
 ]).
 
 -spec file(file:filename()) -> [tuple()].
@@ -90,13 +90,17 @@ text(Path, Src0) ->
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_bash(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    %% See ts_extract_erlang:text/2's identical comment: parser_parse_string
-    %% needs a list (enif_get_string), node_text/2 wants a binary.
-    {SrcList, Src} = case Src0 of
-        B when is_binary(B) -> {binary_to_list(B), B};
-        L when is_list(L) -> {L, list_to_binary(L)}
+    %% parser_parse_string's NIF takes a binary — the source's actual UTF-8
+    %% bytes, handed straight to tree-sitter (the old C NIF took a char list
+    %% it decoded Latin-1, which silently truncated codepoints > 255). List
+    %% input is still accepted here: ts_extract_markdown forwards
+    %% node_text/2 output (a list) from fenced code blocks into this
+    %% function.
+    Src = case Src0 of
+        B when is_binary(B) -> B;
+        L when is_list(L) -> list_to_binary(L)
     end,
-    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
+    Tree = symbolic_ts:parser_parse_string(Parser, Src),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =
@@ -178,7 +182,7 @@ doc_fact(StartNode, Src, PathAtom) ->
 definition_name(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_definition" ->
-            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
+            NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
             to_atom(symbolic_ts:node_text(NameNode, Src));
         _ ->
             false
@@ -189,7 +193,7 @@ definition_name(Node, Src) ->
 caller_name(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_definition" ->
-            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
+            NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
             to_atom(symbolic_ts:node_text(NameNode, Src));
         _ ->
             Parent = symbolic_ts:node_parent(Node),

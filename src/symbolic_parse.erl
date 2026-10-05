@@ -92,8 +92,8 @@ extract_file_safely(File) ->
 %%  One process per file instead of lists:flatmap/2's sequential walk.
 %%  Safe to run concurrently: every ts_extract:file/1 call makes its own
 %%  fresh symbolic_ts:parser_new/0 (confirmed against every
-%%  ts_extract_*.erl module and c_src/symbolic_ts_nif.c directly — each
-%%  parse gets its own TSParser resource; the NIF's own globals are
+%%  ts_extract_*.erl module and native/symbolic_ts/src/lib.rs directly —
+%%  each parse gets its own TSParser resource; the NIF's own globals are
 %%  read-only atoms/resource-type handles set once at load time, nothing
 %%  mutable shared across calls). A crash in any one file's extraction
 %%  is re-raised in THIS process rather than silently dropped, so a bad

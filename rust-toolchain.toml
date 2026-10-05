@@ -1,0 +1,6 @@
+# Pins the toolchain for native/symbolic_ts (the Rustler NIF) so CI,
+# Homebrew builds, and local development all build it with the same
+# rustc. Nothing exotic is required — the crate uses only stable Rust —
+# this is about reproducibility, not features.
+[toolchain]
+channel = "stable"

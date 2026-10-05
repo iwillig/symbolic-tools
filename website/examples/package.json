@@ -1,0 +1,7 @@
+{
+  "name": "widget",
+  "version": "1.0.0",
+  "dependencies": {
+    "rebar3": "^3.24"
+  }
+}

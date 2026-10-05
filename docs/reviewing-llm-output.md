@@ -434,7 +434,7 @@ hoping, and no dependence on the model choosing to emit exactly
 - **Grammar-constrained, a real guarantee, real additional work**:
   extend `erllama`'s own NIF to pass a grammar through to `llama.cpp`'s
   real sampling API — the same *kind* of small, mechanical NIF addition
-  as `node_end_point/1` (`c_src/symbolic_ts_nif.c`), except touching
+  as `node_end_point/1` (native/symbolic_ts), except touching
   another project's C/NIF boundary, so a fork or an upstream
   contribution, not a self-contained change.
 

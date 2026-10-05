@@ -6,7 +6,7 @@
 %%% tree-sitter-markdown's separate *inline* grammar, which needs a
 %%% second parse restricted to the byte ranges the block parse marks as
 %%% inline content (`ts_parser_set_included_ranges`) — a real C API
-%%% function `symbolic_ts` (c_src/symbolic_ts_nif.c) simply doesn't
+%%% function `symbolic_ts` (native/symbolic_ts/src/ffi.rs) simply doesn't
 %%% expose yet, since nothing has needed it so far. See
 %%% docs/tree-sitter-markdown.md for the deferred plan. A link
 %%% *definition* (`[label]: url "title"`) is a different story — that's
@@ -98,7 +98,7 @@
 %%% a sibling) — exactly a CommonMark document outline. Getting a
 %%% section's `EndLine` needed a real end point, which `symbolic_ts` only
 %%% had for the start (`node_start_point/1`); `node_end_point/1`
-%%% (`c_src/symbolic_ts_nif.c`) mirrors that wrapper exactly, one more
+%%% (`native/symbolic_ts/src/lib.rs`) mirrors that wrapper exactly, one more
 %%% call to the same already-linked tree-sitter C API (`ts_node_end_point`,
 %%% the counterpart to `ts_node_start_point` that wrapper already calls) —
 %%% not a new grammar, not a new dependency.
@@ -161,31 +161,23 @@
 -export([file/1]).
 -import(ts_extract_text, [to_atom/1, to_text/1]).
 
--define(HEADING_QUERY, "[(atx_heading) (setext_heading)] @h").
--define(SECTION_QUERY, "(section) @s").
--define(CODE_BLOCK_QUERY, "[(fenced_code_block) (indented_code_block)] @c").
--define(FENCED_QUERY, "(fenced_code_block) @c").
--define(PARAGRAPH_QUERY, "(paragraph) @p").
--define(LIST_ITEM_QUERY, "(list_item) @li").
--define(TABLE_QUERY, "(pipe_table) @t").
--define(BLOCKQUOTE_QUERY, "(block_quote) @bq").
--define(LINK_DEFINITION_QUERY, "(link_reference_definition) @ld").
+-define(HEADING_QUERY, <<"[(atx_heading) (setext_heading)] @h">>).
+-define(SECTION_QUERY, <<"(section) @s">>).
+-define(CODE_BLOCK_QUERY, <<"[(fenced_code_block) (indented_code_block)] @c">>).
+-define(FENCED_QUERY, <<"(fenced_code_block) @c">>).
+-define(PARAGRAPH_QUERY, <<"(paragraph) @p">>).
+-define(LIST_ITEM_QUERY, <<"(list_item) @li">>).
+-define(TABLE_QUERY, <<"(pipe_table) @t">>).
+-define(BLOCKQUOTE_QUERY, <<"(block_quote) @bq">>).
+-define(LINK_DEFINITION_QUERY, <<"(link_reference_definition) @ld">>).
 
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
-    {ok, Bin} = file:read_file(Path),
-    %% Src stays a binary — see ts_extract_toml:file/1's identical
-    %% comment (symbolic_ts:node_text/2's own comment has the full
-    %% story). example_facts/4 below forwards a node_text/2-extracted
-    %% fenced-code-block's own text (still a list — see that function's
-    %% own type) into e.g. ts_extract_erlang:text/2, which already
-    %% accepts either form.
-    Src = Bin,
-    SrcList = binary_to_list(Bin),
+    {ok, Src} = file:read_file(Path),
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_markdown(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
+    Tree = symbolic_ts:parser_parse_string(Parser, Src),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =
@@ -218,7 +210,7 @@ heading_fact(Node, Src, PathAtom) ->
 heading_text(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "atx_heading" ->
-            Content = symbolic_ts:node_child_by_field_name(Node, "heading_content"),
+            Content = symbolic_ts:node_child_by_field_name(Node, <<"heading_content">>),
             symbolic_ts:node_text(Content, Src);
         "setext_heading" ->
             %% No field name — found by type instead (see this module's
@@ -316,8 +308,8 @@ is_heading(Node) ->
 %% shapes have killed extraction in their own way: (a) used to SIGSEGV
 %% the whole VM — node_named_child/2 on the empty section returns a
 %% null TSNode, and node_type/1 on a null node dereferenced NULL inside
-%% the NIF (the guards added alongside that fix in
-%% c_src/symbolic_ts_nif.c return `undefined` instead); (b) died here
+%% the NIF (the null-node guards carried into the Rust port,
+%% null_guard in native/symbolic_ts/src/lib.rs, return `undefined` instead); (b) died here
 %% with {case_clause, "html_block"} and took the whole file's facts
 %% down with it. A headingless section is not a section the fact base
 %% can ask anything about, so sections/4 skips both before this clause

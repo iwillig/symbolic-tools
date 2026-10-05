@@ -130,7 +130,7 @@
 -export([file/1, text/2]).
 -import(ts_extract_text, [to_atom/1, to_text/1]).
 
--define(DEF_QUERY, "(function_declaration name: (identifier) @fun_name)").
+-define(DEF_QUERY, <<"(function_declaration name: (identifier) @fun_name)">>).
 %% `function* foo(){}` is a SEPARATE node type from `function_declaration`
 %% (confirmed against tree-sitter-typescript's own node-types.json — it
 %% has no "async"/"generator" flag field on function_declaration at all),
@@ -140,18 +140,16 @@
 %% same "no addressable field, query the literal token" technique
 %% ts_extract_erlang.erl's ?BINARY_OP_QUERIES already uses for its own
 %% no-fields case.
--define(GENERATOR_DEF_QUERY, "(generator_function_declaration name: (identifier) @fun_name)").
--define(ASYNC_FUNCTION_QUERY, "(function_declaration \"async\") @f").
--define(GENERATOR_FUNCTION_QUERY, "(generator_function_declaration) @f").
--define(AWAIT_QUERY, "(await_expression) @a").
--define(YIELD_QUERY, "(yield_expression) @y").
--define(LABELED_STMT_QUERY, "(labeled_statement label: (statement_identifier) @n) @l").
--define(BREAK_LABEL_QUERY, "(break_statement label: (statement_identifier) @n) @s").
--define(CONTINUE_LABEL_QUERY, "(continue_statement label: (statement_identifier) @n) @s").
--define(LOCAL_CALL_QUERY, "(call_expression function: (identifier) @callee)").
--define(MEMBER_CALL_QUERY,
-    "(call_expression function: (member_expression "
-    "object: (_) @obj property: (property_identifier) @prop))").
+-define(GENERATOR_DEF_QUERY, <<"(generator_function_declaration name: (identifier) @fun_name)">>).
+-define(ASYNC_FUNCTION_QUERY, <<"(function_declaration \"async\") @f">>).
+-define(GENERATOR_FUNCTION_QUERY, <<"(generator_function_declaration) @f">>).
+-define(AWAIT_QUERY, <<"(await_expression) @a">>).
+-define(YIELD_QUERY, <<"(yield_expression) @y">>).
+-define(LABELED_STMT_QUERY, <<"(labeled_statement label: (statement_identifier) @n) @l">>).
+-define(BREAK_LABEL_QUERY, <<"(break_statement label: (statement_identifier) @n) @s">>).
+-define(CONTINUE_LABEL_QUERY, <<"(continue_statement label: (statement_identifier) @n) @s">>).
+-define(LOCAL_CALL_QUERY, <<"(call_expression function: (identifier) @callee)">>).
+-define(MEMBER_CALL_QUERY, <<"(call_expression function: (member_expression object: (_) @obj property: (property_identifier) @prop))">>).
 %% Every property access, called or not — calls/5's member(Obj,Method,_)
 %% only ever fires when the member_expression is itself a call's own
 %% "function" field (see ?MEMBER_CALL_QUERY above); a bare read like
@@ -160,24 +158,23 @@
 %% filters OUT the ones ?MEMBER_CALL_QUERY already covers, rather than
 %% widening that query itself — keeps calls/5's own "only calls" contract
 %% untouched.
--define(MEMBER_EXPR_QUERY,
-    "(member_expression object: (_) @obj property: (property_identifier) @prop) @m").
--define(NEW_EXPR_QUERY, "(new_expression) @n").
--define(IMPORT_QUERY, "(import_statement) @i").
--define(EXPORT_QUERY, "(export_statement) @e").
--define(COMMENT_QUERY, "(comment) @c").
+-define(MEMBER_EXPR_QUERY, <<"(member_expression object: (_) @obj property: (property_identifier) @prop) @m">>).
+-define(NEW_EXPR_QUERY, <<"(new_expression) @n">>).
+-define(IMPORT_QUERY, <<"(import_statement) @i">>).
+-define(EXPORT_QUERY, <<"(export_statement) @e">>).
+-define(COMMENT_QUERY, <<"(comment) @c">>).
 
 %% Statement/block structure: one query per block-shaped construct —
 %% a real {} block, or a switch_case/switch_default, which have no
 %% wrapping block node at all and need their own query (see
 %% stmt_blocks/4's own doc comment).
 -define(STMT_BLOCK_QUERIES, [
-    {block, "(statement_block) @b"},
-    {switch_case, "(switch_case) @b"},
-    {switch_default, "(switch_default) @b"}
+    {block, <<"(statement_block) @b">>},
+    {switch_case, <<"(switch_case) @b">>},
+    {switch_default, <<"(switch_default) @b">>}
 ]).
 
--define(RETURN_STMT_QUERY, "(return_statement) @r").
+-define(RETURN_STMT_QUERY, <<"(return_statement) @r">>).
 
 %% One query per decision-point construct, for real (McCabe-style)
 %% complexity instead of the fan_out/3-based proxy too_complex/3 uses —
@@ -191,25 +188,25 @@
 %% confirmed empirically, isolates them from every other binary_expression
 %% (`+`, `>`, ...) without a separate node type to query on.
 -define(BRANCH_QUERIES, [
-    {'if', "(if_statement) @b"},
-    {'for', "(for_statement) @b"},
-    {'while', "(while_statement) @b"},
-    {ternary, "(ternary_expression) @b"},
-    {switch_case, "(switch_case) @b"},
-    {'catch', "(catch_clause) @b"},
-    {'and', "(binary_expression operator: \"&&\") @b"},
-    {'or', "(binary_expression operator: \"||\") @b"}
+    {'if', <<"(if_statement) @b">>},
+    {'for', <<"(for_statement) @b">>},
+    {'while', <<"(while_statement) @b">>},
+    {ternary, <<"(ternary_expression) @b">>},
+    {switch_case, <<"(switch_case) @b">>},
+    {'catch', <<"(catch_clause) @b">>},
+    {'and', <<"(binary_expression operator: \"&&\") @b">>},
+    {'or', <<"(binary_expression operator: \"||\") @b">>}
 ]).
 
--define(BINARY_EXPR_QUERY, "(binary_expression) @b").
--define(UNARY_EXPR_QUERY, "(unary_expression) @b").
+-define(BINARY_EXPR_QUERY, <<"(binary_expression) @b">>).
+-define(UNARY_EXPR_QUERY, <<"(unary_expression) @b">>).
 %% The comma operator: `a, b, c` — an n-ary node (no left/right/operand
 %% fields at all, confirmed against tree-sitter-typescript's own
 %% node-types.json: just repeated anonymous "expression" children), so it
 %% needs its own Kind rather than fitting binary/unary's two-operand
 %% shape — operands are positional (0-based), same technique
 %% call_arg_facts/6 already uses for call arguments.
--define(SEQUENCE_EXPR_QUERY, "(sequence_expression) @s").
+-define(SEQUENCE_EXPR_QUERY, <<"(sequence_expression) @s">>).
 
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
@@ -230,13 +227,17 @@ text(Path, Src0) ->
     {ok, Parser} = symbolic_ts:parser_new(),
     {ok, Lang} = symbolic_ts:tree_sitter_typescript(),
     true = symbolic_ts:parser_set_language(Parser, Lang),
-    %% See ts_extract_erlang:text/2's identical comment: parser_parse_string
-    %% needs a list (enif_get_string), node_text/2 wants a binary.
-    {SrcList, Src} = case Src0 of
-        B when is_binary(B) -> {binary_to_list(B), B};
-        L when is_list(L) -> {L, list_to_binary(L)}
+    %% parser_parse_string's NIF takes a binary — the source's actual UTF-8
+    %% bytes, handed straight to tree-sitter (the old C NIF took a char list
+    %% it decoded Latin-1, which silently truncated codepoints > 255). List
+    %% input is still accepted here: ts_extract_markdown forwards
+    %% node_text/2 output (a list) from fenced code blocks into this
+    %% function.
+    Src = case Src0 of
+        B when is_binary(B) -> B;
+        L when is_list(L) -> list_to_binary(L)
     end,
-    Tree = symbolic_ts:parser_parse_string(Parser, SrcList),
+    Tree = symbolic_ts:parser_parse_string(Parser, Src),
     Root = symbolic_ts:tree_root_node(Tree),
     PathAtom = list_to_atom(Path),
     Facts =
@@ -273,7 +274,7 @@ defines(Lang, Root, Src, PathAtom) ->
 
 define_fact(NameNode, Src, PathAtom) ->
     Decl = symbolic_ts:node_parent(NameNode),
-    {Arity, Params} = args_shape(Decl, "parameters", Src),
+    {Arity, Params} = args_shape(Decl, <<"parameters">>, Src),
     {defines, to_atom(symbolic_ts:node_text(NameNode, Src)), Arity, Params,
      PathAtom, line(NameNode)}.
 
@@ -312,8 +313,8 @@ generator_functions(Lang, Root, Src, PathAtom) ->
     ]).
 
 function_marker_fact(FactName, DeclNode, Src, PathAtom) ->
-    NameNode = symbolic_ts:node_child_by_field_name(DeclNode, "name"),
-    {Arity, _Params} = args_shape(DeclNode, "parameters", Src),
+    NameNode = symbolic_ts:node_child_by_field_name(DeclNode, <<"name">>),
+    {Arity, _Params} = args_shape(DeclNode, <<"parameters">>, Src),
     {FactName, to_atom(symbolic_ts:node_text(NameNode, Src)), Arity, PathAtom, line(DeclNode)}.
 
 %% await_expr/4 + yield_expr/4: attributed via caller_info/2's own walk-up
@@ -356,7 +357,7 @@ args_shape(Node, FieldName, Src) ->
 %% whole BEAM) — so this checks node_is_null/1 first and emits nothing
 %% for it: an absent arg list has no arguments to walk.
 call_arg_facts(CallNode, CallSpec, Caller, CallerArity, Src, PathAtom) ->
-    ArgsNode = symbolic_ts:node_child_by_field_name(CallNode, "arguments"),
+    ArgsNode = symbolic_ts:node_child_by_field_name(CallNode, <<"arguments">>),
     case symbolic_ts:node_is_null(ArgsNode) of
         true ->
             [];
@@ -382,7 +383,7 @@ local_calls(Lang, Root, Src, PathAtom) ->
 
 local_call_facts(N, Src, PathAtom) ->
     CallNode = symbolic_ts:node_parent(N),
-    {ArgCount, _Params} = args_shape(CallNode, "arguments", Src),
+    {ArgCount, _Params} = args_shape(CallNode, <<"arguments">>, Src),
     {Caller, CallerArity} = caller_info(N, Src),
     CallSpec = {local, to_atom(symbolic_ts:node_text(N, Src)), ArgCount},
     [{calls, Caller, CallerArity, CallSpec, PathAtom, line(N)}
@@ -401,9 +402,9 @@ member_calls(Lang, Root, Src, PathAtom) ->
 
 member_call_facts(PropNode, Src, PathAtom) ->
     MemberNode = symbolic_ts:node_parent(PropNode),
-    ObjNode = symbolic_ts:node_child_by_field_name(MemberNode, "object"),
+    ObjNode = symbolic_ts:node_child_by_field_name(MemberNode, <<"object">>),
     CallNode = symbolic_ts:node_parent(MemberNode),
-    {ArgCount, _Params} = args_shape(CallNode, "arguments", Src),
+    {ArgCount, _Params} = args_shape(CallNode, <<"arguments">>, Src),
     {Caller, CallerArity} = caller_info(CallNode, Src),
     CallSpec = {member, to_atom(symbolic_ts:node_text(ObjNode, Src)),
         to_atom(symbolic_ts:node_text(PropNode, Src)), ArgCount},
@@ -426,8 +427,8 @@ member_read_fact(MemberNode, Src, PathAtom) ->
     case is_call_target(MemberNode) of
         true -> false;
         false ->
-            ObjNode = symbolic_ts:node_child_by_field_name(MemberNode, "object"),
-            PropNode = symbolic_ts:node_child_by_field_name(MemberNode, "property"),
+            ObjNode = symbolic_ts:node_child_by_field_name(MemberNode, <<"object">>),
+            PropNode = symbolic_ts:node_child_by_field_name(MemberNode, <<"property">>),
             {Caller, CallerArity} = caller_info(MemberNode, Src),
             {true, {member_read, Caller, CallerArity,
                 to_atom(symbolic_ts:node_text(ObjNode, Src)),
@@ -441,7 +442,7 @@ is_call_target(MemberNode) ->
         false ->
             case symbolic_ts:node_type(Parent) of
                 "call_expression" ->
-                    FnField = symbolic_ts:node_child_by_field_name(Parent, "function"),
+                    FnField = symbolic_ts:node_child_by_field_name(Parent, <<"function">>),
                     same_node(FnField, MemberNode);
                 _ -> false
             end
@@ -508,7 +509,7 @@ new_calls(Lang, Root, Src, PathAtom) ->
     lists:flatmap(fun(N) -> new_call_facts(N, Src, PathAtom) end, Nodes).
 
 new_call_facts(N, Src, PathAtom) ->
-    ConsNode = symbolic_ts:node_child_by_field_name(N, "constructor"),
+    ConsNode = symbolic_ts:node_child_by_field_name(N, <<"constructor">>),
     case symbolic_ts:node_type(ConsNode) of
         "identifier" ->
             Constructor = to_atom(symbolic_ts:node_text(ConsNode, Src)),
@@ -523,7 +524,7 @@ new_call_facts(N, Src, PathAtom) ->
     end.
 
 new_expr_arg_count(N) ->
-    Args = symbolic_ts:node_child_by_field_name(N, "arguments"),
+    Args = symbolic_ts:node_child_by_field_name(N, <<"arguments">>),
     case symbolic_ts:node_is_null(Args) of
         true -> 0;
         false -> symbolic_ts:node_named_child_count(Args)
@@ -551,7 +552,7 @@ imports(Lang, Root, Src, PathAtom, ModuleScope) ->
     lists:flatmap(fun(N) -> import_facts(N, Src, PathAtom, ModuleScope) end, Nodes).
 
 import_facts(N, Src, PathAtom, ModuleScope) ->
-    SourceNode = symbolic_ts:node_child_by_field_name(N, "source"),
+    SourceNode = symbolic_ts:node_child_by_field_name(N, <<"source">>),
     Module = to_atom(string_fragment_text(SourceNode, Src)),
     DeclFact = {import_decl, Module, PathAtom, line(N)},
     [DeclFact | import_bindings(N, Src, PathAtom, ModuleScope)].
@@ -618,7 +619,7 @@ exports(Lang, Root, Src, PathAtom) ->
     lists:flatmap(fun(N) -> export_facts(N, Src, PathAtom) end, Nodes).
 
 export_facts(N, Src, PathAtom) ->
-    DeclNode = symbolic_ts:node_child_by_field_name(N, "declaration"),
+    DeclNode = symbolic_ts:node_child_by_field_name(N, <<"declaration">>),
     case symbolic_ts:node_is_null(DeclNode) of
         false -> exported_declaration_facts(DeclNode, Src, PathAtom);
         true -> exported_other_facts(N, Src, PathAtom)
@@ -627,7 +628,7 @@ export_facts(N, Src, PathAtom) ->
 exported_declaration_facts(DeclNode, Src, PathAtom) ->
     case symbolic_ts:node_type(DeclNode) of
         "function_declaration" ->
-            NameNode = symbolic_ts:node_child_by_field_name(DeclNode, "name"),
+            NameNode = symbolic_ts:node_child_by_field_name(DeclNode, <<"name">>),
             [{export_decl, to_atom(symbolic_ts:node_text(NameNode, Src)), named, PathAtom, line(NameNode)}];
         "lexical_declaration" -> exported_variable_names(DeclNode, Src, PathAtom);
         "variable_declaration" -> exported_variable_names(DeclNode, Src, PathAtom);
@@ -644,7 +645,7 @@ exported_variable_names(DeclNode, Src, PathAtom) ->
             Declarator = symbolic_ts:node_named_child(DeclNode, I),
             case symbolic_ts:node_type(Declarator) of
                 "variable_declarator" ->
-                    NameNode = symbolic_ts:node_child_by_field_name(Declarator, "name"),
+                    NameNode = symbolic_ts:node_child_by_field_name(Declarator, <<"name">>),
                     case symbolic_ts:node_type(NameNode) of
                         "identifier" ->
                             [{export_decl, to_atom(symbolic_ts:node_text(NameNode, Src)),
@@ -715,7 +716,7 @@ stmt_block_fact_set(N, Src, PathAtom, Kind) ->
     {Caller, CallerArity} = caller_info(N, Src),
     BlockFact = {stmt_block, BlockId, Caller, CallerArity, Kind, PathAtom, line(N)},
     SkipNode = case Kind of
-        switch_case -> symbolic_ts:node_child_by_field_name(N, "value");
+        switch_case -> symbolic_ts:node_child_by_field_name(N, <<"value">>);
         _ -> undefined
     end,
     StmtFacts = block_stmt_facts(N, BlockId, SkipNode, PathAtom),
@@ -783,17 +784,17 @@ last_switch_case_fact(N, BlockId) ->
 %% story as every other per-construct field lookup in this module).
 braceless_bodies(Lang, Root, Src, PathAtom) ->
     if_braceless_bodies(Lang, Root, Src, PathAtom)
-        ++ loop_braceless_bodies(Lang, Root, Src, PathAtom, 'for', "(for_statement) @b")
-        ++ loop_braceless_bodies(Lang, Root, Src, PathAtom, 'while', "(while_statement) @b").
+        ++ loop_braceless_bodies(Lang, Root, Src, PathAtom, 'for', <<"(for_statement) @b">>)
+        ++ loop_braceless_bodies(Lang, Root, Src, PathAtom, 'while', <<"(while_statement) @b">>).
 
 if_braceless_bodies(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = symbolic_ts:query_new(Lang, "(if_statement) @b"),
+    {Q, _, _} = symbolic_ts:query_new(Lang, <<"(if_statement) @b">>),
     Caps = symbolic_ts:query_capture(Root, Q),
     Nodes = lists:usort([N || {"b", N} <- Caps]),
     lists:flatmap(
         fun(N) ->
             {Caller, CallerArity} = caller_info(N, Src),
-            braceless_field_fact(N, "consequence", 'if', Caller, CallerArity, PathAtom, Src)
+            braceless_field_fact(N, <<"consequence">>, 'if', Caller, CallerArity, PathAtom, Src)
                 ++ else_braceless_fact(N, Caller, CallerArity, PathAtom)
         end, Nodes).
 
@@ -805,7 +806,7 @@ if_braceless_bodies(Lang, Root, Src, PathAtom) ->
 %% itself — that's ordinary chaining, and the nested if is checked
 %% independently for its own consequence/alternative.
 else_braceless_fact(IfNode, Caller, CallerArity, PathAtom) ->
-    Alt = symbolic_ts:node_child_by_field_name(IfNode, "alternative"),
+    Alt = symbolic_ts:node_child_by_field_name(IfNode, <<"alternative">>),
     case symbolic_ts:node_is_null(Alt) of
         true -> [];
         false ->
@@ -824,7 +825,7 @@ loop_braceless_bodies(Lang, Root, Src, PathAtom, Kind, Query) ->
     lists:flatmap(
         fun(N) ->
             {Caller, CallerArity} = caller_info(N, Src),
-            braceless_field_fact(N, "body", Kind, Caller, CallerArity, PathAtom, Src)
+            braceless_field_fact(N, <<"body">>, Kind, Caller, CallerArity, PathAtom, Src)
         end, Nodes).
 
 %% A field is only present (an `else` may not exist at all — node_is_null
@@ -908,11 +909,11 @@ binary_exprs(Lang, Root, Src, PathAtom) ->
 binary_expr_facts(N, Src, PathAtom) ->
     Id = node_id(PathAtom, N),
     {Caller, CallerArity} = caller_info(N, Src),
-    OpNode = symbolic_ts:node_child_by_field_name(N, "operator"),
+    OpNode = symbolic_ts:node_child_by_field_name(N, <<"operator">>),
     ExprFact = {expr, Id, Caller, CallerArity, binary, PathAtom, line(N)},
     OpFact = {expr_operator, Id, to_atom(symbolic_ts:node_text(OpNode, Src))},
-    LeftNode = symbolic_ts:node_child_by_field_name(N, "left"),
-    RightNode = symbolic_ts:node_child_by_field_name(N, "right"),
+    LeftNode = symbolic_ts:node_child_by_field_name(N, <<"left">>),
+    RightNode = symbolic_ts:node_child_by_field_name(N, <<"right">>),
     [ExprFact, OpFact]
         ++ operand_facts(Id, left, LeftNode, Caller, CallerArity, Src, PathAtom)
         ++ operand_facts(Id, right, RightNode, Caller, CallerArity, Src, PathAtom).
@@ -926,10 +927,10 @@ unary_exprs(Lang, Root, Src, PathAtom) ->
 unary_expr_facts(N, Src, PathAtom) ->
     Id = node_id(PathAtom, N),
     {Caller, CallerArity} = caller_info(N, Src),
-    OpNode = symbolic_ts:node_child_by_field_name(N, "operator"),
+    OpNode = symbolic_ts:node_child_by_field_name(N, <<"operator">>),
     ExprFact = {expr, Id, Caller, CallerArity, unary, PathAtom, line(N)},
     OpFact = {expr_operator, Id, to_atom(symbolic_ts:node_text(OpNode, Src))},
-    ArgNode = symbolic_ts:node_child_by_field_name(N, "argument"),
+    ArgNode = symbolic_ts:node_child_by_field_name(N, <<"argument">>),
     [ExprFact, OpFact] ++ operand_facts(Id, operand, ArgNode, Caller, CallerArity, Src, PathAtom).
 
 %% ESLint no-sequences: the comma operator. One expr/6 fact (Kind=sequence)
@@ -1191,7 +1192,7 @@ walk_function(Node, ParentScope, Src, PathAtom) ->
     NewScope = node_id(PathAtom, Node),
     ScopeFact = {scope, NewScope, function, ParentScope, PathAtom},
     ParamDecls = param_decls(Node, NewScope, Src, PathAtom),
-    Body = symbolic_ts:node_child_by_field_name(Node, "body"),
+    Body = symbolic_ts:node_child_by_field_name(Node, <<"body">>),
     {BodyDecls, BodyScopes, BodyRefs} = walk_body(Body, NewScope, Src, PathAtom),
     {ParamDecls ++ BodyDecls, [ScopeFact | BodyScopes], BodyRefs}.
 
@@ -1215,12 +1216,12 @@ walk_body(Body, FuncScope, Src, PathAtom) ->
 %% param. A destructured parameter (`{a,b}`) has no plain identifier at
 %% its own first named child and is silently skipped — out of scope.
 param_decls(FnNode, Scope, Src, PathAtom) ->
-    Bare = symbolic_ts:node_child_by_field_name(FnNode, "parameter"),
+    Bare = symbolic_ts:node_child_by_field_name(FnNode, <<"parameter">>),
     case symbolic_ts:node_is_null(Bare) of
         false ->
             [param_decl_fact(Bare, Scope, Src, PathAtom)];
         true ->
-            Params = symbolic_ts:node_child_by_field_name(FnNode, "parameters"),
+            Params = symbolic_ts:node_child_by_field_name(FnNode, <<"parameters">>),
             case symbolic_ts:node_is_null(Params) of
                 true -> [];
                 false ->
@@ -1299,8 +1300,8 @@ walk_declaration(Node, Scope, FuncScope, Src, PathAtom, Kind) ->
             Declarator = symbolic_ts:node_named_child(Node, I),
             case symbolic_ts:node_type(Declarator) of
                 "variable_declarator" ->
-                    NameNode = symbolic_ts:node_child_by_field_name(Declarator, "name"),
-                    ValueNode = symbolic_ts:node_child_by_field_name(Declarator, "value"),
+                    NameNode = symbolic_ts:node_child_by_field_name(Declarator, <<"name">>),
+                    ValueNode = symbolic_ts:node_child_by_field_name(Declarator, <<"value">>),
                     HasValue = not symbolic_ts:node_is_null(ValueNode),
                     DeclFacts =
                         case symbolic_ts:node_type(NameNode) of
@@ -1340,8 +1341,8 @@ decl_kind_of_lexical(Node, Src) ->
 %% plain-identifier "left" becomes a reference (a destructured target
 %% is skipped); "right" is walked normally.
 walk_assignment(Node, Scope, FuncScope, Src, PathAtom, RefKind) ->
-    LeftNode = symbolic_ts:node_child_by_field_name(Node, "left"),
-    RightNode = symbolic_ts:node_child_by_field_name(Node, "right"),
+    LeftNode = symbolic_ts:node_child_by_field_name(Node, <<"left">>),
+    RightNode = symbolic_ts:node_child_by_field_name(Node, <<"right">>),
     LeftRefs =
         case symbolic_ts:node_type(LeftNode) of
             "identifier" ->
@@ -1428,12 +1429,12 @@ jsdoc_tag_facts(_Name, _Arity, _PathAtom, _StartNode, _Texts) ->
 definition_name(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_declaration" ->
-            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
-            {Arity, _Params} = args_shape(Node, "parameters", Src),
+            NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+            {Arity, _Params} = args_shape(Node, <<"parameters">>, Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         "generator_function_declaration" ->
-            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
-            {Arity, _Params} = args_shape(Node, "parameters", Src),
+            NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+            {Arity, _Params} = args_shape(Node, <<"parameters">>, Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         _ ->
             false
@@ -1447,8 +1448,8 @@ definition_name(Node, Src) ->
 caller_info(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_declaration" ->
-            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
-            {Arity, _Params} = args_shape(Node, "parameters", Src),
+            NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+            {Arity, _Params} = args_shape(Node, <<"parameters">>, Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         %% `function* foo(){}` is a distinct node type from
         %% function_declaration (see ?GENERATOR_DEF_QUERY's own doc
@@ -1458,8 +1459,8 @@ caller_info(Node, Src) ->
         %% real bug (found by tracing why a generator's own await_expr
         %% facts came back attributed to nothing).
         "generator_function_declaration" ->
-            NameNode = symbolic_ts:node_child_by_field_name(Node, "name"),
-            {Arity, _Params} = args_shape(Node, "parameters", Src),
+            NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+            {Arity, _Params} = args_shape(Node, <<"parameters">>, Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         _ ->
             Parent = symbolic_ts:node_parent(Node),
