@@ -1390,40 +1390,18 @@ resolve_lookup(Name, Scope, ScopeIndex, DeclIndex) ->
 comments(Lang, Root, Src, PathAtom) ->
     lists:usort([
         {comment, PathAtom, line(N), clean_join([symbolic_ts:node_text(N, Src)])}
-     || N <- comment_nodes(Lang, Root)
+     || N <- ts_extract_common:comment_nodes(Lang, Root)
     ]).
 
 docs(Lang, Root, Src, PathAtom) ->
-    RunStarts = [N || N <- comment_nodes(Lang, Root), is_run_start(N)],
+    RunStarts = [N || N <- ts_extract_common:comment_nodes(Lang, Root), ts_extract_common:is_run_start(N)],
     lists:flatmap(fun(Start) -> doc_facts(Start, Src, PathAtom) end, RunStarts).
-
-comment_nodes(Lang, Root) ->
-    {Q, _, _} = symbolic_ts:query_new(Lang, ?COMMENT_QUERY),
-    Caps = symbolic_ts:query_capture(Root, Q),
-    lists:usort([N || {"c", N} <- Caps]).
-
-is_run_start(Node) ->
-    case symbolic_ts:node_prev_sibling(Node) of
-        undefined -> true;
-        Prev -> symbolic_ts:node_type(Prev) =/= "comment"
-    end.
 
 %% Walk forward from the first comment in a run, collecting text, until
 %% hitting a non-comment sibling (the run's Target — undefined if the
 %% run is the last thing in the file).
-collect_run(Node, Src, Acc) ->
-    Acc1 = [symbolic_ts:node_text(Node, Src) | Acc],
-    case symbolic_ts:node_next_sibling(Node) of
-        undefined -> {lists:reverse(Acc1), undefined};
-        Next ->
-            case symbolic_ts:node_type(Next) of
-                "comment" -> collect_run(Next, Src, Acc1);
-                _ -> {lists:reverse(Acc1), Next}
-            end
-    end.
-
 doc_facts(StartNode, Src, PathAtom) ->
-    {Texts, Target} = collect_run(StartNode, Src, []),
+    {Texts, Target} = ts_extract_common:collect_run(StartNode, Src, []),
     case Target =/= undefined andalso definition_name(Target, Src) of
         false -> [];
         {Name, Arity} ->

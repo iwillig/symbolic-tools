@@ -88,7 +88,7 @@ walk_pair(PairNode, PathPrefix, Src, PathAtom) ->
             KeyNode = symbolic_ts:node_named_child(PairNode, 0),
             ValueNode = symbolic_ts:node_named_child(PairNode, 1),
             KeyText = symbolic_ts:node_text(KeyNode, Src),
-            Path = join_path(PathPrefix, KeyText),
+            Path = ts_extract_common:join_path(PathPrefix, KeyText),
             Line = line(PairNode),
             case symbolic_ts:node_type(ValueNode) of
                 "inline_table" ->
@@ -117,9 +117,6 @@ strip_quotes([Q | Rest] = Text) when Q =:= $"; Q =:= $' ->
     end;
 strip_quotes(Text) ->
     Text.
-
-join_path("", Key) -> Key;
-join_path(Prefix, Key) -> Prefix ++ "." ++ Key.
 
 line(Node) ->
     maps:get(row, symbolic_ts:node_start_point(Node)) + 1.

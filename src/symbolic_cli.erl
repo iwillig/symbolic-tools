@@ -11,9 +11,16 @@
 %% modules with meck) without going through argparse:run/3 itself.
 -export([cli/0]).
 
+%% The CLI entry point: argv through argparse's command tree (cli/0
+%% below). argparse owns usage text, help, and bad-input halts.
 main(Argv) ->
     argparse:run(Argv, cli(), #{progname => "symbolic"}).
 
+%% The argparse command tree, one entry per subcommand module
+%% (symbolic_query, symbolic_parse, symbolic_serve, symbolic_extract,
+%% symbolic_check). Exported for symbolic_cli_tests.erl only — tests
+%% inspect help text and call handler closures directly rather than go
+%% through argparse:run/3.
 cli() ->
     #{
         commands => #{

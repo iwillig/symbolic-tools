@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "symbolic": {
+      "command": "symbolic",
+      "args": ["serve"],
+      "exposure": "direct",
+      "description": "Prolog fact base over this codebase: parse a source tree, then prove relational queries (definitions, calls, dead code, lint shapes)"
+    }
+  }
+}

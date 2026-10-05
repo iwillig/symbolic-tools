@@ -278,23 +278,50 @@ sections(Lang, Root, _Src, PathAtom) ->
     Caps = symbolic_ts:query_capture(Root, Q),
     %% A headingless section is skipped, not indexed into — see
     %% section_fact/2's comment for the frontmatter shape that produces
-    %% one, and why indexing into it used to SIGSEGV the VM.
+    %% one, and why indexing into it used to SIGSEGV the VM. A section
+    %% can also have named children but NO leading heading: an html_block
+    %% (raw HTML or a <!-- comment -->) before the first heading is the
+    %% first named child of the section the frontmatter's closing ---
+    %% opens, so has_leading_heading/1 checks the child's type, not just
+    %% that a child exists.
     Nodes = lists:usort(
-        [N || {"s", N} <- Caps, symbolic_ts:node_named_child_count(N) > 0]),
+        [N || {"s", N} <- Caps, has_leading_heading(N)]),
     lists:usort([section_fact(N, PathAtom) || N <- Nodes]).
+
+%% A section the fact base can ask about is one whose OWN leading
+%% child is a heading — that heading's level is the section's Level
+%% (section_fact/2). Child count alone is not the test: the html_block
+%% shape above has children, just not a heading in front.
+has_leading_heading(N) ->
+    symbolic_ts:node_named_child_count(N) > 0
+        andalso is_heading(symbolic_ts:node_named_child(N, 0)).
+
+is_heading(Node) ->
+    case symbolic_ts:node_type(Node) of
+        "atx_heading" -> true;
+        "setext_heading" -> true;
+        _ -> false
+    end.
 
 %% A section's own first named child is always its heading (atx_heading
 %% or setext_heading) — the rest is whatever falls under it, nested
 %% sections for subheadings included (see this module's header comment).
-%% EXCEPT a document with YAML frontmatter: the grammar groups the
-%% lines after the frontmatter's closing `---` into a `section` with NO
-%% heading child, and this clause's "always" is false for it. That
-%% shape used to SIGSEGV the whole VM — node_named_child/2 on the empty
-%% section returns a null TSNode, and node_type/1 on a null node
-%% dereferenced NULL inside the NIF (the guards added alongside this
-%% fix in c_src/symbolic_ts_nif.c return `undefined` instead, but a
-%% headingless section is not a section the fact base can ask anything
-%% about, so sections/4 skips it before this clause runs at all). See
+%% EXCEPT twice: (a) a document with YAML frontmatter — the grammar
+%% groups the lines after the frontmatter's closing `---` into a
+%% `section` with NO heading child; (b) that same section when an
+%% html_block (raw HTML or a comment) precedes the first heading — the
+%% section has children, but its first named child is the block, not a
+%% heading. Both shapes are skipped by has_leading_heading/1 in
+%% sections/4, so this clause only ever runs on a real heading. Both
+%% shapes have killed extraction in their own way: (a) used to SIGSEGV
+%% the whole VM — node_named_child/2 on the empty section returns a
+%% null TSNode, and node_type/1 on a null node dereferenced NULL inside
+%% the NIF (the guards added alongside that fix in
+%% c_src/symbolic_ts_nif.c return `undefined` instead); (b) died here
+%% with {case_clause, "html_block"} and took the whole file's facts
+%% down with it. A headingless section is not a section the fact base
+%% can ask anything about, so sections/4 skips both before this clause
+%% runs at all. See
 %% docs/research-yaml-frontmatter-and-tree-sitter-yaml.md §1.
 section_fact(Node, PathAtom) ->
     Heading = symbolic_ts:node_named_child(Node, 0),
@@ -364,16 +391,8 @@ clean_text(Text) ->
     lists:flatten(lists:join(" ", NonEmpty)).
 
 find_named_child_by_type(Node, Type) ->
-    find_named_child_by_type(Node, Type, 0, symbolic_ts:node_named_child_count(Node)).
-
-find_named_child_by_type(_Node, _Type, I, Count) when I >= Count ->
-    false;
-find_named_child_by_type(Node, Type, I, Count) ->
-    Child = symbolic_ts:node_named_child(Node, I),
-    case symbolic_ts:node_type(Child) of
-        Type -> Child;
-        _ -> find_named_child_by_type(Node, Type, I + 1, Count)
-    end.
+    ts_extract_common:find_named_child_by_type(
+        Node, Type, 0, symbolic_ts:node_named_child_count(Node)).
 
 named_children(Node) ->
     Count = symbolic_ts:node_named_child_count(Node),

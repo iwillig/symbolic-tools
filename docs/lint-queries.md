@@ -98,10 +98,23 @@ fan_out(Fun, File, Count) :-
     sort(Callees, Unique),
     length(Unique, Count).
 
+%% One pass over calls/5 (not a fan_out/3 findall per function — that
+%% re-walks every calls fact once per function and timed out against
+%% this project's own base), grouped counting done natively by
+%% count_pairs/2 (symbolic_prolog_lib — every interpreted counting shape
+%% is quadratic in erlog's interpreter), zero-fan-out functions still
+%% rank at 0 via the fan_count_merge/3 against defined keys, and rev/2
+%% not reverse/2 (erlog's reverse BIP is the naive O(n^2) append shape).
 top_fan_out(N, Top) :-
-    findall(Count-Fun-File, fan_out(Fun, File, Count), Raw),
-    sort(Raw, Sorted),
-    reverse(Sorted, Ranked),
+    findall((Fun-File)-Callee, calls(Fun, _, Callee, File, _), Raw),
+    sort(Raw, Unique),
+    count_pairs(Unique, Called),
+    findall(Fun-File, defines(Fun, _, _, File, _), Defs0),
+    sort(Defs0, Defs),
+    fan_count_merge(Defs, Called, Counts),
+    findall(Count-Fun-File, member((Fun-File)-Count, Counts), Ranked0),
+    sort(Ranked0, Sorted),
+    rev(Sorted, Ranked),
     take(N, Ranked, Top).
 
 %% Fan-in: how many distinct local callers a function/arity has.
@@ -111,10 +124,19 @@ fan_in(Fun, Arity, Count) :-
     sort(Callers, Unique),
     length(Unique, Count).
 
+%% Same one-pass shape as top_fan_out/2 above: count_pairs/2 over the
+%% distinct (Fun,Arity,Caller) triples, merged against defined keys so
+%% an uncalled function still ranks at 0.
 top_fan_in(N, Top) :-
-    findall(Count-Fun-Arity, fan_in(Fun, Arity, Count), Raw),
-    sort(Raw, Sorted),
-    reverse(Sorted, Ranked),
+    findall((Fun-Arity)-Caller, calls(Caller, _, local(Fun, Arity), _, _), Raw),
+    sort(Raw, Unique),
+    count_pairs(Unique, Called),
+    findall(Fun-Arity, defines(Fun, Arity, _, _, _), Defs0),
+    sort(Defs0, Defs),
+    fan_count_merge(Defs, Called, Counts),
+    findall(Count-Fun-Arity, member((Fun-Arity)-Count, Counts), Ranked0),
+    sort(Ranked0, Sorted),
+    rev(Sorted, Ranked),
     take(N, Ranked, Top).
 
 %% Defined but never called locally (by name+arity) within this same
@@ -194,8 +216,24 @@ mutual_recursion(A, B) :-
     reaches(B, A),
     A @< B.
 
+%% NOT findall(A-B, mutual_recursion(A, B)) — both sides unbound
+%% re-derives the whole search per candidate and times out on a real
+%% codebase (no tabling in erlog). Instead: prune the call graph to its
+%% cycle core (every mutual pair lives inside a strongly connected
+%% component; SCC nodes always have in- and out-edges, so repeated
+%% both-endpoint pruning preserves every SCC and every SCC-internal
+%% path), run a semi-naive fixpoint closure over just that core, and
+%% read mutual pairs off as Closed intersected with its own reversal.
+%% Measured on this project's own src+test+docs base: the naive form
+%% times out at the 5s budget, the full-graph closure costs ~9s, this
+%% finishes in well under a second.
 all_mutual_recursion(Pairs) :-
-    findall(A-B, mutual_recursion(A, B), Raw),
+    all_call_edges(Edges),
+    cycle_core(Edges, Core),
+    closure(Core, Core, Core, Closed),
+    swap_pairs(Closed, Swapped),
+    ordered_intersect(Closed, Swapped, Mutual),
+    findall(A-B, ( member(A-B, Mutual), A @< B ), Raw),
     sort(Raw, Pairs).
 
 %% --- Entry points ---
@@ -214,8 +252,14 @@ runtime_entry_point(init, 0).
 
 entry_point(Fun, Arity, File) :-
     export(Fun, Arity, File, _).
-entry_point(Fun, Arity, _) :-
-    runtime_entry_point(Fun, Arity).
+%% Enumeration-safe: File is bound to the files that actually define
+%% the runtime entry (the -on_load hook), so enumerating entry_point/3
+%% and using File downstream answers instead of raising
+%% instantiation_error — and the clause has the same shape the export
+%% clause above already has.
+entry_point(Fun, Arity, File) :-
+    runtime_entry_point(Fun, Arity),
+    defines(Fun, Arity, _, File, _).
 
 %% Never called at all — local OR remote — closing the exact blind spot
 %% no_local_callers/3 has (below): that one only checks local(...) call

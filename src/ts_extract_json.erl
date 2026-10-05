@@ -71,7 +71,7 @@ walk_pair(PairNode, PathPrefix, Src, PathAtom) ->
         "pair" ->
             KeyNode = symbolic_ts:node_child_by_field_name(PairNode, "key"),
             ValueNode = symbolic_ts:node_child_by_field_name(PairNode, "value"),
-            Path = join_path(PathPrefix, string_content(KeyNode, Src)),
+            Path = ts_extract_common:join_path(PathPrefix, string_content(KeyNode, Src)),
             Line = line(PairNode),
             case symbolic_ts:node_type(ValueNode) of
                 "object" ->
@@ -96,20 +96,9 @@ string_content(Node, Src) ->
         ContentNode -> symbolic_ts:node_text(ContentNode, Src)
     end.
 
-join_path("", Key) -> Key;
-join_path(Prefix, Key) -> Prefix ++ "." ++ Key.
-
 find_named_child_by_type(Node, Type) ->
-    find_named_child_by_type(Node, Type, 0, symbolic_ts:node_named_child_count(Node)).
-
-find_named_child_by_type(_Node, _Type, I, Count) when I >= Count ->
-    false;
-find_named_child_by_type(Node, Type, I, Count) ->
-    Child = symbolic_ts:node_named_child(Node, I),
-    case symbolic_ts:node_type(Child) of
-        Type -> Child;
-        _ -> find_named_child_by_type(Node, Type, I + 1, Count)
-    end.
+    ts_extract_common:find_named_child_by_type(
+        Node, Type, 0, symbolic_ts:node_named_child_count(Node)).
 
 line(Node) ->
     maps:get(row, symbolic_ts:node_start_point(Node)) + 1.

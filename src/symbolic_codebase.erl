@@ -57,6 +57,11 @@
 
 %% API
 
+%% The shared cache gen_server: THE long-lived state of the MCP
+%% server, a map from normalized absolute directory to its parsed
+%% project (erlog state + meta). Multiple projects coexist and stay
+%% independently queryable; a crash in one parse never disturbs the
+%% others (safely/2).
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
@@ -83,10 +88,20 @@ start_link() ->
 %% symbolic_config.erl). Not found -> Dir is scanned directly as one
 %% plain directory, exactly the original config-free behavior.
 -spec parse(file:name() | undefined) -> {ok, map()} | {error, term()}.
+%% Parse a directory into the cache, .symbolic/rules.pl auto-discovered.
+%% Dir omitted: discover the enclosing project from this server's own
+%% cwd; Dir given: a project only if Dir itself has a
+%% .symbolic/config.json, otherwise scanned literally. Returns the
+%% same summary `overview` reports. See the longer prose above and
+%% parse/2 below for the full shape.
 parse(Dir) ->
     parse(Dir, undefined).
 
 -spec parse(file:name() | undefined, file:filename() | undefined) -> {ok, map()} | {error, term()}.
+%% Same as parse/1 with an explicit rules library: RulesOverride
+%% replaces .symbolic/rules.pl discovery outright (undefined = discover,
+%% which is parse/1's behavior). A rules file that fails to consult
+%% fails the whole parse and leaves the previous cache untouched.
 parse(Dir, RulesOverride) ->
     gen_server:call(?MODULE, {parse, Dir, RulesOverride}, infinity).
 
@@ -95,10 +110,14 @@ parse(Dir, RulesOverride) ->
 %% {ok, [Solutions]} or {truncated, [Solutions]} (cap hit) or
 %% {error, Reason}.
 -spec query(string()) -> query_result().
+%% Prove Goal against the most recently parsed project's fact base
+%% (default limit, default path) — the MCP `query` tool's no-path shape.
 query(Goal) ->
     query(Goal, ?DEFAULT_LIMIT, undefined).
 
 -spec query(string(), non_neg_integer()) -> query_result().
+%% Prove Goal against the most recently parsed project, capped at Limit
+%% solutions (default ?DEFAULT_LIMIT via query/1).
 query(Goal, Limit) ->
     query(Goal, Limit, undefined).
 
@@ -108,6 +127,11 @@ query(Goal, Limit) ->
 %% has ever been parsed at all; {error, {unknown_path, Path}} means Path
 %% itself was never (successfully) parsed, distinct from that.
 -spec query(string(), non_neg_integer(), file:name() | undefined) -> query_result().
+%% Path selects which cached directory to query, by the same string
+%% `parse` was given for it — undefined means "whichever directory was
+%% most recently parsed successfully". {error, not_parsed} means nothing
+%% has ever been parsed at all; {error, {unknown_path, Path}} means
+%% Path itself was never (successfully) parsed, distinct from that.
 query(Goal, Limit, Path) ->
     %% gen_server:call timeout must exceed the proof's own timeout, so the
     %% worker gets a chance to reply {error, timeout} rather than the call
@@ -122,6 +146,8 @@ query(Goal, Limit, Path) ->
 %% The current state of the most-recently-parsed cache entry — see
 %% compute_meta/5 for the shape.
 -spec overview() -> {not_parsed, #{loaded => false}} | {ok, map()}.
+%% What is loaded right now, most recently parsed project — the MCP
+%% tool's no-path shape. The staleness check: total_facts/files here.
 overview() ->
     overview(undefined).
 
@@ -131,6 +157,10 @@ overview() ->
 %% "nothing at all parsed yet" {not_parsed, ...} shape.
 -spec overview(file:name() | undefined) ->
     {not_parsed, #{loaded => false}} | {ok, map()} | {error, term()}.
+%% Same as overview/0, but Path selects which cached directory to
+%% report on (same meaning as query/3's Path). An explicit Path that
+%% was never parsed reports {error, {unknown_path, Path}} rather than
+%% the "nothing at all parsed yet" {not_parsed, ...} shape.
 overview(Path) ->
     gen_server:call(?MODULE, {overview, Path}).
 
@@ -190,16 +220,7 @@ handle_call({query, Goal, Limit, Path}, _From, State) ->
         {error, Reason} ->
             {reply, {error, Reason}, State};
         {ok, #{erl := Erl}} ->
-            case parse_goal(Goal) of
-                {ok, ParsedGoal} ->
-                    case prove_all_with_timeout(ParsedGoal, Erl, clamp_limit(Limit)) of
-                        {ok, Solutions} -> {reply, {ok, Solutions}, State};
-                        {truncated, Solutions} -> {reply, {truncated, Solutions}, State};
-                        {error, Reason} -> {reply, {error, Reason}, State}
-                    end;
-                {error, Reason} ->
-                    {reply, {error, Reason}, State}
-            end
+            {reply, query_reply(Goal, Limit, Erl), State}
     end;
 
 handle_call({overview, Path}, _From, State) ->
@@ -209,10 +230,28 @@ handle_call({overview, Path}, _From, State) ->
         {ok, #{meta := Meta}} -> {reply, {ok, Meta}, State}
     end.
 
+%% The query ladder, extracted so handle_call/3 reads as dispatch: no
+%% triple-nested case. prove_all_with_timeout/3's three result shapes
+%% ({ok,...}, {truncated,...}, {error,...}) ARE the caller's reply
+%% shapes, so this only folds the parse-goal step into the same ladder.
+query_reply(Goal, Limit, Erl) ->
+    case parse_goal(Goal) of
+        {ok, ParsedGoal} ->
+            prove_all_with_timeout(ParsedGoal, Erl, clamp_limit(Limit));
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Standard OTP no-op: nothing in this module uses casts.
 handle_cast(_Msg, State) -> {noreply, State}.
 
+%% Standard OTP no-op: cache state lives in the process, nothing to
+%% clean up on shutdown (an in-flight parse's worker process is
+%% already isolated — see safely/2 and prove_all_with_timeout/3).
 terminate(_Reason, _State) -> ok.
 
+%% Standard OTP no-op: the cache is rebuilt by a fresh parse, never
+%% migrated in place.
 code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
 %% Internal
@@ -302,6 +341,10 @@ consult_rules(Erl, RulesPath) -> erlog:consult(RulesPath, Erl).
 %% -no-rules yet (a persistent cache has less need for a one-off
 %% "consult nothing" switch); pass an explicit RulesOverride if that's
 %% ever needed.
+%% Which rules file a parse consults: an explicit override wins
+%% outright, otherwise auto-discovery walks up from the scan's own
+%% directory — same precedence as symbolic_query:resolve_rules/3, but
+%% for a directory rather than a fact database.
 resolve_rules(_Dir, RulesOverride) when RulesOverride =/= undefined -> RulesOverride;
 resolve_rules(Dir, undefined) -> symbolic_query:discover_rules_from_dir(Dir).
 

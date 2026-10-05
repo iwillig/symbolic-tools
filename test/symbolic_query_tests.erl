@@ -232,8 +232,23 @@ library_cases() ->
         {"fan_out(foo, 'f.erl', Count)", {solutions, [{'Count', 3}]}},
         {"fan_out(bar, 'f.erl', Count)", {solutions, [{'Count', 0}]}},
         {"top_fan_out(1, Top)", {solutions, [{'Top', [dash(3, foo, 'f.erl')]}]}},
+        %% N larger than the count of calling functions: bar is defined
+        %% but calls nothing, and the one-pass rewrite of top_fan_out/2
+        %% must still rank it — 0 fan-out, last — exactly what the
+        %% per-function original produced (the merge against defined
+        %% keys, defaulting to 0, is what keeps the rewrite honest).
+        {"top_fan_out(2, Top)",
+            {solutions, [{'Top', [dash(3, foo, 'f.erl'), dash(0, bar, 'f.erl')]}]}},
         {"fan_in(bar, 1, Count)", {solutions, [{'Count', 1}]}},
         {"top_fan_in(1, Top)", {solutions, [{'Top', [dash(1, bar, 1)]}]}},
+        %% Same zero-count lock for the one-pass top_fan_in/2 rewrite:
+        %% nothing calls foo/1 locally, so it ranks last at 0.
+        {"top_fan_in(2, Top)",
+            {solutions, [{'Top', [dash(1, bar, 1), dash(0, foo, 1)]}]}},
+        %% entry_point/3 enumeration, the mode the instantiation_error
+        %% used to hit: both clauses together, File bound downstream.
+        {"entry_point(Fun, Arity, File), sub_atom(File, _, _, _, '.erl')",
+            no_solution},
         {"no_local_callers(foo, 1, File)", {solutions, [{'File', 'f.erl'}]}},
         {"no_local_callers(bar, 1, File)", no_solution},
         {"all_no_local_callers(Triples)",
@@ -284,7 +299,16 @@ library_cases() ->
         %% here at all (see sub_text/5's own header comment above).
         {"comment(_, 7, Text), atom_from_binary(Text, A)",
             {solutions, [{'A', foo}, {'Text', <<"foo">>}]}},
-        {"comment(_, 8, Text), atom_from_binary(Text, _)", no_solution}].
+        {"comment(_, 8, Text), atom_from_binary(Text, _)", no_solution},
+        %% count_pairs/2 — symbolic_prolog_lib's native grouped counter,
+        %% what the one-pass top_fan_out/2 and top_fan_in/2 are built on.
+        %% Counts per distinct key, output sorted by key, input order
+        %% irrelevant — the two cases below pin both properties.
+        {"count_pairs([a-x, a-y, b-z], Counts)",
+            {solutions, [{'Counts', [dash(a, 2), dash(b, 1)]}]}},
+        {"count_pairs([b-z, a-y, a-x], Counts)",
+            {solutions, [{'Counts', [dash(a, 2), dash(b, 1)]}]}},
+        {"count_pairs([], Counts)", {solutions, [{'Counts', []}]}}].
 
 %% --- ESLint-style rules added on top of the library above ---
 %%
@@ -583,6 +607,28 @@ mutual_recursion_finds_a_cycle_once_test() ->
             symbolic_query:run_result(?DB, real_rules(), "all_mutual_recursion(Pairs)"))
     end).
 
+%% An INDIRECT cycle — a reaches c only through b, so the pair a-c
+%% needs more than one fixpoint round to exist. This exercises the
+%% merge join's grouping and the multi-round closure path, and is the
+%% correctness half of the timeout fix: the member/member join this
+%% replaced timed out against this project's own real base (1190
+%% edges) before the pair list could ever come back. The dangling
+%% f->b edge (b never reaches f back, so f is in no pair) adds a
+%% multi-element key group on both sides of the join.
+all_mutual_recursion_finds_an_indirect_cycle_test() ->
+    with_db([{defines, a, 0, <<"()">>, 'p.erl', 1},
+             {defines, b, 0, <<"()">>, 'p.erl', 2},
+             {defines, c, 0, <<"()">>, 'p.erl', 3},
+             {defines, f, 0, <<"()">>, 'p.erl', 4},
+             {calls, a, 0, {local, b, 0}, 'p.erl', 1},
+             {calls, b, 0, {local, c, 0}, 'p.erl', 2},
+             {calls, c, 0, {local, a, 0}, 'p.erl', 3},
+             {calls, f, 0, {local, b, 0}, 'p.erl', 4}], fun() ->
+        ?assertEqual({solutions, [{'Pairs',
+            [dash(a, b), dash(a, c), dash(b, c)]}]},
+            symbolic_query:run_result(?DB, real_rules(), "all_mutual_recursion(Pairs)"))
+    end).
+
 %% called: has a local caller. remote_entry: only a remote caller (the
 %% no_local_callers/3 false-positive truly_uncalled/3 exists to close).
 %% never_called: no caller of any kind.
@@ -624,6 +670,21 @@ truly_uncalled_ignores_entry_points_test() ->
         ?assertEqual({solutions, [{'Triples',
             [dash(dead, 0, 'p.erl'), dash(ghost, 0, 'p.erl')]}]},
             symbolic_query:run_result(?DB, real_rules(), "all_truly_uncalled(Triples)"))
+    end).
+
+%% entry_point/3's runtime_entry_point clause used to leave File
+%% unbound — `entry_point(Fun, Arity, _)` — so enumerating it and using
+%% File downstream (findall + sub_atom is exactly how a review session
+%% hit it live) raised instantiation_error instead of answering. The
+%% fix ties the -on_load exemption to the files that actually define
+%% it — same shape the export clause already has.
+entry_point_runtime_clause_binds_file_test() ->
+    with_db([{defines, plain, 0, <<"()">>, 'p.erl', 1},
+             {defines, init, 0, <<"()">>, 'p.erl', 2},
+             {calls, caller, 0, {local, plain, 0}, 'p.erl', 3}], fun() ->
+        ?assertEqual({solutions, [{'File', 'p.erl'}]},
+            symbolic_query:run_result(?DB, real_rules(),
+                "entry_point(init, 0, File), sub_atom(File, _, _, _, '.erl')"))
     end).
 
 %% export/4 has zero clauses for a tree with no Erlang in it (TypeScript,

@@ -61,7 +61,7 @@
 -include_lib("erlog/src/erlog_int.hrl").
 
 -export([load/1]).
--export([sub_atom_5/3, sub_text_5/3, atom_from_binary_2/3]).
+-export([sub_atom_5/3, sub_text_5/3, atom_from_binary_2/3, count_pairs_2/3]).
 
 -import(erlog_int, [prove_body/2, fail/1, unify/3, add_compiled_proc/4]).
 
@@ -71,7 +71,46 @@
 load(Db0) ->
     Db1 = add_compiled_proc({sub_atom, 5}, ?MODULE, sub_atom_5, Db0),
     Db2 = add_compiled_proc({sub_text, 5}, ?MODULE, sub_text_5, Db1),
-    add_compiled_proc({atom_from_binary, 2}, ?MODULE, atom_from_binary_2, Db2).
+    Db3 = add_compiled_proc({atom_from_binary, 2}, ?MODULE, atom_from_binary_2, Db2),
+    add_compiled_proc({count_pairs, 2}, ?MODULE, count_pairs_2, Db3).
+
+%% count_pairs_2(Head, NextGoal, State) -> void.
+%%
+%% count_pairs(Pairs, Counts) — one Key-N term per distinct key, N = the
+%% number of `Key-Value` pairs sharing that Key, sorted by standard term
+%% order. Native Erlang (a map fold + one sort), because every pure-Prolog
+%% shape of grouped counting — an interpreted run-length over a sorted
+%% list, a member scan per key, a findall per key — is quadratic or
+%% choice-point-per-element in erlog's interpreter (measured against this
+%% project's own real base: 3.2s interpreted for a 3200-pair list that
+%% costs microseconds here). The .symbolic/rules.pl fan-out/fan-in
+%% rankings (top_fan_out/2, top_fan_in/2) are built on it; any grouped
+%% count over a usorted Key-Value list is its use case.
+%%
+%% Pairs must be bound; Counts is always output (the only mode the
+%% library needs — same restriction sub_atom/5 makes on its Atom).
+%% Elements must be Key-Value terms; anything else is a type error
+%% rather than a silent skip, so a mis-shaped pipeline fails loudly.
+%% Input order is irrelevant (the map groups, the sort orders), but
+%% feeding it the usorted output of sort/2 is the intended shape.
+count_pairs_2({count_pairs, Pairs0, Counts0}, Next, #est{bs = Bs} = St) ->
+    case deref(Pairs0, Bs) of
+        Pairs when is_list(Pairs) ->
+            L1 = erlog_int:dderef_list(Pairs, Bs),
+            Counts = count_pairs_1(L1, #{}),
+            erlog_int:unify_prove_body(Counts0, Counts, Next, St);
+        {_} ->
+            erlog_int:instantiation_error(St);
+        Other ->
+            erlog_int:type_error(list, Other, St)
+    end.
+
+count_pairs_1([], Counts) ->
+    lists:sort([{'-', K, N} || {K, N} <- maps:to_list(Counts)]);
+count_pairs_1([{'-', K, _} | Rest], Counts) ->
+    count_pairs_1(Rest, maps:update_with(K, fun(N) -> N + 1 end, 1, Counts));
+count_pairs_1([Bad | _], _Counts) ->
+    error({count_pairs_bad_element, Bad}).
 
 %% sub_atom_5(Head, NextGoal, State) -> void.
 %%

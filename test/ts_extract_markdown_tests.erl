@@ -152,6 +152,35 @@ extracts_frontmatter_document_test() ->
 %% section with no level and no heading is not a section the fact base
 %% can ask anything about. What must remain is the real content section
 %% at line 6.
+%% An HTML comment (or any raw HTML) between the frontmatter and the
+%% first heading is parsed as an html_block node, and it is the FIRST
+%% NAMED CHILD of the section the frontmatter's closing --- opens — so
+%% section_fact/2's "a section's own first named child is always its
+%% heading" invariant is false for it a second way: the section has
+%% named children (the comment block), so the zero-children guard in
+%% sections/4 does not skip it, and heading_level_of/1 died with
+%% {case_clause, "html_block"} — taking the whole extraction of the
+%% file down (docs/templates/presentation.md is this shape, and it
+%% used to lose ALL its facts to this crash, not just one section's).
+extracts_html_block_document_test() ->
+    Facts = ts_extract_markdown:file("test/fixtures/html_block.md"),
+    Path = list_to_atom("test/fixtures/html_block.md"),
+    ?assert(lists:member({heading, Path, 1, <<"The problem">>, 10}, Facts)),
+    ?assert(lists:member({section, Path, 1, 10, 12}, Facts)),
+    ?assert(lists:member(
+        {paragraph, Path, <<"Some text.">>, 12}, Facts)).
+
+%% The html_block section has no leading heading, so it must yield NO
+%% section fact — the same guard as frontmatter_yields_no_
+%% headingless_section_fact_test/0, extended to sections that DO have
+%% named children but no heading among them. What must remain is the
+%% real content section at line 9.
+html_block_yields_no_headingless_section_fact_test() ->
+    Facts = ts_extract_markdown:file("test/fixtures/html_block.md"),
+    Path = list_to_atom("test/fixtures/html_block.md"),
+    ?assertEqual([], [F || {section, P, _, Start, _} = F <- Facts,
+                           P =:= Path, Start < 10]).
+
 frontmatter_yields_no_headingless_section_fact_test() ->
     Facts = ts_extract_markdown:file("test/fixtures/frontmatter.md"),
     Path = list_to_atom("test/fixtures/frontmatter.md"),

@@ -38,6 +38,11 @@
 %% docs/erlang-mcp-design.md).
 -export([handle_parse/1, handle_query/1, handle_overview/1]).
 
+%% Start the MCP server over stdio: logging first (so early failures
+%% are visible), then the erlmcp application, the symbolic_codebase
+%% cache gen_server, and the tool registry — then hand off to erlmcp's
+%% loop. One process tree for the whole session; see
+%% docs/erlang-mcp-design.md.
 run() ->
     ok = setup_logging(),
     ?LOG_INFO("symbolic serve starting"),
@@ -303,6 +308,12 @@ handle_parse(Params) ->
             json(#{error => caught_str(Class, Crash, ST)})
     end.
 
+%% The `query` MCP tool: prove a goal against a parsed directory's
+%% fact base. Params: `goal` (string, required), `path` (optional —
+%% which cached project, default the most recently parsed), `limit`
+%% (optional solution cap, default 50). Every handler in this module
+%% returns a JSON binary and never crashes — errors come back as
+%% {error, ...} JSON, not as a crashed tool call.
 handle_query(Params) ->
     try
         Goal = to_list(maps:get(<<"goal">>, Params)),
@@ -332,6 +343,11 @@ render_query({truncated, Solutions}, Limit) ->
 render_query({error, QueryErr}, _Limit) ->
     json(#{error => error_str(QueryErr)}).
 
+%% The `overview` MCP tool: what is loaded right now (loaded or not,
+%% files, languages, fact counts by predicate, rules_file). `path`
+%% optional, same cache-key semantics as query. The MCP-side staleness
+%% check: total_facts/files here is how a caller tells whether the
+%% cached tree moved under it.
 handle_overview(Params) ->
     try
         Path = optional_path(Params),

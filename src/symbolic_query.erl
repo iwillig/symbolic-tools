@@ -34,12 +34,16 @@
 -define(DEFAULT_RULES_DIR, ".symbolic").
 -define(DEFAULT_RULES_FILE, "rules.pl").
 
+%% Convenience shape: no rules override (auto-discover), no -no-rules.
 run(DbPath, Goal) ->
     run(DbPath, undefined, false, Goal).
 
 %% `undefined` RulesPath now means "auto-discover the project default"
 %% (see resolve_rules/3) rather than "consult nothing" — that stricter
 %% meaning belongs to run_result/3, below.
+%% Convenience shape with a rules path. `undefined` RulesPath means
+%% "auto-discover the project default" (see resolve_rules/3), not
+%% "consult nothing".
 run(DbPath, RulesPath, Goal) ->
     run(DbPath, RulesPath, false, Goal).
 
@@ -53,6 +57,10 @@ run(DbPath, RulesPath, Goal) ->
 %% current operation", which is exactly why run_result/3 couldn't be unit
 %% tested before this split existed.
 -spec run(file:filename(), file:filename() | undefined, boolean(), string()) -> no_return().
+%% The CLI's actual shape: an explicitly-given rules path plus the
+%% -no-rules switch. halt() belongs only here, at the CLI's edge — the
+%% outcome itself lives in run_result/3, which returns a plain term
+%% instead of halting, precisely so EUnit can exercise it directly.
 run(DbPath, RulesPath, NoRules, Goal) ->
     case run_result(DbPath, resolve_rules(DbPath, RulesPath, NoRules), Goal) of
         {solutions, Bindings} ->
@@ -78,6 +86,10 @@ run(DbPath, RulesPath, NoRules, Goal) ->
     | {error, {no_such_db, file:filename()}}
     | {error, {rules_error, file:filename() | undefined, term()}}
     | {error, {query_failed, term()}}.
+%% The halt-free core: load the fact database, optionally consult a
+%% rules file, prove Goal, and report what happened as a plain term.
+%% Starts (and always stops) its own prolog_session — a caller gets a
+%% clean session either way, never one left running after this returns.
 run_result(DbPath, RulesPath, Goal) ->
     case filelib:is_regular(DbPath) of
         true -> run_checked(DbPath, RulesPath, Goal);
@@ -96,6 +108,9 @@ run_checked(DbPath, RulesPath, Goal) ->
     prolog_session:stop(Pid),
     Result.
 
+%% Consult the rules file iff one was resolved: undefined means
+%% "nothing to consult", not an error — the no-rules path is a valid,
+%% deliberate query mode (raw facts only).
 maybe_consult_rules(_Pid, undefined) -> ok;
 maybe_consult_rules(Pid, RulesPath) -> prolog_session:consult(Pid, RulesPath).
 
@@ -105,6 +120,11 @@ maybe_consult_rules(Pid, RulesPath) -> prolog_session:consult(Pid, RulesPath).
 %%   * otherwise look for the project's own .symbolic/rules.pl
 -spec resolve_rules(file:filename(), file:filename() | undefined, boolean()) ->
     file:filename() | undefined.
+%% Which rules file (if any) a query consults:
+%%   * an explicit path wins outright — discovery never second-guesses it
+%%   * NoRules (the -no-rules switch) suppresses discovery
+%%   * otherwise the project's own .symbolic/rules.pl, discovered by
+%%     walking up from the fact database's directory, then the cwd.
 resolve_rules(_DbPath, RulesPath, _NoRules) when RulesPath =/= undefined -> RulesPath;
 resolve_rules(_DbPath, _RulesPath, true) -> undefined;
 resolve_rules(DbPath, undefined, false) -> discover_rules(DbPath).
@@ -126,6 +146,9 @@ discover_rules(DbPath) ->
 %% a db kept outside the tree, under /tmp). Just discover_up/2 with the
 %% rules file's own path baked in.
 -spec discover_rules_from_dir(file:filename()) -> file:filename() | undefined.
+%% Walk up from StartDir looking for .symbolic/rules.pl, then fall
+%% back to the current directory if StartDir's own chain has none — the
+%% db may live elsewhere than the checkout a query runs from.
 discover_rules_from_dir(StartDir) ->
     discover_up(StartDir, [?DEFAULT_RULES_DIR, ?DEFAULT_RULES_FILE]).
 
@@ -137,6 +160,9 @@ discover_rules_from_dir(StartDir) ->
 %%  RelPathParts is joined onto each candidate directory in turn (e.g.
 %%  [".symbolic", "rules.pl"] or [".symbolic", "config.json"]).
 -spec discover_up(file:filename(), [file:name()]) -> file:filename() | undefined.
+%% The upward walk: RelPathParts (e.g. [".symbolic", "rules.pl"])
+%% checked at StartDir, then each ancestor, then the cwd as the
+%% fallback root. First hit wins.
 discover_up(StartDir, RelPathParts) ->
     case search_up(filename:absname(StartDir), RelPathParts) of
         Found when is_list(Found) -> Found;
@@ -167,6 +193,9 @@ query_result(Pid, Goal) ->
         {error, Reason} -> {error, {query_failed, Reason}}
     end.
 
+%% CLI-side solution rendering: one `Name = value` line per binding.
+%% Exported for symbolic_query_tests.erl, which pins that it never
+%% crashes on real erlog binding shapes (unbound residue included).
 print_bindings([]) ->
     io:format("Yes.~n");
 print_bindings(Bindings) ->
@@ -185,5 +214,8 @@ fail(Fmt, Args) ->
     io:put_chars(standard_error, io_lib:format(Fmt ++ "~n", Args)),
     halt(1).
 
+%% A binding NAME rendered as a CLI string — atoms print bare,
+%% integers (erlog's internal variable numbering, the unbound residue)
+%% print as _N, never crash.
 name_to_list(Name) when is_atom(Name) -> atom_to_list(Name);
 name_to_list(Name) when is_integer(Name) -> "_" ++ integer_to_list(Name).

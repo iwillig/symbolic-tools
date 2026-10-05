@@ -14,6 +14,10 @@
 -export([info/0, vsn/0, git_sha/0]).
 
 -spec info() -> #{vsn := binary(), git_sha := binary()}.
+%% The whole running-build identity in one map — what `info` and
+%% `overview` report to an agent deciding whether the connected server
+%% has picked up a given commit yet. See the module header for the
+%% compare-against-`git rev-parse HEAD` workflow.
 info() ->
     #{vsn => vsn(), git_sha => git_sha()}.
 
@@ -21,6 +25,8 @@ info() ->
 %% symbolic_tools.app.src) — coarser than git_sha, but stable across a
 %% source tree that has no .git (e.g. a packaged/vendored copy).
 -spec vsn() -> binary().
+%% The .app vsn (symbolic_tools.app.src's hand-maintained literal) —
+%% coarser than git_sha, but stable in a tree with no .git.
 vsn() ->
     case application:get_key(symbolic_tools, vsn) of
         {ok, Vsn} -> unicode:characters_to_binary(Vsn);
@@ -34,6 +40,9 @@ vsn() ->
 %% checkout" and "built before this mechanism existed" — an old release
 %% predating priv/git_sha has no such file at all.
 -spec git_sha() -> binary().
+%% The commit this build was made from, written at compile time by
+%% scripts/gen_git_sha.sh into priv/git_sha; "unknown" covers builds
+%% outside a git checkout (and pre-mechanism releases).
 git_sha() ->
     case code:priv_dir(symbolic_tools) of
         {error, bad_name} ->

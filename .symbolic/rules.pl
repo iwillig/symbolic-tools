@@ -102,11 +102,40 @@ fan_out(Fun, File, Count) :-
     sort(Callees, Unique),
     length(Unique, Count).
 
-%% Top N by fan-out, busiest first.
+%% Merge the defined keys (Defs, sorted) against the counted ones
+%% (Called, sorted, Key-N pairs): every defined key comes out with its
+%% count, or 0 when nothing called it; a count for a key with NO
+%% definition is dropped — fan_out/3 and fan_in/3 both require defines,
+%% so the one-pass rewrites must too.
+fan_count_merge([], _, []) :- !.
+fan_count_merge([K|Ks], [], [K-0|Out]) :- !,
+    fan_count_merge(Ks, [], Out).
+fan_count_merge([K|Ks], [K-N|Cs], [K-N|Out]) :- !,
+    fan_count_merge(Ks, Cs, Out).
+fan_count_merge([K|Ks], [K2-N|Cs], [K-0|Out]) :-
+    K @< K2, !, fan_count_merge(Ks, [K2-N|Cs], Out).
+fan_count_merge([K|Ks], [_|Cs], Out) :-
+    fan_count_merge([K|Ks], Cs, Out).
+
+%% Top N by fan-out, busiest first — ONE pass over calls/5 instead of a
+%% findall of fan_out/3 per defined function, which re-walked every
+%% calls/5 fact once per function (the same quadratic shape that timed
+%% out against this project's own base). fan_out/3 itself stays: bound-Fun
+%% mode is fine and is what too_complex/3 uses. Distinct (Fun,File,Callee)
+%% triples are counted natively (count_pairs/2, symbolic_prolog_lib) and
+%% merged against the defined keys, so a function that calls nothing
+%% still ranks — at 0, last — exactly the per-function original's
+%% semantics.
 top_fan_out(N, Top) :-
-    findall(Count-Fun-File, fan_out(Fun, File, Count), Raw),
-    sort(Raw, Sorted),
-    reverse(Sorted, Ranked),
+    findall((Fun-File)-Callee, calls(Fun, _, Callee, File, _), Raw),
+    sort(Raw, Unique),
+    count_pairs(Unique, Called),
+    findall(Fun-File, defines(Fun, _, _, File, _), Defs0),
+    sort(Defs0, Defs),
+    fan_count_merge(Defs, Called, Counts),
+    findall(Count-Fun-File, member((Fun-File)-Count, Counts), Ranked0),
+    sort(Ranked0, Sorted),
+    rev(Sorted, Ranked),
     take(N, Ranked, Top).
 
 %% Fan-in: how many distinct local callers a function/arity has.
@@ -117,10 +146,21 @@ fan_in(Fun, Arity, Count) :-
     length(Unique, Count).
 
 %% Top N by fan-in — the most relied-upon functions in the codebase.
+%% Same one-pass shape as top_fan_out/2 above (count_pairs/2 over
+%% distinct (Fun,Arity,Caller) triples), so an uncalled function still
+%% ranks at 0.
+%% The per-function findall this replaces timed out against this
+%% project's own base.
 top_fan_in(N, Top) :-
-    findall(Count-Fun-Arity, fan_in(Fun, Arity, Count), Raw),
-    sort(Raw, Sorted),
-    reverse(Sorted, Ranked),
+    findall((Fun-Arity)-Caller, calls(Caller, _, local(Fun, Arity), _, _), Raw),
+    sort(Raw, Unique),
+    count_pairs(Unique, Called),
+    findall(Fun-Arity, defines(Fun, Arity, _, _, _), Defs0),
+    sort(Defs0, Defs),
+    fan_count_merge(Defs, Called, Counts),
+    findall(Count-Fun-Arity, member((Fun-Arity)-Count, Counts), Ranked0),
+    sort(Ranked0, Sorted),
+    rev(Sorted, Ranked),
     take(N, Ranked, Top).
 
 %% Defined but never called locally — blind to remote/external callers,
@@ -186,6 +226,18 @@ hidden_risky_call(Fun, Module, Target) :-
 take(0, _, []) :- !.
 take(_, [], []) :- !.
 take(N, [H|T], [H|Rest]) :- N > 0, N1 is N - 1, take(N1, T, Rest).
+
+%% Linear list reversal, accumulator-based — erlog's OWN reverse/2 BIP
+%% compiles to the naive `reverse(T,L), append(L,[H],L1)` shape, which is
+%% O(n^2): measured, reversing this project's own 981-entry fan-out
+%% ranking took ~39s (the whole top_fan_out/2 pipeline without it is
+%% ~3s). Every rules-library reverse goes through rev/2 for that reason.
+%% Appending the BIP's own append/3 here would rebuild the trap, hence
+%% the accumulator.
+rev(List, Reversed) :- rev_(List, [], Reversed).
+
+rev_([], Acc, Acc) :- !.
+rev_([H|T], Acc, Out) :- rev_(T, [H|Acc], Out).
 
 %% sub_atom/5 used to be defined here as a pure-Prolog shim
 %% (generate-and-test over append/3, same technique as take/3 above).
@@ -275,7 +327,7 @@ too_complex(Fun, File, Count) :-
 all_too_complex(Ranked) :-
     findall(Count-Fun-File, too_complex(Fun, File, Count), Raw),
     sort(Raw, Sorted),
-    reverse(Sorted, Ranked).
+    rev(Sorted, Ranked).
 
 %% Two functions each reachable from the other's call chain. Fine when at
 %% least one side is bound — NOT what all_mutual_recursion/1 below uses.
@@ -297,10 +349,43 @@ all_call_edges(Edges) :-
     findall(A-B, call_edge(A, B), Raw),
     sort(Raw, Edges).
 
-%% One fixpoint round: extend last round's new pairs (Frontier) by one edge.
+%% One fixpoint round: extend last round's new pairs (Frontier) by one
+%% edge — as a MERGE JOIN, not a member/member cross product. The
+%% nested-member form this replaces is the quadratic round that timed
+%% out against this project's own src+test+docs base (1190 edges made
+%% round 1 alone ~1.4M unifications, and every round after pays the same
+%% shape); re-keying Frontier by destination and merging against Edges
+%% — both sorted by the join key — makes a round linear in
+%% |Frontier| + |Edges| instead.
 join_step(Frontier, Edges, New) :-
-    findall(A-C, ( member(A-B, Frontier), member(B-C, Edges) ), Raw),
+    findall(B-A, member(A-B, Frontier), ByDst0),
+    sort(ByDst0, ByDst),
+    join_step_by_dst(ByDst, Edges, Raw),
     sort(Raw, New).
+
+%% Merge join: both lists sorted by FIRST element (the join key B);
+%% equal-key head groups are cross-producted, unequal heads advance the
+%% smaller side past the larger. The equal-key case is expressed by the
+%% same variable B in both heads — head unification IS the equality test.
+join_step_by_dst([], _, []) :- !.
+join_step_by_dst(_, [], []) :- !.
+join_step_by_dst([B-A|FBs], [B-C|Es], Out) :- !,
+    take_same_key(FBs, B, FBsRest, As0),
+    take_same_key(Es, B, EsRest, Cs0),
+    findall(A0-C0, ( member(A0, [A|As0]), member(C0, [C|Cs0]) ), Cross),
+    append(Cross, Rest, Out),
+    join_step_by_dst(FBsRest, EsRest, Rest).
+join_step_by_dst([K1-_|FBs], [K2-C|Es], Out) :-
+    K1 @< K2, !, join_step_by_dst(FBs, [K2-C|Es], Out).
+join_step_by_dst([K1-A|FBs], [_|Es], Out) :-
+    join_step_by_dst([K1-A|FBs], Es, Out).
+
+%% Vals = the second elements of the maximal prefix of List whose keys
+%% equal K (K itself excluded — the caller supplies the head's own
+%% value); Rest = everything after that group.
+take_same_key([], _, [], []) :- !.
+take_same_key([K-X|Xs], K, Rest, [X|Vals]) :- !, take_same_key(Xs, K, Rest, Vals).
+take_same_key(L, _, L, []) :- !.
 
 %% Ordered set difference over two sorted, duplicate-free lists (New \ Known).
 ordered_diff([], _Known, []) :- !.
@@ -320,9 +405,65 @@ closure(Edges, Frontier, Known, Closed) :-
     closure(Edges, Fresh, NextKnown, Closed).
 
 %% Every A-B pair such that A's call chain reaches B, computed once.
+%% Full reachability over the WHOLE call graph — deliberately not the
+%% cycle-core pruning all_mutual_recursion/1 uses below, because this
+%% predicate's contract is every reaches pair, not just the cycle ones.
 all_reaches_pairs(Closed) :-
     all_call_edges(Edges),
     closure(Edges, Edges, Edges, Closed).
+
+%% The cycle core of a call graph: a node on a cycle always has both an
+%% in-edge and an out-edge, so repeated rounds of "keep only edges whose
+%% BOTH endpoints are in Sources \cap Targets" converge on a subgraph
+%% that contains every cycle. Every mutual-recursion pair lives inside
+%% a strongly connected component, every SCC node lies on a cycle, and
+%% the SCC-internal path between two SCC members only passes through
+%% nodes of the same SCC — so pruning removes no mutual pair and breaks
+%% no path that matters, while collapsing this project's own real
+%% 1190-edge base to its cycle core before the closure runs. Measured,
+%% the unpruned closure costs ~9s of interpreted inference (erlog
+%% resolves ~10k steps/sec) against the 5s proof budget; the pruned one
+%% finishes in well under a second.
+cycle_core(Edges, Core) :-
+    sorted_sources(Edges, Ss),
+    sorted_targets(Edges, Ts),
+    ordered_intersect(Ss, Ts, Both),
+    keep_edges_with_both_ends_in(Edges, Both, Kept),
+    ( Kept == Edges -> Core = Kept ; cycle_core(Kept, Core) ).
+
+sorted_sources(Edges, Ss) :-
+    findall(A, member(A-_, Edges), Raw), sort(Raw, Ss).
+
+sorted_targets(Edges, Ts) :-
+    findall(B, member(_-B, Edges), Raw), sort(Raw, Ts).
+
+%% Edges sorted by A, Nodes sorted: filter by source, re-key by B,
+%% filter by target, re-key back — two linear passes, no member scans
+%% over the node list (a member per EDGE is the quadratic shape that
+%% made the first attempt at this pruning cost more than it saved).
+keep_edges_with_both_ends_in(Edges, Nodes, Kept) :-
+    filter_edges_by_endpoint(Edges, Nodes, BySrc),
+    findall(B-A, member(A-B, BySrc), Swapped0),
+    sort(Swapped0, Swapped),
+    filter_edges_by_endpoint(Swapped, Nodes, ByDst),
+    findall(B-A, member(A-B, ByDst), Kept0),
+    sort(Kept0, Kept).
+
+%% Edges and Nodes both sorted by first element: keep an edge group iff
+%% its key is in Nodes. Group-wise, one advance per group, not per edge.
+filter_edges_by_endpoint([], _, []) :- !.
+filter_edges_by_endpoint(_, [], []) :- !.
+filter_edges_by_endpoint([K-V|Es], [K|Ns], Out) :- !,
+    take_same_key(Es, K, EsRest, Group),
+    findall(K-V1, member(V1, [V|Group]), Kept),
+    append(Kept, Rest, Out),
+    filter_edges_by_endpoint(EsRest, Ns, Rest).
+filter_edges_by_endpoint([K1-_|Es], [K2|Ns], Out) :-
+    K1 @< K2, !,
+    take_same_key(Es, K1, EsRest, _),
+    filter_edges_by_endpoint(EsRest, [K2|Ns], Out).
+filter_edges_by_endpoint([K1-V|Es], [_|Ns], Out) :- !,
+    filter_edges_by_endpoint([K1-V|Es], Ns, Out).
 
 %% Closed with every pair swapped end-for-end.
 swap_pairs(Pairs, Swapped) :-
@@ -336,9 +477,14 @@ ordered_intersect([X|Xs], [X|Ys], [X|Zs]) :- !, ordered_intersect(Xs, Ys, Zs).
 ordered_intersect([X|Xs], [Y|Ys], Zs) :- X @< Y, !, ordered_intersect(Xs, [Y|Ys], Zs).
 ordered_intersect(Xs, [_Y|Ys], Zs) :- ordered_intersect(Xs, Ys, Zs).
 
-%% Mutual pairs = Closed ∩ reverse(Closed), canonicalized via A @< B.
+%% Mutual pairs = Closed ∩ reverse(Closed), canonicalized via A @< B,
+%% over the CYCLE CORE (see cycle_core/2) — same pairs as the full-graph
+%% version (pruning preserves every SCC and every SCC-internal path), at
+%% a fraction of the closure cost.
 all_mutual_recursion(Pairs) :-
-    all_reaches_pairs(Closed),
+    all_call_edges(Edges),
+    cycle_core(Edges, Core),
+    closure(Core, Core, Core, Closed),
     swap_pairs(Closed, Swapped),
     ordered_intersect(Closed, Swapped, Mutual),
     findall(A-B, ( member(A-B, Mutual), A @< B ), Raw),
@@ -356,8 +502,17 @@ runtime_entry_point(init, 0).
 
 entry_point(Fun, Arity, File) :-
     export(Fun, Arity, File, _).
-entry_point(Fun, Arity, _) :-
-    runtime_entry_point(Fun, Arity).
+%% Enumeration-safe: this clause used to leave File unbound
+%% (`entry_point(Fun, Arity, _)`), so enumerating entry_point/3 and using
+%% File downstream — findall + sub_atom is exactly how a live review
+%% session hit it — raised instantiation_error instead of answering.
+%% Tying the -on_load exemption to the files that actually define it is
+%% also just the correct semantics: same shape the export clause above
+%% already has, and identical behavior wherever File is already bound
+%% (truly_uncalled/3 re-checks defines/5 facts of its own Fun/Arity).
+entry_point(Fun, Arity, File) :-
+    runtime_entry_point(Fun, Arity),
+    defines(Fun, Arity, _, File, _).
 
 %% Never called at all, local OR remote, and not an entry point — closes
 %% no_local_callers/3's false positives (remote callers, OTP callbacks).
@@ -404,7 +559,7 @@ god_file(File, Count) :-
 all_god_files(Ranked) :-
     findall(Count-File, god_file(File, Count), Raw),
     sort(Raw, Sorted),
-    reverse(Sorted, Ranked).
+    rev(Sorted, Ranked).
 
 %% Sentinel: keeps branch/5 defined for a tree with zero decision points.
 branch(none, 0, none, none, 0) :- fail.
@@ -433,7 +588,7 @@ too_complex_real(Fun, Arity, File, Count) :-
 all_too_complex_real(Ranked) :-
     findall(Count-Fun-Arity-File, too_complex_real(Fun, Arity, File, Count), Raw),
     sort(Raw, Sorted),
-    reverse(Sorted, Ranked).
+    rev(Sorted, Ranked).
 
 %% --- Naming convention: id-length ---
 
@@ -801,7 +956,7 @@ no_fallthrough_case(BlockId, Fun, Arity, File, Line) :-
     findall(Idx-K, stmt(_, BlockId, Idx, K, _, _), Stmts),
     Stmts \= [],
     sort(Stmts, Sorted),
-    reverse(Sorted, [_-LastKind | _]),
+    rev(Sorted, [_-LastKind | _]),
     \+ terminator_kind(LastKind).
 
 all_no_fallthrough_cases(Triples) :-
@@ -1032,7 +1187,7 @@ too_many_statements(Fun, Arity, File, Count) :-
 all_too_many_statements(Ranked) :-
     findall(Count-Fun-Arity-File, too_many_statements(Fun, Arity, File, Count), Raw),
     sort(Raw, Sorted),
-    reverse(Sorted, Ranked).
+    rev(Sorted, Ranked).
 
 %% --- Round 2 of previously-"feasible" ESLint rules, now written ---
 %%
@@ -1212,7 +1367,7 @@ file_max_line(File, MaxLine) :-
     findall(L2, calls(_, _, _, File, L2), CLines),
     append(DLines, CLines, AllLines),
     sort(AllLines, SortedLines),
-    reverse(SortedLines, [MaxLine | _]).
+    rev(SortedLines, [MaxLine | _]).
 
 too_many_lines(File, MaxLine) :-
     file_max_line(File, MaxLine),
@@ -1221,7 +1376,7 @@ too_many_lines(File, MaxLine) :-
 all_too_many_lines(Ranked) :-
     findall(MaxLine-File, too_many_lines(File, MaxLine), Raw),
     sort(Raw, Sorted),
-    reverse(Sorted, Ranked).
+    rev(Sorted, Ranked).
 
 %% ESLint no-alert: https://eslint.org/docs/latest/rules/no-alert
 %% A direct call to alert/confirm/prompt — the banned-local-call sibling to
@@ -1402,7 +1557,7 @@ dangling_underscore(Fun) :-
     Codes \= [],
     atom_codes('_', [U]),
     ( Codes = [U | _]
-    ; reverse(Codes, [U | _])
+    ; rev(Codes, [U | _])
     ).
 
 no_underscore_dangle(Fun, Arity, File, Line) :-
