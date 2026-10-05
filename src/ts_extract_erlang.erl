@@ -115,6 +115,13 @@
 %% fields) never have to be fought. See ?DEF_QUERY's module header.
 -define(EXPORT_QUERY, "(export_attribute) @e").
 
+%% `fun Name/Arity` — an internal_fun node (children [atom, arity
+%% [integer]], all confirmed by dumping the tree). The OTHER two fun
+%% shapes are deliberately NOT captured: external_fun is a different
+%% module's function (not a reference to a local one) and anonymous_fun
+%% names nothing.
+-define(FUN_REF_QUERY, "(internal_fun) @fun").
+
 %% One query per decision-point construct, for real (McCabe-style)
 %% complexity instead of the fan_out/3-based proxy too_complex/3 uses.
 %% cr_clause covers BOTH `case ... of` arms and `receive` arms (same
@@ -201,11 +208,33 @@ text(Path, Src0) ->
         exports(Lang, Root, Src, PathAtom) ++
         local_calls(Lang, Root, Src, PathAtom) ++
         remote_calls(Lang, Root, Src, PathAtom) ++
+        fun_refs(Lang, Root, Src, PathAtom) ++
         comments(Lang, Root, Src, PathAtom) ++
         docs(Lang, Root, Src, PathAtom) ++
         branches(Lang, Root, Src, PathAtom) ++
         exprs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
+
+%% One fun_ref/4 fact per internal_fun — a `fun Name/Arity` reference
+%% is a real reference to a local function but never a `call` node, so
+%% the calls/5 family cannot see it (the documented blindness that made
+%% .symbolic/rules.pl's truly_uncalled/3 report this repo's own live
+%% scan_one/1 as dead: scan_paths/1 calls it as
+%% `parallel_map(fun scan_one/1, Paths)`). Same [atom, arity[integer]]
+%% child shape as export_facts' `fa` entries, one fact per reference.
+fun_refs(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?FUN_REF_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    lists:usort([fun_ref_fact(N, Src, PathAtom) || {"fun", N} <- Caps]).
+
+fun_ref_fact(Node, Src, PathAtom) ->
+    NameNode = symbolic_ts:node_named_child(Node, 0),
+    ArityNode = symbolic_ts:node_named_child(
+        symbolic_ts:node_named_child(Node, 1), 0),
+    {fun_ref,
+        to_atom(symbolic_ts:node_text(NameNode, Src)),
+        parse_number(symbolic_ts:node_text(ArityNode, Src)),
+        PathAtom, line(Node)}.
 
 %% A `-export([f/1, g/0])` attribute is `export_attribute` with one `fa`
 %% child per entry, and each `fa` is positional: named child 0 is the

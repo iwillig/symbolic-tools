@@ -514,13 +514,25 @@ entry_point(Fun, Arity, File) :-
     runtime_entry_point(Fun, Arity),
     defines(Fun, Arity, _, File, _).
 
+%% Sentinel: keeps fun_ref/4 defined so a tree with no Erlang in it
+%% (or no `fun Name/Arity` expressions anywhere) fails cleanly instead
+%% of raising existence_error — same shape as export/4's own sentinel
+%% above.
+fun_ref(none, 0, none, 0) :- fail.
+
 %% Never called at all, local OR remote, and not an entry point — closes
-%% no_local_callers/3's false positives (remote callers, OTP callbacks).
-%% Still blind to member(...) dynamic dispatch and `fun Name/Arity` refs.
+%% no_local_callers/3's false positives (remote callers, OTP callbacks,
+%% and `fun Name/Arity` references via fun_ref/4). Still blind to
+%% member(...) dynamic dispatch. `fun N/A` used to be the open gap
+%% here: it made this rule report its own codebase's live scan_one/1 as
+%% dead (scan_paths/1 calls it as `parallel_map(fun scan_one/1, Paths)`),
+%% the whole reason the fun_ref/4 family exists — see
+%% docs/review-self-audit-and-remediation.md.
 truly_uncalled(Fun, Arity, File) :-
     defines(Fun, Arity, _, File, _),
     \+ calls(_, _, local(Fun, Arity), _, _),
     \+ calls(_, _, remote(_, Fun, Arity), _, _),
+    \+ fun_ref(Fun, Arity, _, _),
     \+ entry_point(Fun, Arity, File).
 
 all_truly_uncalled(Triples) :-

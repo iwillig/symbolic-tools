@@ -266,15 +266,23 @@ entry_point(Fun, Arity, File) :-
 %% sites, so a remotely-called entry point shows up there as a false
 %% positive. entry_point/3 (above) closes the other half: a function with
 %% no caller in the parsed tree because its caller is a test, another
-%% module, or gen_server dispatching a behaviour callback. Still blind to
-%% member(...) calls, callers outside this same parse, and `fun N/Arity`
-%% references (their own node types, not `call`) — a much stronger
-%% dead-code signal, not a perfect one. no_local_callers/3 is left
-%% unfiltered on purpose, so the two stay gradations: review vs. delete.
+%% module, or gen_server dispatching a behaviour callback. A `fun
+%% Name/Arity` reference is closed too: it is a real reference to a
+%% local function but never a `call` node, so fun_ref/4 (see
+%% docs/prolog-schema.md) carries it — the documented blindness here
+%% once made this rule report its own codebase's live scan_one/1 as
+%% dead (scan_paths/1 calls it as `parallel_map(fun scan_one/1, Paths)`).
+%% Still blind to member(...) calls and callers outside this same parse
+%% — a much stronger dead-code signal, not a perfect one.
+%% no_local_callers/3 is left unfiltered on purpose, so the two stay
+%% gradations: review vs. delete.
+fun_ref(none, 0, none, 0) :- fail.
+
 truly_uncalled(Fun, Arity, File) :-
     defines(Fun, Arity, _, File, _),
     \+ calls(_, _, local(Fun, Arity), _, _),
     \+ calls(_, _, remote(_, Fun, Arity), _, _),
+    \+ fun_ref(Fun, Arity, _, _),
     \+ entry_point(Fun, Arity, File).
 
 all_truly_uncalled(Triples) :-

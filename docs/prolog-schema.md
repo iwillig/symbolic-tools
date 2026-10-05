@@ -131,6 +131,21 @@ exported API or OTP callbacks. See [`lint-queries.md`](lint-queries.md).
 not functions, and the grammar keeps them in a separate
 `export_type_attribute` node — so that is a filter, not a gap.
 
+### `fun_ref(Function, Arity, File, Line)`
+
+Erlang only. One fact per `fun Name/Arity` reference — a **reference
+to a local function that is never a `call` node**, so the `calls/5`
+family cannot see it. The tree-sitter-erlang node is `internal_fun`
+(children `[atom, arity[integer]]`, confirmed by dumping the tree); the
+other two fun shapes are deliberately not captured: `external_fun`
+(`fun lists:map/2` — a different module's function, not a reference to
+a local one) and `anonymous_fun` (names nothing at all).
+
+`File`/`Line` anchor the reference site. Without this family,
+`.symbolic/rules.pl`'s `truly_uncalled/3` reported this repo's own live
+`scan_one/1` as dead code — `scan_paths/1` calls it as
+`parallel_map(fun scan_one/1, Paths)`, invisible to `calls/5`.
+
 ### `calls(Caller, CallerArity, CallSpec, File, Line)`
 
 - **`Caller`** — the enclosing definition's name, found by walking

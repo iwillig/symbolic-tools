@@ -53,6 +53,35 @@ extracts_export_facts_test() ->
     ?assert(lists:member({export, other, 0, Path, 2}, Facts)),
     ?assert(lists:member({export, double, 1, Path, 2}, Facts)).
 
+%% `fun Name/Arity` (tree-sitter-erlang: `internal_fun`, children
+%% [atom, arity[integer]] — confirmed by dumping the tree, not assumed)
+%% is a REAL reference to a local function, but never a `call` node, so
+%% the calls/5 family can't see it. That is the documented blindness that
+%% made .symbolic/rules.pl's truly_uncalled/3 report this repo's own live
+%% scan_one/1 as dead: scan_paths/1 calls it as
+%% `parallel_map(fun scan_one/1, Paths)`. One fun_ref/4 fact per
+%% internal_fun closes that gap; see extracts_fun_ref_negative_shapes_test
+%% for the two fun shapes that must NOT emit.
+extracts_fun_ref_facts_test() ->
+    Src = "scan_paths(Paths) ->\n    parallel_map(fun scan_one/1, Paths).",
+    Facts = ts_extract_erlang:text("scratch3.erl", Src),
+    ?assert(lists:member({fun_ref, scan_one, 1, 'scratch3.erl', 2}, Facts)).
+
+%% The other two fun shapes must stay silent: `fun lists:map/2` is an
+%% `external_fun` (a DIFFERENT module's function — not a reference to a
+%% local one, the same reason remote/3 calls key on the remote name) and
+%% an anonymous `fun(X) -> X end` names nothing at all. Over-capturing
+%% either would make fun_ref/4 noisier than the calls/5 family it
+%% complements.
+extracts_fun_ref_negative_shapes_test() ->
+    Src = "a() -> fun lists:map/2.\nb() -> fun(X) -> X end.\n"
+        "c() -> fun b/0.",
+    Facts = ts_extract_erlang:text("scratch4.erl", Src),
+    ?assert(lists:member({fun_ref, b, 0, 'scratch4.erl', 3}, Facts)),
+    ?assertEqual([], [1 || {fun_ref, lists, _, _, _} <- Facts]),
+    ?assertEqual([], [1 || {fun_ref, X, _, _, _} <- Facts,
+                          X =/= b]).
+
 %% A long export list wraps across lines, and each `fa` is anchored to its
 %% OWN row (not the attribute's), so the fact points at the entry rather
 %% than at wherever `-export([` happened to start.

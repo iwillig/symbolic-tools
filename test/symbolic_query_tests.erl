@@ -687,6 +687,25 @@ entry_point_runtime_clause_binds_file_test() ->
                 "entry_point(init, 0, File), sub_atom(File, _, _, _, '.erl')"))
     end).
 
+%% The scan_one/1 false positive, minimized: a function whose ONLY
+%% reference is a `fun Name/Arity` (never a call site —
+%% ts_extract_erlang now emits fun_ref/4 for those) must not be
+%% reported dead. `dead` has no reference of any kind and stays flagged.
+%% Before the fun_ref family existed, this fixture could not be
+%% expressed at all and truly_uncalled/3 misreported its own codebase's
+%% scan_one/1 (see docs/review-self-audit-and-remediation.md).
+truly_uncalled_ignores_fun_refs_test() ->
+    with_db([{defines, worker, 0, <<"()">>, 'p.erl', 1},
+             {defines, dead, 0, <<"()">>, 'p.erl', 2},
+             %% calls/5 carries no zero-clause sentinel, so ANY call fact
+             %% has to be present for the family to exist — this one
+             %% references neither test subject.
+             {calls, caller, 0, {local, other, 0}, 'p.erl', 3},
+             {fun_ref, worker, 0, 'p.erl', 4}], fun() ->
+        ?assertEqual({solutions, [{'Triples', [dash(dead, 0, 'p.erl')]}]},
+            symbolic_query:run_result(?DB, real_rules(), "all_truly_uncalled(Triples)"))
+    end).
+
 %% export/4 has zero clauses for a tree with no Erlang in it (TypeScript,
 %% Bash, or this library's own fixture), and erlog raises existence_error
 %% on a predicate with no clauses rather than failing — which is why
