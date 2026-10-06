@@ -1,8 +1,15 @@
 {% extends "base.html" %}
-{% block title %}{{ page.title }} — {{ SITENAME }}{% endblock %}
+{% block title %}{% if page.title == SITENAME %}{{ SITENAME }}{% else %}{{ page.title }} — {{ SITENAME }}{% endif %}{% endblock %}
+{% block description %}{{ page.subtitle|default("Prove facts about your codebase with a real Prolog engine.") }}{% endblock %}
+{% block og_title %}{% if page.title == SITENAME %}{{ SITENAME }}{% else %}{{ page.title }} — {{ SITENAME }}{% endif %}{% endblock %}
+{% block og_description %}{{ page.subtitle|default("Prove facts about your codebase with a real Prolog engine.") }}{% endblock %}
 {% block content %}
 <article>
-  <h1>{{ page.title }}</h1>
+  <h1 class="page-title">
+    {% if page.slug == "home" %}<img class="brand-mark-lg" src="{{ SITEURL }}/theme/img/favicon.svg" alt="">{% endif %}
+    {{ page.title }}
+  </h1>
+  {% if page.subtitle %}<p class="lead">{{ page.subtitle }}</p>{% endif %}
   {{ page.content }}
 </article>
 {% endblock %}

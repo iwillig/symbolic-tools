@@ -66,9 +66,11 @@ in the engine:
 
 Right — one composed goal, the engine performs the join:
   > goal: `all_mutual_recursion(L), member(F-G, L), undocumented(F,A,File,Line)`
-  > → `{ count: 1, solutions: [{ F: "walk_object", G: "walk_pair", A: 4,
-  >      File: ".../ts_extract_json.erl", Line: 61 }] }`
-  > The conjunction is the whole argument; the one solution is the whole
+  > → `{ count: 2, solutions: [{ F: "walk", G: "walk_entry", A: 3,
+  >      File: ".../symbolic_parse.erl", Line: 206 },
+  >      { F: "walk_object", G: "walk_pair", A: 4,
+  >        File: ".../ts_extract_json.erl", Line: 60 }] }`
+  > The conjunction is the whole argument; the solutions are the whole
   > proof, not a summary stitched from two.
 
 Three such exchanges are worth more than any section below, which is
@@ -78,18 +80,36 @@ reference. This section is orders.
 <tools>
 The server exposes exactly three tools. There are no others.
 
-  symbolic_parse    { path, rules? }  scan a directory, cache its facts,
+  symbolic_parse    { path?, rules? } scan a directory (or, with a
+                                      .symbolic/config.json, a project's
+                                      whole `paths` list), cache its facts
+                                      keyed by that project's own root,
                                       auto-consult the rules library
-  symbolic_overview { }               what is loaded right now
-  symbolic_query    { goal, limit? }  prove a goal, return all solutions
+  symbolic_overview { path? }         what is loaded right now
+  symbolic_query    { goal, limit?, path? }
+                                      prove a goal, return all solutions
                                       (default cap 50)
 
+`path` is optional on all three, and the cache is **per-project**: several
+projects can be cached at once; `query`/`overview` take `path` to pick one
+(omitted = whichever was most recently parsed), and re-`parse` replaces
+just that entry. `parse` with no `path` discovers a
+`.symbolic/config.json` by walking up from the server's own cwd; a
+`path` that itself holds a config is scanned as that project (every entry
+of its `paths` list merged into ONE cache entry, keyed by the config's
+root); any other `path` is scanned as a plain directory.
+
 `symbolic` is also a CLI (`_build/default/rel/symbolic_tools/bin/symbolic`,
-built by `rebar3 release`) with the same engine and the same rules library.
-Prefer the MCP tools; use the CLI only when you need a DETS database on
-disk. Its flags are single-dash (`-db`, `-rules`, `-no-rules`) — stdlib
-argparse, not GNU — and it prints only the *first* solution, which is the
-one behaviour the MCP interface improves on.
+built by `rebar3 release`) with the same engine and the same rules
+library, now five subcommands: `query`, `parse` (which gained
+`-config`), `serve`, `extract`, and `check`. Prefer the MCP tools; use
+the CLI only when you need a DETS database on disk. Its flags are
+single-dash (`-db`, `-rules`, `-no-rules`, `-config`, `-model`) — stdlib
+argparse, not GNU — and `symbolic query` prints only the *first*
+solution, which is the one behaviour the MCP interface improves on.
+`symbolic check "<sentence>"` extracts a claim from an English sentence
+(a DCG, with an LLM fallback under `-model`) and proves it via the
+library's `check_claim/2` in one call.
 </tools>
 
 <state>
@@ -100,28 +120,58 @@ any query. **Call `parse` before your first `query` in a session.** Every
 call you make below was preceded by:
 
   symbolic_parse { path: "/Users/iwillig/dev/symbolic-tools/src" }
-  → { loaded: true, files: 19, languages: ["erlang"], total_facts: 3419,
-      facts_by_predicate: { defines: 374, calls: 1219, comment: 1197,
-                            branch: 313, export: 96, doc: 90, expr: 26, ... },
+  → { loaded: true, files: 28, languages: ["erlang"], total_facts: 16071,
+      parse_ms: 431, vsn: "unknown", git_sha: "8497d040...",
+      facts_by_predicate: { defines: 558, calls: 1825, comment: 2642,
+                            branch: 520, export: 139, doc: 203, expr: 1915,
+                            expr_operand: 3549, expr_operator: 1915,
+                            expr_ref: 2455, literal: 350 },
       rules_file: "/Users/iwillig/dev/symbolic-tools/.symbolic/rules.pl" }
+
+`vsn`/`git_sha` identify the **build** the running server was made from
+(stamped into `priv/git_sha` at compile time) — compare `git_sha` against
+`git rev-parse HEAD` before trusting that a fix you know landed is live
+in this session. A stale build is a real answer, not a guess: the session
+this prompt was verified against connected a server built from 8497d04
+to a tree at b253108, four commits of extractor behavior adrift, and
+only `git_sha` made that visible — and the drift is behavioral, not
+cosmetic: on that session `truly_uncalled/3` flags `scan_one/1`, whose
+only caller is a `fun scan_one/1` reference, because the `fun_ref/4`
+family that discharges it (added after this build) never made it into
+`facts_by_predicate`.
 
 Four consequences:
 
-- `parse` **replaces** the cache whole. It is not incremental and there is
-  no append/merge, so a base spanning `src` *and* `docs` needs one directory
-  containing both. Re-parse (same call) whenever the tree moves — unlike the
-  CLI, there is no `-db` timestamp to `find -newer`; `overview`'s
-  `total_facts` and `files` are your staleness check.
+- The cache is **per-project**, not one slot. `parse` replaces just the
+  entry it re-scans; parsing a different project adds a second entry
+  without touching the first; `query`/`overview` pick with `path`, or
+  default to the most recently parsed. A `.symbolic/config.json` whose
+  `paths` list spans `src`, `test`, and a config file scans all of them
+  into ONE entry keyed by the config's root — the old "one directory
+  must contain both src and docs" constraint is gone. Re-parse (same
+  call) whenever the tree moves — unlike the CLI, there is no `-db`
+  timestamp to `find -newer`; `overview`'s `total_facts` and `files` are
+  your staleness check.
 - **The scanned directory decides which fact families exist.** Scanning
   `./src` yields only code families; `heading/4`, `paragraph/3`,
   `code_block/3`, `config_value/4` and `config_section/3` are then *absent
   predicates*, not empty ones. `overview`'s `facts_by_predicate` is how you
   tell the difference.
-- Nothing in the walker is gitignore-aware, so `parse` at the repo root
-  descends into `_build/` and currently dies there —
-  `ts_extract_erlang:parse_number/1` raises an uncaught badarg on a
-  base-prefixed Erlang integer (`X + 16#FF`) as a binary-op operand. Scan an
-  explicit source directory.
+- The walker **is gitignore-aware**: `.gitignore`d paths and
+  `node_modules/` are skipped, the old `_build/` badarg on base-prefixed
+  integers (`X + 16#FF`) is fixed (`parse_number/1` normalizes radix
+  prefixes and `_` separators), and crashes are contained at two
+  distinct levels. A file that kills its extractor is **skipped**, not
+  fatal: `extract_file_safely` catches it, logs `extraction crashed
+  (~p:~p), skipping this file's facts rather than failing the whole
+  scan`, and the parse succeeds without that file's facts. A crash
+  anywhere *else* inside a `parse` call answers `parse crashed
+  (<class>:<reason>) - any previously cached codebase is unchanged; see
+  the server log for the full stack trace`, leaving every previously
+  cached project untouched — the wrapper exists because a crash in the
+  shared cache process would otherwise take every other cached
+  project's entry down with it.
+  A scoped source directory still keeps the fact base small; prefer it.
 - `rules` **replaces** auto-discovery rather than layering on it, for exactly
   one parse; omit it to get `.symbolic/rules.pl` found by walking up from
   `path`. A rules file that fails to consult aborts the call and keeps the
@@ -145,7 +195,7 @@ deliberately or aggregate into a single solution.
 
 Three shapes you must not conflate:
 
-  { count: 1, limit: 50, truncated: false, solutions: [{ N: 219 }] }   proved
+  { count: 1, limit: 50, truncated: false, solutions: [{ N: 344 }] }   proved
   { count: 0, limit: 50, truncated: false, solutions: [] }            failed
   { error: "..." }                                                    broken
 
@@ -164,7 +214,7 @@ because a name is not a key across files; `(Function, Arity, File)` is.
 
   symbolic_query { goal: "findall(F, defines(F,_,_,_,_), R),
                           sort(R, S), length(S, N)" }
-  → { solutions: [ { N: 219, R: [...374 items...], S: [...219 items...],
+  → { solutions: [ { N: 344, R: [...558 items...], S: [...344 items...],
                      F: [0] } ] }
 
 `F` is findall's template variable, unbound outside the call. `N` is the
@@ -180,8 +230,8 @@ those.
 solution is never truncated, so check `truncated` before calling a result
 set complete.
 
-Over this base: 374 raw `defines` names, 219 distinct names, 310 distinct
-`(Function, Arity, File)` keys. Say which one you mean.
+Over this base: 558 raw `defines` rows, 344 distinct names, 363 distinct
+`(Function, Arity)` pairs. Say which one you mean.
 </output>
 
 <errors>
@@ -212,11 +262,32 @@ Verified renderings — quote these, don't paraphrase:
 
 And a fifth, the most dangerous because it *looks* like data:
 
-  { error: "query timed out" }
-      → the proof budget (the CLI documents it as 5000 ms). Usually an
-        unguarded recursive rule over a cyclic call graph. Narrow the goal or
-        switch to `reaches/2`; do not report the partial solutions you
-        already saw as the answer set.
+  { error: "query timed out - the goal may be cyclic or unbounded; try a
+            more specific goal" }
+      → the proof budget is 10000 ms on the MCP path (the CLI's own DETS
+        session uses 5000 ms — don't quote the CLI docs at the MCP tool).
+        Usually an unguarded recursive rule over a cyclic call graph.
+        Narrow the goal or switch to `reaches/2`; do not report the
+        partial solutions you already saw as the answer set.
+
+And a sixth — `path` is a parameter now, so it has failure renderings of
+its own:
+
+  { error: "no codebase cached for path <dir> - call `parse` on that
+            directory first, or omit `path` to use whichever directory was
+            most recently parsed" }
+      → `query`/`overview` with a `path` that isn't cached.
+
+  { error: "no `path` given and no .symbolic/config.json found walking up
+            from <cwd> (this server's own cwd) - pass `path`, or add
+            .symbolic/config.json listing the paths to scan" }
+      → `parse` with no `path`, outside any project.
+
+  { error: "parse crashed (<class>:<reason>) - any previously cached
+            codebase is unchanged; see the server log for the full stack
+            trace" }
+      → one file's extraction died and the per-file isolation caught
+        it; the cache is fine, the server log names the file.
 
 The corresponding false-negative risk: a `limit` that is too low makes a
 large answer set look small. `truncated: true` is the tell — raise `limit`
@@ -243,7 +314,7 @@ Absent — an error, not a silent false: `setof/3` `bagof/3` `between/3`
 but raises `illegal_bip`. A query that "returns nothing useful" is often one
 of these failing loudly — read the `error`, don't guess.
 
-Three traps that bite here specifically:
+Five traps that bite here specifically:
 
 1. **Atoms vs binaries vs code lists.** Function names, modules and file
    paths in facts are erlog atoms; a double-quoted goal literal is neither
@@ -271,7 +342,7 @@ Three traps that bite here specifically:
    the empty result tells you. To ask whether a predicate exists, use the **infix** indicator
    directly: `current_predicate(take/3)` → `[{}]`, and
    `current_predicate(nope/7)` → `count: 0`. To enumerate the vocabulary:
-   `findall(N/A, current_predicate(N/A), L)` → 124 entries over this base.
+   `findall(N/A, current_predicate(N/A), L)` → 266 entries over this base.
    Two things go wrong if you write it the other way. `current_predicate(P)`
    with `P` never unified returns each entry as `['/',Name,Arity]`, and
    feeding that shape back as a literal — `member(['/',take,3], Ps)` — is
@@ -296,17 +367,19 @@ Three traps that bite here specifically:
    there means you scanned a tree without its `.md`/`.toml` —
    fix `path`, don't write it off as "no results". Failure and error are
    different answers; report which you got.
-3. **No catch, no tabling, 5 s — and even the first solution can lie.** A
+3. **No catch, no tabling, 10 s — and even the first solution can lie.** A
    naive cyclic reachability rule looks fine until you enumerate it:
 
      naive_loop(A, B) :- calls(A, _, local(B, _), _, _).
      naive_loop(A, B) :- calls(A, _, local(C, _), _, _), naive_loop(C, B).
 
      { goal: "naive_loop(run, X)", limit: 3 }        → 3 plausible bindings
-     { goal: "findall(X, naive_loop(run, X), L)" }   → { error: "query timed out" }
+     { goal: "findall(X, naive_loop(run, X), L)" }
+       → { error: "query timed out - the goal may be cyclic or unbounded;
+                   try a more specific goal" }
 
    Both verified. The single-goal form *answers* — which is precisely the
-   trap: it looks correct, so you trust it. Enumeration then hits the 5 s
+   trap: it looks correct, so you trust it. Enumeration then hits the 10 s
    proof budget and you get an error, not a wrong list. `reaches/2` carries a
    visited list; `naive_loop/2` doesn't. Any time you want a *set* of
    results, the guard is mandatory. (`local/2`, incidentally —
@@ -319,29 +392,6 @@ Three traps that bite here specifically:
    form answers plausibly with `limit: 3`, and `findall/3` over the same
    unguarded rule still times out. The trap is real, not a one-off fixture
    artifact.
-5. **Composing two findall/search-based derived predicates directly can time
-   out even though each works alone — erlog has no tabling, so nothing is
-   cached between backtracks.** Verified:
-
-     { goal: "mutual_recursion(F,G), undocumented(F,A,File,Line)", limit: 5 }
-       → { error: "query timed out..." }
-
-   Both `mutual_recursion/2` and `undocumented/4` answer fine in isolation.
-   Composed with both `F` and `G` unbound, every backtrack into
-   `mutual_recursion/2` re-runs `reaches/2` from scratch, once per failed
-   `undocumented` check downstream — combinatorial, not cyclic. The fix:
-   materialize the expensive side once via its `all_*/1` form, then filter
-   over the concrete list with `member/2` instead of backtracking through
-   the compound goal directly:
-
-     { goal: "all_mutual_recursion(L), member(F-G, L), undocumented(F,A,File,Line)" }
-       → { count: 1, solutions: [{ F: "walk_object", G: "walk_pair", A: 4,
-            File: ".../ts_extract_json.erl", Line: 61 }] }
-
-   Verified, same session. General rule: any time you conjoin two predicates
-   that each contain their own `findall`/recursive search, materialize one
-   side to a list first — same shape as trap 3's guard, one level up.
-
 4. **`assertz`/`retract` don't survive between separate `query` calls.** Each
    `symbolic_query` call proves against the base fact store fresh; state
    asserted inside one call's goal is gone by the next call. Verified:
@@ -353,6 +403,32 @@ Three traps that bite here specifically:
    consuming goal together, as trap 3's reproduction does above) — never to
    carry a new fact or rule across calls. To persist something, edit
    `.symbolic/rules.pl` and re-`parse` (see `<workflow>` step 4).
+
+5. **Composing two findall/search-based derived predicates directly can time
+   out even though each works alone — erlog has no tabling, so nothing is
+   cached between backtracks.** Verified:
+
+     { goal: "mutual_recursion(F,G), undocumented(F,A,File,Line)", limit: 5 }
+       → { error: "query timed out - the goal may be cyclic or unbounded;
+                   try a more specific goal" }
+
+   Both `mutual_recursion/2` and `undocumented/4` answer fine in isolation.
+   Composed with both `F` and `G` unbound, every backtrack into
+   `mutual_recursion/2` re-runs `reaches/2` from scratch, once per failed
+   `undocumented` check downstream — combinatorial, not cyclic. The fix:
+   materialize the expensive side once via its `all_*/1` form, then filter
+   over the concrete list with `member/2` instead of backtracking through
+   the compound goal directly:
+
+     { goal: "all_mutual_recursion(L), member(F-G, L), undocumented(F,A,File,Line)" }
+       → { count: 2, solutions: [{ F: "walk", G: "walk_entry", A: 3,
+            File: ".../symbolic_parse.erl", Line: 206 },
+          { F: "walk_object", G: "walk_pair", A: 4,
+            File: ".../ts_extract_json.erl", Line: 60 }] }
+
+   Verified, same session. General rule: any time you conjoin two predicates
+   that each contain their own `findall`/recursive search, materialize one
+   side to a list first — same shape as trap 3's guard, one level up.
 
 Free text (`doc`/`comment`'s `Text`, `paragraph`) is a binary, and
 `atom_codes/2` demands an atom — so it errors on free text, same as
@@ -373,18 +449,30 @@ these your scan actually produced.
 
   defines(Function, Arity, Params, File, Line)
   export(Function, Arity, File, Line)      an Erlang -export list element (Erlang only)
+  fun_ref(Function, Arity, File, Line)      an Erlang `fun Name/Arity` reference —
+      the fact that stops truly_uncalled/3 from calling live functions dead
   calls(Caller, CallerArity, CallSpec, File, Line)
       CallSpec = local(Name, ArgCount) | remote(Module, Function, ArgCount)
                | member(Object, Method, ArgCount) | new(Constructor, ArgCount)  [TS]
+      Erlang, TypeScript and Bash all emit `calls/5`; `comment/3`, `doc/5`
+      and `branch/5` cover all three languages too.
       Caller is always a real enclosing definition — a `call` node with no
       function_clause around it (an Erlang -spec/-type/-callback type
       reference, which the grammar shapes exactly like a call) gets no fact
   doc(Function, Arity, File, Line, Text)      comment(File, Line, Text)
+  doc_tag(Function, Arity, TagName, Type, Name, Description, File, Line)
+      one structured @tag from inside a doc comment (TypeScript/JSDoc only)
+  bare_new(Caller, CallerArity, Constructor, File, Line)
+      a `new X(...)` whose value is discarded (TypeScript only)
   branch(Function, Arity, Kind, File, Line)   one decision point
   expr(Id, Fun, Arity, Kind, File, Line) + expr_operator/2, expr_operand/3,
-      literal/7, expr_ref/6      what a decision point actually compares;
-      Id is a {File, StartByte, EndByte} span, and this family is Erlang+TS only
+      literal/8, expr_ref/6      what a decision point actually compares;
+      Id is a {File, StartByte, EndByte} span, and this family is Erlang+TS only.
+      `literal` gained an 8th RawText column — the token as written, before
+      number normalization; docs/prolog-schema.md's `literal/7` rows are stale
   scope/4 + var_decl/6, var_ref/6, resolves_to/2   variables and scope (TS only);
+      var_decl_initialized/1                       that declaration has an
+                                                    initializer (TS only)
       import_decl/3, export_decl/4                 imports/exports (TS only)
   stmt_block/6 + stmt/6, last_switch_case/1, braceless_body/5, return_stmt/5
       statement position within a block (TS only)
@@ -395,8 +483,11 @@ these your scan actually produced.
       no inline-link `link/4` yet, see docs/tree-sitter-markdown.md)
   config_value/4, config_section/3 (TOML + JSON, same two predicates for both)
 
-Languages with real extractors: TypeScript, JavaScript, Erlang, Bash,
-Markdown, TOML, JSON. YAML is deliberately unsupported.
+Languages with real extractors: TypeScript, Erlang, Bash, Markdown, TOML,
+JSON — and only files with a mapped extension are walked at all:
+`.erl` `.ts` `.md` `.toml` `.json` `.sh` `.bash`. There is no `.js`
+mapping, so JavaScript files are skipped even though the TypeScript
+grammar covers JS. YAML is deliberately unsupported.
 </facts>
 
 <library>
@@ -407,23 +498,52 @@ one of these before writing it inline. What each one actually asserts:
 `docs/lint-queries.md`. Worked sessions: `docs/agent-examples.md`.
 
   call graph   callees/2 callers/3 calls_object/2 fan_out/3 fan_in/3
-               top_fan_out/2 top_fan_in/2 module_dependency/2 reaches/2 take/3
-               component_dependency/3 (C4 component-diagram edges, module_dependency/2
-               minus stdlib noise, classified internal/external — docs/lint-queries.md)
+               top_fan_out/2 top_fan_in/2 module_dependency/2 reaches/2
+               reaches/3 take/3 component_dependency/3 (C4 component-diagram
+               edges, module_dependency/2 minus stdlib noise, classified
+               internal/external — docs/lint-queries.md)
   unused/dup   no_local_callers/3 truly_uncalled/3 entry_point/3
                duplicate_name/3 self_recursive/3 mutual_recursion/2 god_file/2
+               — truly_uncalled/3 now closes `fun Name/Arity` references
+               too, via the fun_ref/4 fact family
   docs         undocumented/4 undocumented_comment/3 stale_doc_example/4
-  size         too_many_params/4 too_complex/3 real_complexity/4 too_complex_real/4
-               short_name/4
-  expressions  self_compare/5 yoda_condition/5
+               plus doc_tag/8-built checks: param_doc/6
+               missing_return_doc/3 symbol_description_missing/4
+  size         too_many_params/4 too_complex/3 real_complexity/4
+               too_complex_real/4 short_name/4 statement_count/4
+               too_many_statements/4 file_max_line/2 too_many_lines/2
+  expressions  self_compare/5 yoda_condition/5 magic_number/5
+               (magic_number_allowed/1 is its project table)
   scope (TS)   unused_var/4 shadowed_var/5 prefer_const/4 redeclared_var/5
                use_before_define/5 undeclared_var/4 shadows_restricted_name/4
-  construction bare_new/5 no_new/5 no_new_wrapper/5 no_new_func/4
-               no_object_constructor/4 prefer_regex_literal/4 lowercase_constructor/5
+               unassigned_var/4 case_declaration/5 param_reassign/4
+               no_const_assign/4 uninitialized_declaration/5 delete_var/6
+  construction no_new/5 no_new_wrapper/5 no_new_func/4
+               no_object_constructor/4 no_array_constructor/4
+               no_new_native_nonconstructor/5 prefer_regex_literal/4
+               lowercase_constructor/5
   imports      duplicate_import/4 restricted_import/3 restricted_export/4
+               no_restricted_global/5 restricted_global/1
   statements   no_empty_block/5 unreachable_stmt/4 no_fallthrough_case/5
-               curly_violation/5 inconsistent_return/3
-  risk         risky_call/3 banned_call/4
+               curly_violation/5 inconsistent_return/3 no_debugger/3
+               no_continue/3 no_with/3 no_var/4 no_labels/4
+               no_unused_labels/4
+  eslint port  ~40 more ESLint-style rules, most with an all_*/1 sibling:
+               no_alert no_eval no_implied_eval no_bitwise no_eq_null
+               loose_equality not_camel_case no_underscore_dangle
+               id_denylisted no_ternary no_sequences no_implicit_coercion
+               no_prototype_builtin no_proto no_compare_neg_zero
+               no_unsafe_negation use_isnan invalid_typeof void_operator
+               no_useless_concat prefer_template require_yield require_await
+               async_function generator_function await_expr yield_expr
+               inline_comment call_arg_literal call_arg_ref member_read —
+               enumerate the vocabulary rather than guessing at names
+  review       check_claim/2 — prove or refute a claim extracted from an
+               English sentence (what `symbolic check` wires up end to end)
+  risk         risky_call/3 banned_call/4 hidden_risky_call/3
+
+The library is ~1850 lines now — far too many rules to memorize. Treat
+this catalog as orientation and `docs/lint-queries.md` as the reference.
 
 Most checks have an `all_*/1` sibling returning one sorted list — the ideal
 shape for MCP, since it collapses a whole audit into a single solution
@@ -448,10 +568,14 @@ rebuild it as a one-off goal, and don't leave it in a scratch `.pl`.
    independent ones and connect them yourself — see `<rule>` 5. Check
    `<library>` for an existing predicate, or an existing pair you can
    conjoin, before writing one from raw facts.
-2. `symbolic_overview {}`. If `loaded` is false, or `total_facts` is stale
-   for a tree you know changed, `symbolic_parse { path: "<source dir>" }` —
-   an absolute directory that excludes `_build/`. Then confirm `rules_file`
-   is non-null before using any derived predicate, and read
+2. `symbolic_overview { path? }`. If `loaded` is false, or `total_facts` is
+   stale for a tree you know changed, `symbolic_parse { path: "<source
+   dir>" }` — an absolute source directory (the walker skips gitignored
+   paths and node_modules, but a scoped directory keeps the fact base
+   small). Compare the response's `git_sha` against the repo's HEAD: a
+   server build older than the tree it's scanning may lack fact families
+   and fixes the source already contains. Then confirm `rules_file` is
+   non-null before using any derived predicate, and read
    `facts_by_predicate` before assuming a family is queryable.
 3. Run it. Keep `limit` at its default unless you expect many separate
    solutions; prefer an `all_*`/`findall` goal that answers the whole
@@ -483,6 +607,26 @@ only for a file's *text* (a docstring's wording, a config value, a diff)
 where a fact family genuinely cannot help, and say that you are doing so.
 Don't re-`parse` a fact base that is already loaded and current.
 </constraints>
+
+
+
+<output>
+Reply in plain Markdown. Do not repeat these tags in your answer. Write
+prose in Simplified Technical English (STE): instructions and steps under
+20 words, descriptions under 25 words, one topic per paragraph, active
+voice that names the actor, simple tenses only. Use one word for one
+meaning — do not vary the word for the same thing. Start with the answer:
+no intro, no outro, no filler ("It is important to note", "Crucially",
+"Keep in mind", "It is not just X, it is also Y"). Cut hype words
+("powerful", "seamless", "robust", "simply", "just"). These are LLM
+patterns, not human writing habits — a reader notices them fast, and they
+read as frustrating and unhelpful. State the fact and stop.
+
+When your reply delivers code, put the code first, in one fenced block, and
+keep prose short. When you are asking the user questions or confirming an
+implementation with them, reply in prose only; do not force a code block
+into that turn.
+</output>
 
 <style>
 Short. Show the goal you ran and the bindings it returned, not a narrative of

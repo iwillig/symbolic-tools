@@ -1,0 +1,109 @@
+/* Small, hand-written additions layered on top of Pico CSS (base.html)
+   and the generated pygments.css / diagram.css. Kept deliberately thin —
+   this project's own "keep it simple" stance applies to the site too. */
+
+/* --- header: GitHub mark scales with the surrounding text, no asset --- */
+.icon-github {
+  width: 1rem;
+  height: 1rem;
+  vertical-align: -0.125em;
+  fill: currentColor;
+}
+
+/* --- the project's mark (theme/img/favicon.svg), reused as both the
+   browser-tab favicon and a visible brand mark --- */
+a.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.brand-mark {
+  border-radius: 22%;
+  flex-shrink: 0;
+}
+
+h1.page-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.brand-mark-lg {
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 22%;
+  flex-shrink: 0;
+}
+
+/* --- tagline under the H1, set by page.html from a page's Subtitle --- */
+.lead {
+  margin-top: -0.75rem;
+  font-size: 1.1rem;
+  color: var(--pico-muted-color);
+  max-width: 56ch;
+}
+
+/* --- "Jump to" strip at the top of a long page, authored as plain
+   markup in the Markdown content (see content/pages/home.md) --- */
+nav.quicknav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin: 1.25rem 0 2rem;
+  padding: 0;
+}
+
+nav.quicknav a {
+  font-size: 0.85rem;
+  text-decoration: none;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  color: var(--pico-color);
+}
+
+nav.quicknav a:hover,
+nav.quicknav a:focus {
+  border-color: var(--pico-primary);
+  color: var(--pico-primary);
+}
+
+/* --- copy button on fenced code blocks (injected by theme/js/copy.js) --- */
+div.highlight {
+  position: relative;
+}
+
+button.copy-code {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 1;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.3rem 0.55rem;
+  margin: 0;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  /* transparent at rest, on purpose: Pygments picks its own light/dark
+     block background (scripts/gen_pygments_css.py) that isn't exposed as
+     a Pico variable, so the only color that's guaranteed to read
+     correctly against either one is none at all. */
+  background: transparent;
+  color: var(--pico-muted-color);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease-in-out, background 0.1s ease-in-out;
+}
+
+div.highlight:hover button.copy-code,
+button.copy-code:focus {
+  opacity: 1;
+  background: var(--pico-background-color);
+}
+
+button.copy-code[data-copied="true"] {
+  opacity: 1;
+  color: var(--pico-primary);
+  border-color: var(--pico-primary);
+}

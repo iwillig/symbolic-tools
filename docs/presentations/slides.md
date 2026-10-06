@@ -5,11 +5,17 @@ subtitle: A Prolog database for your codebase
 
 ## The problem
 
-An agent that wants to know something about a codebase greps for text.
+- LLMs (Deep Learning) branch of AI is good at ambiguous tasks
+- GenAI is only LLM
+- Symbolic AI branch is better at query
+- Chain of reasoning uses natural language (NL) for its reasoning.
+- Could we build a system that uses a mixture of Prolog and NL
+- Reasoning outside of Vector Space
 
-- grep returns matches, not answers
-- "what calls this function" is a relational question
-- every re-read of a file costs tokens and attention
+- Why this matters?
+- Smaller and cheaper models
+- More accountability
+- Symbolic AI (Prolog) is very cheap to run. Normal database issues scaling issues.
 
 ## What it is
 
@@ -400,4 +406,3 @@ One engine, two doors.
   fact base
 - The agent never reads source to answer a codebase question; it
   writes a goal and the engine proves it
-

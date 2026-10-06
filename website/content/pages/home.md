@@ -2,25 +2,29 @@ Title: symbolic-tools
 Slug: home
 Save_as: index.html
 URL:
+Subtitle: Turn a codebase into a Prolog fact base an agent can query and get proven answers from.
+
+<nav class="quicknav" aria-label="On this page">
+<a href="#get-started">Get started</a>
+<a href="#why-prolog">Why Prolog</a>
+<a href="#how-it-works">How it works</a>
+<a href="#what-it-can-answer">What it can answer</a>
+<a href="#schema">The fact schema</a>
+<a href="#status">Status</a>
+</nav>
 
 ## Introduction
 
-symbolic-tools builds a Prolog database from your codebase. An LLM agent,
-or a person, can query it and get an answer proven by resolution.
+symbolic-tools builds a Prolog database from your codebase. An LLM
+agent, or a person, can query it and get an answer proven by
+resolution, not guessed from a snippet.
 
-It parses a source tree with tree-sitter. It extracts facts: function
-definitions, call sites, comments, decision points. It loads those facts
-into an in-process Prolog engine ([erlog](https://github.com/rvirding/erlog),
-running on the BEAM). You can then ask it a real question and get an
-answer proven by resolution, not guessed from a snippet.
+It works by parsing a source tree with tree-sitter, extracting facts
+(function definitions, call sites, comments, decision points), and
+loading them into an in-process Prolog engine
+([erlog](https://github.com/rvirding/erlog), running on the BEAM).
 
-The examples below are live queries against this project's own source
-tree, not made up — the same JSON an agent gets back from a real tool
-call. Several are things an ESLint-style, per-file AST rule has no way
-to express at all, not just a rule nobody wrote yet. Every fact family
-in [the schema](#schema) has a query of its own.
-
-## Get started
+## Get started {: #get-started }
 
 ```sh
 brew tap iwillig/symbolic-tools https://github.com/iwillig/symbolic-tools
@@ -33,32 +37,29 @@ claude mcp add symbolic -- symbolic serve
 ```
 
 `/mcp` inside Claude Code shows `symbolic` connected, with its three
-tools: `parse`, `query`, `overview`. Building from source instead, or
-wiring a project-shared `.mcp.json` for a whole team? See
-`docs/claude-code-mcp-setup.md` in the
-[GitHub repository](https://github.com/iwillig/symbolic-tools).
+tools: `parse`, `query`, `overview`.
 
-## Why Prolog
+## Why Prolog {: #why-prolog }
 
 Research on pairing language models with a symbolic reasoner has found
 large accuracy gains on problems that need multi-step logical
 correctness. symbolic-tools applies this to codebases. Build the fact
 base once. Let a query prove the answer against it.
 
-## How it works
+## How it works {: #how-it-works }
 
 <p>A rules library sits on top of the raw facts. It finds dead code,
 duplicate names, mutual recursion, undocumented functions, and
 oversized or overly complex definitions. Each rule is a few more Prolog
 clauses over the same facts. The full fact schema — every predicate,
-and a real, live example of each — is <a href="#schema">below</a>.</p>
+with a live example of each — is <a href="#schema">below</a>.</p>
 
 <div>
   <img class="diagram-light" src="theme/img/architecture-light.svg" alt="Architecture: source files are parsed by a tree-sitter extractor into facts, loaded into a Prolog session (erlog), queried by an MCP server or the symbolic CLI">
   <img class="diagram-dark" src="theme/img/architecture-dark.svg" alt="Architecture: source files are parsed by a tree-sitter extractor into facts, loaded into a Prolog session (erlog), queried by an MCP server or the symbolic CLI">
 </div>
 
-## What it can answer
+## What it can answer {: #what-it-can-answer }
 
 ### What calls this function
 
@@ -175,8 +176,8 @@ target.)
 ### Which function does the whole project rely on most
 
 This needs an aggregate over every call site in every file at once, not
-a rule applied one file at a time — the kind of question a separate
-whole-program tool (madge, dependency-cruiser) exists to bolt on
+a rule applied one file at a time. It's the kind of question a separate
+whole-program tool (madge, dependency-cruiser) exists to bolt on,
 because a linter's rule model can't ask it:
 
 ```prolog
@@ -200,11 +201,11 @@ because a linter's rule model can't ask it:
 }
 ```
 
-`line/1` — a small line-number helper — is called from 53 distinct
+`line/1`, a small line-number helper, is called from 53 distinct
 places across the codebase. Ranking every function in the project by
 how many places call it is one goal, not a separate static-analysis
-pass. `Top`'s own shape is real too, not simplified for this page:
-erlog keeps Prolog's `-` as an ordinary 2-argument functor, so
+pass. `Top`'s shape is real too: erlog keeps Prolog's `-` as an
+ordinary 2-argument functor, so
 `53-line/1` prints as nested `["-", ...]` arrays, the same way every
 other `-`-joined result would if shown raw.
 
@@ -214,10 +215,11 @@ A plan is a claim about code that doesn't exist yet. Once the code
 exists, it's exactly as checkable as any other claim.
 
 Before writing `atom_from_binary/2` (a small addition bridging free
-text back to a real function name — free text like `doc/5`'s `Text` is
-a binary, and a function name is an atom, so the two can never unify
-without a bridge), the plan named six specific things the new
-code would do, including one written in on purpose to be wrong:
+text back to a real function name, since free text like `doc/5`'s
+`Text` is a binary, and a function name is an atom, so the two can
+never unify without a bridge), the plan named several specific things
+the new code would do — including one written in on purpose to be
+wrong:
 
 ```
 atom_from_binary_2/3 calls unify/3
@@ -265,7 +267,7 @@ generate, no join to write by hand. A shared `(Function, Arity, File)`
 be queried together at all: `calls/5` and `doc/5` both key on it, so a
 variable shared across two goals *is* the join.
 
-Every example below is a real, live query, shown exactly as the MCP
+Every example below is a live query, shown exactly as the MCP
 server returns it. The Erlang and Markdown examples run against this
 project's own `src/` and `docs/`; the TypeScript and config examples
 run against the small, committed fixtures in
@@ -409,10 +411,10 @@ An Erlang `-export` list entry.
 #### `doc(Function, Arity, File, Line, Text)`
 
 The comment immediately before a definition, flattened to one line.
-`Text` is a binary, not an atom — free text is never unified against a
+`Text` is a binary, not an atom: free text is never unified against a
 literal the way an identifier is, so there's no reason to force it
-through `list_to_atom/1` (and every reason not to — see `comment/3`
-below). TypeScript first, then Erlang — one family, both extractors:
+through `list_to_atom/1` — and plenty of reasons not to (see `comment/3`
+below). TypeScript first, then Erlang: one family, both extractors:
 
 ```prolog
 ?- doc(add, Arity, File, Line, Text).
@@ -459,9 +461,9 @@ below). TypeScript first, then Erlang — one family, both extractors:
 
 #### `doc_tag(Function, Arity, TagName, Type, Name, Description, File, Line)`
 
-A JSDoc comment's own `@`-tags, structured — `doc/5` says a comment
+A JSDoc comment's own `@`-tags, structured: `doc/5` says a comment
 documents a function and gives its flattened text; this says what the
-comment's `@param`/`@returns`/etc. tags actually structured.
+comment's `@param`/`@returns`/etc. tags actually declare.
 
 ```prolog
 ?- doc_tag(add, Arity, Tag, Type, Name, Desc, File, Line).
@@ -725,9 +727,9 @@ Line)`:
 ```
 
 An import binding is stored as an ordinary `var_decl/6` with
-`Kind = import` — deliberately the same fact shape as any other
-declaration, not a parallel one, so `unused_var/4` already applies to
-an unused import with no extra rule.
+`Kind = import`, deliberately the same fact shape as any other
+declaration rather than a parallel one, so `unused_var/4` already
+applies to an unused import with no extra rule.
 
 ### Markdown facts
 
@@ -1034,7 +1036,7 @@ unchanged against the other. Both fixtures at once, one goal:
 
 (two of the three real solutions shown.)
 
-## Status
+## Status {: #status }
 
 Early implementation. Under active development. See the
 [GitHub repository](https://github.com/iwillig/symbolic-tools) for the
