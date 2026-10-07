@@ -63,3 +63,25 @@ just build   # writes to output/
 just serve   # build, watch content/ for changes, and serve output/ locally
 just clean   # remove output/ and the build cache
 ```
+
+## Deployment (GitHub Pages)
+
+The site deploys to https://www.iwillig.me/symbolic-tools/ as a GitHub
+Pages project site — same mechanics as clj-llm: `.github/workflows/
+deploy-pages.yml` builds on every push to `main` (and on demand via
+workflow_dispatch), uploads `website/output` as a Pages artifact, and
+deploys it with the official Pages actions. First enablement is one
+switch: Settings → Pages → Source "GitHub Actions".
+
+Two settings files split local from production:
+
+- `pelicanconf.py` — `SITEURL = ""` with `RELATIVE_URLS`, so `just
+  build` and a plain `file://` open of `output/index.html` both work.
+- `publishconf.py` — layers `SITEURL =
+  https://www.iwillig.me/symbolic-tools` over it for CI, so the
+  theme's `{{ SITEURL }}/theme/...` links resolve under the project
+  path. Content links stay document-relative in both builds, which is
+  why they work at any base path.
+
+The workflow installs from `Pipfile.lock` (`pipenv install --deploy`)
+with Python 3.14, matching the pinned local version.
