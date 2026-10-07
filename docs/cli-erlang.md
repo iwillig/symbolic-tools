@@ -148,6 +148,8 @@ query_cmd() ->
   library caller use — keeps the stricter contract: there, `undefined`
   means "consult nothing", never "go looking". **Implemented.**
 - `parse` — walk a folder, run the tree-sitter extraction
+- `search` — full-text search over the prose facts in a fact database
+  (see [`full-text-search.md`](full-text-search.md))
   ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), print facts as JSON,
   and optionally write them into a fact database via `-db`.
   **Implemented.** `dir` is declared `nargs => 'maybe', required =>

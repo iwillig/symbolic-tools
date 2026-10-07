@@ -37,7 +37,10 @@ website/cache/
 # Rust build artifacts (the symbolic_ts Rustler NIF crate) — cargo
 # regenerates them; scripts/build_nif.sh copies the one artifact that
 # matters into priv/.
-native/symbolic_ts/target/
+# Cargo build artifacts for every native/* crate — was previously
+# listed per-crate (native/symbolic_ts/target/), which let a newly
+# added crate's artifacts land unignored (staged by accident once).
+native/*/target/
 
 # Built slide decks (Justfile `build-presentations`) — one portable HTML
 # file per docs/presentations/*.md, regenerated from source, not versioned.

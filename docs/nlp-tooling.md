@@ -137,6 +137,13 @@ without a trained embedding model, this — hand-written binary-matching
 tokenization plus a simple inverted index — is the idiomatic BEAM answer,
 not an imported ML stack.
 
+**Update — this tier is now built**, keeping this section's architecture
+(a hand-built inverted index, no imported engine) but moving it into Rust:
+`native/symbolic_text` (a Rustler NIF over `unicode-segmentation`'s UAX #29
+word boundaries, BM25 scoring), driven by `symbolic search -db`. The Rust
+decision's rationale and rejected alternatives (tantivy, stemming) are
+recorded in [`full-text-search.md`](full-text-search.md).
+
 ## 4. Fallback tier — only for a genuine trained/statistical model
 
 Reach here only once a need falls outside both §2 (grammar-shaped) and §3

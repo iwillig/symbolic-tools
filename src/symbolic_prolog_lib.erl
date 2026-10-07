@@ -61,7 +61,8 @@
 -include_lib("erlog/src/erlog_int.hrl").
 
 -export([load/1]).
--export([sub_atom_5/3, sub_text_5/3, atom_from_binary_2/3, count_pairs_2/3]).
+-export([sub_atom_5/3, sub_text_5/3, atom_from_binary_2/3, count_pairs_2/3,
+    text_search_2/3, text_search_3/3]).
 
 -import(erlog_int, [prove_body/2, fail/1, unify/3, add_compiled_proc/4]).
 
@@ -72,7 +73,9 @@ load(Db0) ->
     Db1 = add_compiled_proc({sub_atom, 5}, ?MODULE, sub_atom_5, Db0),
     Db2 = add_compiled_proc({sub_text, 5}, ?MODULE, sub_text_5, Db1),
     Db3 = add_compiled_proc({atom_from_binary, 2}, ?MODULE, atom_from_binary_2, Db2),
-    add_compiled_proc({count_pairs, 2}, ?MODULE, count_pairs_2, Db3).
+    Db4 = add_compiled_proc({count_pairs, 2}, ?MODULE, count_pairs_2, Db3),
+    Db5 = add_compiled_proc({text_search, 2}, ?MODULE, text_search_2, Db4),
+    add_compiled_proc({text_search, 3}, ?MODULE, text_search_3, Db5).
 
 %% count_pairs_2(Head, NextGoal, State) -> void.
 %%
@@ -277,6 +280,137 @@ atom_from_binary_2({atom_from_binary, Bin0, Atom0}, Next, #est{bs = Bs} = St) ->
         Other ->
             erlog_int:type_error(binary, Other, St)
     end.
+
+%% text_search_2(Head, NextGoal, State) -> void.
+%%
+%% text_search(Query, Hits) — full-text search over THIS SESSION'S OWN
+%% prose facts (comment/3, paragraph/3, heading/4, blockquote/3), the
+%% same BM25 index symbolic_search uses over a fact database (see
+%% docs/full-text-search.md), enumerated straight out of the erlog
+%% database the goal is being proved against — so it needs no extra
+%% plumbing, no file, no sidecar: whatever base the session is proving
+%% against IS the corpus. One solution: Hits unifies with a BM25-ranked
+%% list of hit(Kind, File, Line, Score) terms, best first. text_search/3
+%% is the same with an explicit limit; text_search/2 fixes it at 10.
+%%
+%% Query is bound — a double-quoted goal literal ("inverted index", a
+%% code list under erlog's double_quotes(codes), the natural thing a
+%% caller types), an atom, or a binary. No per-session index cache is
+%% possible: prolog_session proves in a spawned worker process
+%% (prove_with_timeout/3), so nothing this callback could stash survives
+%% a query, and the Erl state never flows back to the session. The
+%% index is therefore built once per goal evaluation — measured at
+%% well under the 5s proof budget for this repo's own corpus — and
+%% comma-chained text_search goals in one proof share nothing, by
+%% construction correct.
+text_search_2({text_search, Query0, Hits0}, Next, St) ->
+    text_search_3({text_search, Query0, 10, Hits0}, Next, St).
+
+text_search_3({text_search, Query0, Limit0, Hits0}, Next, #est{bs = Bs} = St) ->
+    case deref(Query0, Bs) of
+        {_} ->
+            erlog_int:instantiation_error(St);
+        Query ->
+            case deref(Limit0, Bs) of
+                {_} ->
+                    erlog_int:instantiation_error(St);
+                Limit when is_integer(Limit), Limit >= 1 ->
+                    text_search_run(Query, Limit, Hits0, Next, St);
+                Limit ->
+                    erlog_int:type_error(integer, Limit, St)
+            end
+    end.
+
+text_search_run(Query, Limit, Hits0, Next, #est{db = Db} = St) ->
+    QueryBin = query_binary(Query, St),
+    {Index, Docs} = session_text_index(Db),
+    case symbolic_text:index_search(Index, QueryBin, Limit) of
+        {ok, Ranked} ->
+            Hits = [hit_term(Id, Score, Docs) || {Id, Score} <- Ranked],
+            erlog_int:unify_prove_body(Hits0, Hits, Next, St);
+        {error, Reason} ->
+            %% Unreachable by construction — query_binary only produces
+            %% valid UTF-8, the only failure index_search knows. A crash
+            %% (worker_crashed to the caller) rather than a silent [] —
+            %% a bug here must be loud.
+            erlang:error({text_search_failed, Reason})
+    end.
+
+%% The session's own prose corpus: the four text-bearing fact shapes,
+%% enumerated straight from the erlog database (clauses are
+%% {Index, Head, Body} triples — a fact's Head is the fact tuple, same
+%% shape symbolic_search matches out of DETS). One index per goal
+%% evaluation, ids are the 1-based positions in Docs.
+session_text_index(Db) ->
+    Docs = lists:append([
+        prose_docs({comment, 3}, Db),
+        prose_docs({paragraph, 3}, Db),
+        %% heading/4: the fact tuple {heading, File, Level, Text, Line} is a
+        %% 5-element Erlang tuple but a 4-ARITY Prolog functor — the erlog
+        %% DB key counts Prolog arguments, not tuple elements (found
+        %% live: {heading, 5} looked up nothing).
+        prose_docs({heading, 4}, Db),
+        prose_docs({blockquote, 3}, Db)
+    ]),
+    Index = symbolic_text:index_new(),
+    ok = add_prose(Index, Docs, 1),
+    {Index, Docs}.
+
+prose_docs(Functor, #db{mod = Dm, ref = Dr}) ->
+    %% #est.db is a #db{mod, ref} record, and erlog_int's own internal
+    %% get_procedure/2 is NOT exported — so this dispatches exactly the
+    %% way erlog_int.erl:954 does it (Dm:get_procedure(Dr, Functor)),
+    %% the same erlog_int.hrl coupling the other callbacks here already
+    %% carry. Calling erlog_db_dict directly on the raw record would be a
+    %% badrecord crash — found live, not assumed.
+    case Dm:get_procedure(Dr, Functor) of
+        {clauses, Cs} -> prose_heads(Functor, Cs);
+        _ -> []
+    end.
+
+%% Each prose functor by NAME, not by a shared shape — comment/3 and
+%% paragraph/3 both carry (file, line, text) in DIFFERENT argument orders
+%% (the same trap symbolic_search:text_docs/1 documents).
+prose_heads({comment, _}, Cs) ->
+    [{comment, F, L, T} || {_, {comment, F, L, T}, _} <- Cs];
+prose_heads({paragraph, _}, Cs) ->
+    [{paragraph, F, L, T} || {_, {paragraph, F, T, L}, _} <- Cs];
+prose_heads({heading, _}, Cs) ->
+    [{heading, F, L, T} || {_, {heading, F, _Level, T, L}, _} <- Cs];
+prose_heads({blockquote, _}, Cs) ->
+    [{blockquote, F, L, T} || {_, {blockquote, F, T, L}, _} <- Cs].
+
+add_prose(_Index, [], _Id) ->
+    ok;
+add_prose(Index, [{_Kind, _File, _Line, Text} | Rest], Id) ->
+    ok = symbolic_text:index_add_doc(Index, Id, to_utf8(Text)),
+    add_prose(Index, Rest, Id + 1).
+
+hit_term(Id, Score, Docs) ->
+    {Kind, File, Line, _Text} = lists:nth(Id, Docs),
+    {'hit', Kind, File, Line, Score}.
+
+%% Query accepts the three text shapes a goal can carry: a code list
+%% (double_quotes(codes) literal), an atom, a binary. Text facts are
+%% binaries but may arrive as lists from older paths — to_utf8/1
+%% normalizes both directions, loudly rejecting what it can't.
+to_utf8(Text) when is_binary(Text) -> Text;
+to_utf8(Text) when is_list(Text) -> unicode:characters_to_binary(Text);
+to_utf8(Text) when is_atom(Text) -> atom_to_binary(Text, utf8).
+
+query_binary(Query, St) ->
+    try query_to_binary(Query)
+    catch throw:bad_query -> erlog_int:type_error(list, Query, St)
+    end.
+
+query_to_binary(Q) when is_binary(Q) -> Q;
+query_to_binary(Q) when is_atom(Q) -> atom_to_binary(Q, utf8);
+query_to_binary(Q) when is_list(Q) ->
+    case unicode:characters_to_binary(Q) of
+        Bin when is_binary(Bin) -> Bin;
+        _ -> throw(bad_query)
+    end;
+query_to_binary(_) -> throw(bad_query).
 
 %% deref/2 is exported from erlog_int but only needed right at entry, once
 %% each in sub_atom_5/3, sub_text_5/3 and atom_from_binary_2/3 — imported

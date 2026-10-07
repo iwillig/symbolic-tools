@@ -155,10 +155,16 @@ skipping the pipeline — which is what this repo does.
   llama.cpp ecosystem, not Rust crates. `mistral.rs` is the closest
   Rust-native equivalent and would only matter if that tier were ever
   rewritten in Rust.
-- The bounded-grammar tier (`check_claim/2`'s DCG sentence extractor) needs
+- The bounded-grammar tier (`symbolic_extract`'s DCG sentence extractor,
+  checked downstream by `check_claim/2` in `.symbolic/rules.pl`) needs
   none of this: it is a hand-written grammar, and nothing in the Rust
   ecosystem would replace it — there is no maintained natural-language
   *parser* crate to reach for, which is itself the headline finding.
+- One row of the tables above did become real code: the full-text search
+  tier is `native/symbolic_text`, a Rustler NIF built on
+  `unicode-segmentation`'s UAX #29 segmentation plus a hand-built BM25
+  inverted index — the stack decision is recorded in
+  [`full-text-search.md`](full-text-search.md).
 - `tree-sitter` (43.4M recent downloads) — already this repo's parsing
   layer — is for *code* grammars; it has no natural-language role.
 

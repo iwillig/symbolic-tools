@@ -28,7 +28,8 @@ cli() ->
             "parse" => parse_cmd(),
             "serve" => serve_cmd(),
             "extract" => extract_cmd(),
-            "check" => check_cmd()
+            "check" => check_cmd(),
+            "search" => search_cmd()
         }
     }.
 
@@ -98,6 +99,23 @@ extract_cmd() ->
         handler => fun(Args) ->
             #{sentence := Sentence} = Args,
             symbolic_extract:run(Sentence, maps:get(model, Args, undefined))
+        end
+    }.
+
+search_cmd() ->
+    #{
+        help => "Full-text search over the prose facts (comments, paragraphs, headings, "
+                "block quotes) in a fact database (see docs/full-text-search.md)",
+        arguments => [
+            #{name => db, long => "db", required => true,
+              help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
+            #{name => limit, long => "limit", type => integer, default => 10,
+              help => "Maximum number of results (default 10, must be >= 1)"},
+            #{name => query, help => "Search query — plain words, e.g. \"inverted index\""}
+        ],
+        handler => fun(Args) ->
+            #{db := Db, query := Query} = Args,
+            symbolic_search:run(Db, Query, maps:get(limit, Args, 10))
         end
     }.
 

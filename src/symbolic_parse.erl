@@ -338,7 +338,16 @@ error_message({nif_not_loadable, _}) ->
     "docs/cli-erlang.md.\n".
 
 maybe_store(undefined, _Facts) -> ok;
-maybe_store(DbPath, Facts) -> symbolic_fact_store:write(DbPath, Facts).
+maybe_store(DbPath, Facts) ->
+    ok = symbolic_fact_store:write(DbPath, Facts),
+    %% Write the full-text index sidecar (<db>.text_idx) alongside the
+    %% DETS store, same fact set, same write — so `symbolic search` can
+    %% load the prebuilt BM25 index instead of re-reading and
+    %% re-tokenizing the whole corpus per query (docs/full-text-search.md).
+    %% Best-effort: a failed sidecar write never fails the parse, it
+    %% only costs `symbolic search` its fast path.
+    _ = catch symbolic_search:write_index_cache(DbPath, Facts),
+    ok.
 
 %% ~ts, not ~s: jsx:encode/1 returns a binary that's already-encoded
 %% UTF-8 bytes (e.g. free text from ts_extract_text:to_text/1). ~s
