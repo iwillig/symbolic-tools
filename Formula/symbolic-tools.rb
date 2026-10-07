@@ -25,15 +25,16 @@ class SymbolicTools < Formula
   # Homebrew build sandbox needs a Rust toolchain on PATH — same pattern
   # as the cmake declaration above for erllama's vendored llama.cpp.
   depends_on "rust" => :build
-  # The symbolic_nlp statistical-tier NIF (rust-bert) needs a ~500MB
-  # libtorch download at build time and its runtime rpath points into
-  # the build sandbox, which Homebrew deletes after install — the NIF
-  # could never load here. It degrades gracefully when absent (ask
-  # falls back to the deterministic grammar), so packaged builds skip
-  # it via build_nif.sh's escape hatch.
-  ENV["SYMBOLIC_SKIP_NLP"] = "1"
 
   def install
+    # The symbolic_nlp statistical-tier NIF (rust-bert) needs a ~500MB
+    # libtorch download at build time and its runtime rpath points into
+    # the build sandbox, which Homebrew deletes after install — the NIF
+    # could never load here. It degrades gracefully when absent (ask
+    # falls back to the deterministic grammar), so packaged builds skip
+    # it via build_nif.sh's escape hatch. Must be set INSIDE install:
+    # a class-level ENV does not survive Homebrew's superenv scrub.
+    ENV["SYMBOLIC_SKIP_NLP"] = "1"
     system "rebar3", "release"
     # bin/symbolic is already inside the release tree (via rebar.config's
     # relx overlay, copied from scripts/symbolic) — installing the whole
