@@ -1,0 +1,10 @@
+{
+  "auth": {
+    "codeExpiredError": "That code expired. Request a new one.",
+    "codeIncorrectError": "That code was wrong. Try again.",
+    "codeSendError": "We could not send the code.",
+    "tooManyAttemptsError": "Too many attempts. Try again later.",
+    "smsUnavailableError": "SMS is unavailable right now.",
+    "verifyCodeError": "Could not verify the code."
+  }
+}

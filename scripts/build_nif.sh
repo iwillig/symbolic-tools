@@ -4,6 +4,7 @@
 #
 #   native/symbolic_ts   -> priv/symbolic_ts.so    (tree-sitter binding)
 #   native/symbolic_text -> priv/symbolic_text.so   (full-text search)
+#   native/symbolic_nlp  -> priv/symbolic_nlp.so   (statistical NL tier)
 #
 # Called by rebar3's {pre_hooks, compile} (see rebar.config), so every
 # rebar3 compile, eunit, shell, release, and cover run picks up freshly
@@ -17,8 +18,25 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-for crate in symbolic_ts symbolic_text; do
-    (cd "native/$crate" && cargo build --release)
+for crate in symbolic_ts symbolic_text symbolic_nlp; do
+    if [ "$crate" = "symbolic_nlp" ]; then
+        # Three spike findings (PLAN-statistical-nlp-tier.md Stage 1):
+        # 1. libtorch's strong_type.h specializes std::is_arithmetic,
+        #    which current macOS SDKs raise as a hard C++ error —
+        #    suppress that diagnostic group for the torch-sys bridge.
+        # 2. headerpad so install_name_tool can add an rpath below
+        #    without relinking.
+        # 3. libtorch dylibs are NOT copied into priv/ yet (production
+        #    must ship them with an @loader_path rpath); for now the
+        #    NIF carries an absolute rpath into cargo's torch-sys build
+        #    cache, added post-link below.
+        (cd "native/$crate" && \
+            CXXFLAGS="-Wno-invalid-specialization" \
+            RUSTFLAGS="-C link-arg=-Wl,-headerpad_max_install_names" \
+            cargo build --release)
+    else
+        (cd "native/$crate" && cargo build --release)
+    fi
 
 case "$(uname -s)" in
     Darwin)
@@ -31,5 +49,13 @@ esac
 
 mkdir -p priv
 cp "$artifact" "priv/$crate.so"
+
+if [ "$crate" = "symbolic_nlp" ]; then
+    libdir=$(ls -d "$PWD"/native/symbolic_nlp/target/release/build/torch-sys-*/out/libtorch/libtorch/lib 2>/dev/null | head -1 || true)
+    if [ -n "$libdir" ] && ! otool -l "priv/$crate.so" | grep -q "$libdir"; then
+        install_name_tool -add_rpath "$libdir" "priv/$crate.so"
+    fi
+fi
+
 echo "$crate NIF: $artifact -> priv/$crate.so"
 done

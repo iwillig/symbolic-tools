@@ -1,0 +1,22 @@
+[package]
+name = "symbolic_nlp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Rustler NIF for symbolic-tools: a small, purpose-built statistical NL tier (POS/NER tagging) for the ask pipeline. Spike."
+
+[lib]
+name = "symbolic_nlp"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.38"
+rust-bert = "0.23"
+# Direct dep only to turn on the libtorch auto-download (feature
+# unification with rust-bert's own tch); the spike never calls tch.
+tch = { version = "0.17", features = ["download-libtorch"] }
+# Feature-unification fix: rust-bert's `indicatif` 0.16.2 depends on
+# console 0.16 with default-features = false but does not re-enable
+# `std`, which console 0.16.6 requires for Term/Style. Features are
+# additive across the graph, so enabling std here fixes indicatif.
+console = { version = "0.16", features = ["std"] }

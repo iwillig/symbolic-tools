@@ -149,11 +149,182 @@ missing_db_is_reported_test() ->
     ?assertEqual({error, {no_such_db, Missing}},
         symbolic_ask:run_result(Missing, "is foo/2 defined?")).
 
-capitalized_words_are_rejected_by_the_tokenizer_test() ->
+%% Stage 2 changed this question's fate: the DCG tokenizer still
+%% rejects the capitalized token, but the question now falls through to
+%% the statistical tier, which parses it and gates it — `Foo/2` is not
+%% in the fact base, so the answer is `unverifiable`, loudly, not a
+%% tokenizer rejection and never a silent false.
+capitalized_words_fall_through_to_the_statistical_tier_test() ->
     with_db(facts(), fun(Db) ->
-        ?assertMatch({error, {tokenize_error, {bad_token, _}}},
+        ?assertMatch({error, {unverifiable, {no_such_function, _, _}}},
             symbolic_ask:run_result(Db, "does Foo/2 call bar/1?"))
     end).
+
+%% --- stage 2 unit tests: the pure mapper, no NIF, no session ---
+
+%% Expected terms are bound to variables first: eunit's macro-argument
+%% scanner mishandles deeply nested terms with binaries split across
+%% lines, and a simple variable argument sidesteps it.
+
+mapper_does_calls_shape_test() ->
+    Tags = [{<<"does">>, <<"VBZ">>}, {<<"verifyPhoneCode">>, <<"NNP">>},
+            {<<"call">>, <<"VB">>}, {<<"verifyOtp">>, <<"NNP">>},
+            {<<"?">>, <<".">>}],
+    Expected = {ok, {yes_no, {calls,
+        [{<<"verifyPhoneCode">>, <<"NNP">>}],
+        [{<<"verifyOtp">>, <<"NNP">>}]}}},
+    ?assertEqual(Expected, symbolic_ask:map_tags(Tags)).
+
+mapper_does_defines_shape_test() ->
+    Tags = [{<<"does">>, <<"VBZ">>}, {<<"verifyResult">>, <<"NN">>},
+            {<<"exist">>, <<"VBZ">>}],
+    Expected = {ok, {yes_no, {defines, [{<<"verifyResult">>, <<"NN">>}]}}},
+    ?assertEqual(Expected, symbolic_ask:map_tags(Tags)).
+
+mapper_passive_swaps_subject_and_object_test() ->
+    Tags = [{<<"is">>, <<"VBZ">>}, {<<"verifyOtp">>, <<"NNP">>},
+            {<<"called">>, <<"VBN">>}, {<<"by">>, <<"IN">>},
+            {<<"verifyPhoneCode">>, <<"NNP">>}],
+    Expected = {ok, {yes_no, {calls,
+        [{<<"verifyPhoneCode">>, <<"NNP">>}],
+        [{<<"verifyOtp">>, <<"NNP">>}]}}},
+    ?assertEqual(Expected, symbolic_ask:map_tags(Tags)).
+
+mapper_which_and_how_many_shapes_test() ->
+    Pair = {<<"setError">>, <<"NN">>},
+    ExpectedWhich = {ok, {enumerate, {callers_of, [Pair]}}},
+    ?assertEqual(ExpectedWhich,
+        symbolic_ask:map_tags([{<<"which">>, <<"WDT">>},
+                               {<<"functions">>, <<"NNS">>},
+                               {<<"call">>, <<"VB">>},
+                               {<<"setError">>, <<"NN">>}])),
+    ExpectedCount = {ok, {count, {callers_of, [Pair]}}},
+    ?assertEqual(ExpectedCount,
+        symbolic_ask:map_tags([{<<"how">>, <<"RB">>},
+                               {<<"many">>, <<"JJ">>},
+                               {<<"functions">>, <<"NNS">>},
+                               {<<"call">>, <<"VB">>},
+                               {<<"setError">>, <<"NN">>}])).
+
+mapper_snake_case_rejoins_via_glue_tokens_test() ->
+    Tags = [{<<"how">>, <<"RB">>}, {<<"many">>, <<"JJ">>},
+            {<<"functions">>, <<"NNS">>}, {<<"call">>, <<"VB">>},
+            {<<"optional">>, <<"JJ">>}, {<<"_">>, <<"NFP">>},
+            {<<"path">>, <<"NN">>}],
+    ?assertMatch({ok, {count, {callers_of, _}}}, symbolic_ask:map_tags(Tags)),
+    ?assertEqual([<<"optional_path">>],
+        symbolic_ask:ident_candidates([{<<"optional">>, <<"JJ">>},
+                                       {<<"_">>, <<"NFP">>},
+                                       {<<"path">>, <<"NN">>}])).
+
+mapper_dotted_path_and_arity_rejoin_test() ->
+    ?assertEqual([<<"supabase.auth.verifyOtp/2">>],
+        symbolic_ask:ident_candidates(
+            [{<<"supabase">>, <<"NNP">>}, {<<".">>, <<"NFP">>},
+             {<<"auth">>, <<"NNP">>}, {<<".">>, <<"NFP">>},
+             {<<"verifyOtp">>, <<"NNP">>}, {<<"/">>, <<"SYN">>},
+             {<<"2">>, <<"CD">>}])).
+
+mapper_prose_shape_test() ->
+    Tags = [{<<"where">>, <<"WRB">>}, {<<"is">>, <<"VBZ">>},
+            {<<"the">>, <<"DT">>}, {<<"question">>, <<"NN">>},
+            {<<"grammar">>, <<"NN">>}, {<<"documented">>, <<"VBN">>}],
+    Expected = {ok, {prose, [{<<"the">>, <<"DT">>},
+                             {<<"question">>, <<"NN">>},
+                             {<<"grammar">>, <<"NN">>}]}},
+    ?assertEqual(Expected, symbolic_ask:map_tags(Tags)).
+
+mapper_unrecognized_outside_the_vocabulary_test() ->
+    ?assertEqual(unrecognized,
+        symbolic_ask:map_tags([{<<"does">>, <<"VBZ">>},
+                               {<<"verifyPhoneCode">>, <<"NNP">>},
+                               {<<"celebrate">>, <<"VB">>},
+                               {<<"a">>, <<"DT">>},
+                               {<<"reason">>, <<"NN">>}])).
+
+mapper_returns_and_handles_shapes_test() ->
+    Subj = [{<<"verifyPhoneCode">>, <<"NNP">>}],
+    ExpectedReturns = {ok, {yes_no, {returns, Subj, [{<<"message">>, <<"NN">>}]}}},
+    ?assertEqual(ExpectedReturns,
+        symbolic_ask:map_tags([{<<"does">>, <<"VBZ">>},
+                               {<<"verifyPhoneCode">>, <<"NNP">>},
+                               {<<"return">>, <<"VB">>},
+                               {<<"message">>, <<"NN">>}])),
+    ExpectedHandles = {ok, {yes_no, {handles,
+        [{<<"getClaimPhoneErrorMessage">>, <<"NNP">>}],
+        [{<<"alreadySignedIn">>, <<"JJ">>}]}}},
+    ?assertEqual(ExpectedHandles,
+        symbolic_ask:map_tags([{<<"does">>, <<"VBZ">>},
+                               {<<"getClaimPhoneErrorMessage">>, <<"NNP">>},
+                               {<<"handle">>, <<"VB">>},
+                               {<<"alreadySignedIn">>, <<"JJ">>}])).
+
+mapper_where_shapes_test() ->
+    Site = [{<<"setError">>, <<"NNP">>}, {<<"/">>, <<".">>}, {<<"1">>, <<"CD">>}],
+    ExpectedSites = {ok, {sites, {call_sites_of, Site}}},
+    ?assertEqual(ExpectedSites,
+        symbolic_ask:map_tags([{<<"where">>, <<"WRB">>},
+                               {<<"is">>, <<"VBZ">>},
+                               {<<"setError">>, <<"NNP">>},
+                               {<<"/">>, <<".">>},
+                               {<<"1">>, <<"CD">>},
+                               {<<"called">>, <<"VBN">>}])).
+
+mapper_file_and_config_shapes_test() ->
+    FileTokens = [{<<"JoinAccountModal">>, <<"NNP">>},
+                  {<<".">>, <<"NFP">>}, {<<"ts">>, <<"NN">>}],
+    ExpectedFile = {ok, {yes_no, {file_scanned, FileTokens}}},
+    ?assertEqual(ExpectedFile,
+        symbolic_ask:map_tags([{<<"is">>, <<"VBZ">>},
+                               {<<"file">>, <<"NN">>},
+                               {<<"JoinAccountModal">>, <<"NNP">>},
+                               {<<".">>, <<"NFP">>},
+                               {<<"ts">>, <<"NN">>},
+{<<"scanned">>,<<"VBN">>}])),
+    KeyTokens = [{<<"auth">>, <<"NNP">>}, {<<".">>, <<"NFP">>},
+                 {<<"codeExpiredError">>, <<"NNP">>}],
+    ExpectedConfig = {ok, {yes_no, {config_defined, KeyTokens}}},
+    ?assertEqual(ExpectedConfig,
+        symbolic_ask:map_tags([{<<"is">>, <<"VBZ">>},
+                               {<<"config">>, <<"NN">>},
+                               {<<"auth">>, <<"NNP">>},
+                               {<<".">>, <<"NFP">>},
+                               {<<"codeExpiredError">>, <<"NNP">>},
+                               {<<"defined">>, <<"VBN">>}])).
+
+pipeline_uses_returns_handles_sites_scanned_config_test() ->
+    Facts = [
+        {defines, verifyCode, 1, [], 'supabaseOtp.ts', 1},
+        {defines, getClaimPhoneErrorMessage, 1, [], 'useClaimAccount.ts', 2},
+        {defines, 'JoinAccountModal', 1, [], 'JoinAccountModal.ts', 3},
+        {expr_ref, [0, 1], verifyCode, 1, message, 'supabaseOtp.ts', 4},
+        {return_stmt, verifyCode, 1, "true", 'supabaseOtp.ts', 5},
+        {literal, [0, 2], getClaimPhoneErrorMessage, 1, string,
+         alreadySignedIn, 'useClaimAccount.ts', 6, "\"alreadySignedIn\""},
+        {calls, 'JoinAccountModal', 1, {local, verifyCode, 1}, 'JoinAccountModal.ts', 7},
+        {comment, 'JoinAccountModal.ts', 8, <<"the join modal prose">>},
+        {config_value, 'en.json', 'auth.codeExpiredError', <<"expired copy">>, 3}
+    ],
+    with_db(Facts, fun(Db) ->
+        ?assertEqual({ok, yes_no_true()},
+            symbolic_ask:run_result(Db, "does verifyCode/1 use message?")),
+        ?assertEqual({ok, yes_no_true()},
+            symbolic_ask:run_result(Db, "does verifyCode/1 return message?")),
+        ?assertEqual({ok, yes_no_true()},
+            symbolic_ask:run_result(Db, "does getClaimPhoneErrorMessage/1 handle alreadySignedIn?")),
+        SitesResult = symbolic_ask:run_result(Db, "where is verifyCode/1 called?"),
+        ?assertMatch({ok, #{<<"type">> := <<"sites">>, <<"answer">> := [_ | _]}},
+            SitesResult),
+        ?assertEqual({ok, yes_no_true()},
+            symbolic_ask:run_result(Db, "is file JoinAccountModal.ts scanned?")),
+        ?assertEqual({ok, yes_no_false()},
+            symbolic_ask:run_result(Db, "is file nope.ts scanned?")),
+        ?assertEqual({ok, yes_no_true()},
+            symbolic_ask:run_result(Db, "is config auth.codeExpiredError defined?"))
+    end).
+
+yes_no_true() -> #{<<"type">> => <<"yes_no">>, <<"answer">> => true}.
+yes_no_false() -> #{<<"type">> => <<"yes_no">>, <<"answer">> => false}.
 
 tmp_db() ->
     filename:join(["/tmp", "symbolic_ask_tests_"

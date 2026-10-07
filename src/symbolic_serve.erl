@@ -148,7 +148,7 @@ register_tools() ->
           "decision point, for real complexity, "
           "expr(Id, Function, Arity, Kind, File, Line)/expr_operator(Id, Op)/"
           "expr_operand(Id, Role, ChildId)/literal(Id, Function, Arity, "
-          "LitKind, Value, File, Line)/expr_ref(Id, Function, Arity, Name, "
+          "LitKind, Value, File, Line, Raw)/expr_ref(Id, Function, Arity, Name, "
           "File, Line) - what a decision point actually compares (Erlang/"
           "TypeScript only; Id is a byte span, not Function/Arity/File/"
           "Line), scope(ScopeId, Kind, ParentScopeId, File)/"
