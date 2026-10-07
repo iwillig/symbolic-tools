@@ -18,7 +18,20 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-for crate in symbolic_ts symbolic_text symbolic_nlp; do
+# SYMBOLIC_SKIP_NLP=1 excludes the statistical tier's NIF (native/
+# symbolic_nlp). Its build downloads a ~500MB libtorch and its runtime
+# rpath points into the build cache, which dies outside a dev checkout
+# — e.g. a Homebrew build sandbox. The tier degrades gracefully when
+# the NIF is absent (symbolic_nlp.erl swallows the load failure), so
+# packaged builds skip it until libtorch is packaged properly.
+SKIP_NLP="${SYMBOLIC_SKIP_NLP:-}"
+
+crates="symbolic_ts symbolic_text"
+if [ -z "$SKIP_NLP" ]; then
+    crates="$crates symbolic_nlp"
+fi
+
+for crate in $crates; do
     if [ "$crate" = "symbolic_nlp" ]; then
         # Three spike findings (PLAN-statistical-nlp-tier.md Stage 1):
         # 1. libtorch's strong_type.h specializes std::is_arithmetic,

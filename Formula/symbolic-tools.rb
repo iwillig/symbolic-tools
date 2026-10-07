@@ -7,8 +7,8 @@ class SymbolicTools < Formula
   # commit that contains it (impossible to satisfy). `tag:` alone is
   # enough for a single-maintainer personal tap; a separate tap repo
   # (not sharing history with the source) wouldn't have this problem.
-  url "https://github.com/iwillig/symbolic-tools.git", tag: "v0.1.4"
-  version "0.1.4"
+  url "https://github.com/iwillig/symbolic-tools.git", tag: "v0.2.0"
+  version "0.2.0"
   license "MIT"
 
   depends_on "erlang"
@@ -25,6 +25,13 @@ class SymbolicTools < Formula
   # Homebrew build sandbox needs a Rust toolchain on PATH — same pattern
   # as the cmake declaration above for erllama's vendored llama.cpp.
   depends_on "rust" => :build
+  # The symbolic_nlp statistical-tier NIF (rust-bert) needs a ~500MB
+  # libtorch download at build time and its runtime rpath points into
+  # the build sandbox, which Homebrew deletes after install — the NIF
+  # could never load here. It degrades gracefully when absent (ask
+  # falls back to the deterministic grammar), so packaged builds skip
+  # it via build_nif.sh's escape hatch.
+  ENV["SYMBOLIC_SKIP_NLP"] = "1"
 
   def install
     system "rebar3", "release"
