@@ -150,6 +150,8 @@ query_cmd() ->
 - `parse` — walk a folder, run the tree-sitter extraction
 - `search` — full-text search over the prose facts in a fact database
   (see [`full-text-search.md`](full-text-search.md))
+- `ask` — answer a bounded English question against a fact database
+  (see [`research-questions-to-prolog.md`](research-questions-to-prolog.md))
   ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), print facts as JSON,
   and optionally write them into a fact database via `-db`.
   **Implemented.** `dir` is declared `nargs => 'maybe', required =>

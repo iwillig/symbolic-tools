@@ -13,7 +13,7 @@
 
 cli_structure_test() ->
     #{commands := Commands} = symbolic_cli:cli(),
-    ?assertEqual(["check", "extract", "parse", "query", "search", "serve"],
+    ?assertEqual(["ask", "check", "extract", "parse", "query", "search", "serve"],
         lists:sort(maps:keys(Commands))).
 
 query_cmd_requires_db_and_goal_test() ->

@@ -29,7 +29,8 @@ cli() ->
             "serve" => serve_cmd(),
             "extract" => extract_cmd(),
             "check" => check_cmd(),
-            "search" => search_cmd()
+            "search" => search_cmd(),
+            "ask" => ask_cmd()
         }
     }.
 
@@ -116,6 +117,21 @@ search_cmd() ->
         handler => fun(Args) ->
             #{db := Db, query := Query} = Args,
             symbolic_search:run(Db, Query, maps:get(limit, Args, 10))
+        end
+    }.
+
+ask_cmd() ->
+    #{
+        help => "Answer a bounded English question against a fact database "
+                "(see docs/research-questions-to-prolog.md)",
+        arguments => [
+            #{name => db, long => "db", required => true,
+              help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
+            #{name => question, help => "Question, e.g. \"how many functions call query_binary/2?\""}
+        ],
+        handler => fun(Args) ->
+            #{db := Db, question := Question} = Args,
+            symbolic_ask:run(Db, Question)
         end
     }.
 
