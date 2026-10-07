@@ -159,6 +159,12 @@
 %% widening that query itself — keeps calls/5's own "only calls" contract
 %% untouched.
 -define(MEMBER_EXPR_QUERY, <<"(member_expression object: (_) @obj property: (property_identifier) @prop) @m">>).
+%% Object-literal keys — `{ reason: "expired" }` — as pair nodes. A
+%% returned object's field names live here, NOT in expr_ref (a key is a
+%% property_identifier, never an identifier reference), which is why
+%% "does X return reason?" needs this fact: the returns proof joins
+%% return_stmt against BOTH expr_ref and object_key.
+-define(PAIR_KEY_QUERY, <<"(pair key: (property_identifier) @key) @p">>).
 -define(NEW_EXPR_QUERY, <<"(new_expression) @n">>).
 -define(IMPORT_QUERY, <<"(import_statement) @i">>).
 -define(EXPORT_QUERY, <<"(export_statement) @e">>).
@@ -260,6 +266,7 @@ text(Path, Src0) ->
         await_exprs(Lang, Root, Src, PathAtom) ++
         yield_exprs(Lang, Root, Src, PathAtom) ++
         member_reads(Lang, Root, Src, PathAtom) ++
+        object_keys(Lang, Root, Src, PathAtom) ++
         label_stmts(Lang, Root, Src, PathAtom) ++
         label_refs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
@@ -434,6 +441,20 @@ member_read_fact(MemberNode, Src, PathAtom) ->
                 to_atom(symbolic_ts:node_text(ObjNode, Src)),
                 to_atom(symbolic_ts:node_text(PropNode, Src)), PathAtom, line(MemberNode)}}
     end.
+
+%% object_key/5: the key name of every object-literal pair —
+%% `{ reason: "expired" }` yields `reason`. Shorthand destructuring
+%% ({ message }) is shorthand_property_identifier, not a pair, and is
+%% deliberately out of scope here.
+object_keys(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?PAIR_KEY_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"key", N} <- Caps]),
+    [begin
+         {Caller, CallerArity} = caller_info(Node, Src),
+         {object_key, Caller, CallerArity,
+             to_atom(symbolic_ts:node_text(Node, Src)), PathAtom, line(Node)}
+     end || Node <- Nodes].
 
 is_call_target(MemberNode) ->
     Parent = symbolic_ts:node_parent(MemberNode),

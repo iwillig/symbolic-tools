@@ -298,7 +298,8 @@ pipeline_uses_returns_handles_sites_scanned_config_test() ->
         {defines, getClaimPhoneErrorMessage, 1, [], 'useClaimAccount.ts', 2},
         {defines, 'JoinAccountModal', 1, [], 'JoinAccountModal.ts', 3},
         {expr_ref, [0, 1], verifyCode, 1, message, 'supabaseOtp.ts', 4},
-        {return_stmt, verifyCode, 1, "true", 'supabaseOtp.ts', 5},
+        {return_stmt, verifyCode, 1, true, 'supabaseOtp.ts', 5},
+        {object_key, verifyCode, 1, reason, 'supabaseOtp.ts', 5},
         {literal, [0, 2], getClaimPhoneErrorMessage, 1, string,
          alreadySignedIn, 'useClaimAccount.ts', 6, "\"alreadySignedIn\""},
         {calls, 'JoinAccountModal', 1, {local, verifyCode, 1}, 'JoinAccountModal.ts', 7},
@@ -308,7 +309,10 @@ pipeline_uses_returns_handles_sites_scanned_config_test() ->
     with_db(Facts, fun(Db) ->
         ?assertEqual({ok, yes_no_true()},
             symbolic_ask:run_result(Db, "does verifyCode/1 use message?")),
-        ?assertEqual({ok, yes_no_true()},
+        %% Line-scoped returns: the expr_ref message sits on line 4, the
+        %% return on line 5 — a mention outside the return statement
+        %% does not make "returns message" true.
+        ?assertEqual({ok, yes_no_false()},
             symbolic_ask:run_result(Db, "does verifyCode/1 return message?")),
         ?assertEqual({ok, yes_no_true()},
             symbolic_ask:run_result(Db, "does getClaimPhoneErrorMessage/1 handle alreadySignedIn?")),
@@ -321,6 +325,60 @@ pipeline_uses_returns_handles_sites_scanned_config_test() ->
             symbolic_ask:run_result(Db, "is file nope.ts scanned?")),
         ?assertEqual({ok, yes_no_true()},
             symbolic_ask:run_result(Db, "is config auth.codeExpiredError defined?"))
+    end).
+
+%% Gap 1: a returned object's field is a property KEY, not an expr_ref —
+%% the returns join must see object_key or "does X return reason?"
+%% answers a confident false about `{ reason: "expired" }`.
+pipeline_returns_object_key_test() ->
+    Facts = [
+        {defines, verifyCode, 1, [], 'supabaseOtp.ts', 1},
+        {return_stmt, verifyCode, 1, true, 'supabaseOtp.ts', 2},
+        {object_key, verifyCode, 1, reason, 'supabaseOtp.ts', 2}
+    ],
+    with_db(Facts, fun(Db) ->
+        ?assertEqual({ok, yes_no_true()},
+            symbolic_ask:run_result(Db, "does verifyCode/1 return reason?"))
+    end).
+
+%% The line scope cuts both ways: a mention elsewhere in the function
+%% (a logger diagnostic naming the field) must NOT make "returns"
+%% true — that is the true→false flip the claims check depends on.
+pipeline_returns_line_scope_test() ->
+    Facts = [
+        {defines, verifyPhoneCode, 1, [], 'useClaimAccount.ts', 1},
+        {return_stmt, verifyPhoneCode, 1, true, 'useClaimAccount.ts', 2},
+        {object_key, verifyPhoneCode, 1, message, 'useClaimAccount.ts', 5}
+    ],
+    with_db(Facts, fun(Db) ->
+        ?assertEqual({ok, yes_no_false()},
+            symbolic_ask:run_result(Db, "does verifyPhoneCode/1 return message?"))
+    end).
+
+%% Gap 2: file subjects route through the calls path — "does file F
+%% call X?" gates the file, then proves through the sites answer.
+pipeline_file_subject_calls_test() ->
+    Facts = [
+        {defines, 'JoinAccountModal', 1, [], 'JoinAccountModal.ts', 1},
+        {calls, 'JoinAccountModal', 1, {local, setError, 1}, 'JoinAccountModal.ts', 2},
+        {defines, setError, 1, [], 'JoinAccountModal.ts', 3}
+    ],
+    with_db(Facts, fun(Db) ->
+        ?assertEqual({ok, yes_no_true()},
+            symbolic_ask:run_result(Db, "does file JoinAccountModal.ts call setError/1?")),
+        ?assertMatch({error, {unverifiable, {no_such_file, _}}},
+            symbolic_ask:run_result(Db, "does file nope.ts call setError/1?"))
+    end).
+
+%% Gap 3: "what calls X?" parses like which/who.
+pipeline_what_calls_test() ->
+    Facts = [
+        {calls, 'JoinAccountModal', 1, {local, setError, 1}, 'm.ts', 1},
+        {defines, 'JoinAccountModal', 1, [], 'm.ts', 2}
+    ],
+    with_db(Facts, fun(Db) ->
+        ?assertEqual({ok, #{<<"type">> => <<"enumerate">>, <<"answer">> => [<<"JoinAccountModal/1">>]}},
+            symbolic_ask:run_result(Db, "what calls setError/1?"))
     end).
 
 yes_no_true() -> #{<<"type">> => <<"yes_no">>, <<"answer">> => true}.

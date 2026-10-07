@@ -184,6 +184,7 @@ map_tags(Tags0) ->
             where_shape(Rest);
         [{<<"which">>, _} | Rest] -> wh_shape(enumerate, Rest);
         [{<<"who">>, _} | Rest] -> wh_shape(enumerate, Rest);
+        [{<<"what">>, _} | Rest] -> wh_shape(enumerate, Rest);
         [{<<"how">>, _}, {<<"many">>, _} | Rest] -> wh_shape(count, Rest);
         _ -> unrecognized
     end.
@@ -510,13 +511,34 @@ resolve_loose(_Pid, [], [{Name, _} | _]) ->
 
 %% Template → resolved relation → the SAME answer/3 the DCG uses.
 build_relation(Pid, {yes_no, {calls, SWords, OWords}}) ->
-    case resolve_ident(Pid, SWords) of
-        {ok, Subject} ->
-            case resolve_object(Pid, OWords) of
-                {ok, Object} -> answer(Pid, yes_no, {calls, Subject, Object});
-                Error -> Error
+    case subject_kind(SWords) of
+        {file, FileWords} ->
+            %% "does file F call X?" — the file subject is gated on the
+            %% scan, then the call is proven through the sites answer,
+            %% whose {caller, file, line} entries already merge all
+            %% three call shapes.
+            case file_scanned_check(Pid, FileWords) of
+                {ok, true} ->
+                    FileBin = file_segment(FileWords),
+                    case resolve_object(Pid, OWords) of
+                        {ok, Object} ->
+                            answer(Pid, yes_no, {calls_file, FileBin, Object});
+                        Error -> Error
+                    end;
+                {ok, false} ->
+                    {error, {unverifiable, {no_such_file, file_segment(FileWords)}}};
+                Error ->
+                    Error
             end;
-        Error -> Error
+        {ident, IdentWords} ->
+            case resolve_ident(Pid, IdentWords) of
+                {ok, Subject} ->
+                    case resolve_object(Pid, OWords) of
+                        {ok, Object} -> answer(Pid, yes_no, {calls, Subject, Object});
+                        Error -> Error
+                    end;
+                Error -> Error
+            end
     end;
 build_relation(Pid, {yes_no, {defines, SWords}}) ->
     case resolve_ident(Pid, SWords) of
@@ -749,7 +771,7 @@ answer(Pid, prose, Span) ->
 %% is an answer, not an error.
 answer(Pid, yes_no, {uses, Subject, Candidates}) ->
     case bool_any(Pid, Candidates,
-                  fun(C) -> expr_ref_goal(Subject, C) end) of
+                  fun(C) -> expr_ref_anywhere(Subject, C) end) of
         {ok, Bool} -> {ok, yes_no_answer(Bool)};
         Error -> Error
     end;
@@ -770,10 +792,28 @@ answer(Pid, yes_no, {uses_file, FileBin, Candidates}) ->
 %% returns — a valued return statement in the subject that references
 %% the name: the return_stmt ∧ expr_ref join from the plan, mention
 %% level by design (checks the claim, not value-flow).
+%% returns — a valued return statement whose OWN LINE mentions the
+%% name. Line-scoped deliberately: a function-level mention join would
+%% answer true for a logger diagnostic that happens to name the field,
+%% defeating the very true→false flip the claims check. Multi-line
+%% return expressions are the accepted v1 blind spot.
 answer(Pid, yes_no, {returns, Subject, Candidates}) ->
-    case bool_any(Pid, Candidates, fun(C) -> returns_goal(Subject, C) end) of
-        {ok, Bool} -> {ok, yes_no_answer(Bool)};
-        Error -> Error
+    case return_lines(Pid, Subject) of
+        {ok, []} ->
+            {ok, yes_no_answer(false)};
+        {ok, Lines} ->
+            Found = lists:any(
+                fun(Line) ->
+                    ViaRef = mentions_at_line(Pid, Subject, Candidates, Line,
+                                              fun expr_ref_goal/3),
+                    ViaKey = mentions_at_line(Pid, Subject, Candidates, Line,
+                                              fun object_key_goal/3),
+                    mention_true(ViaRef) orelse mention_true(ViaKey)
+                end,
+                Lines),
+            {ok, yes_no_answer(Found)};
+        Error ->
+            Error
     end;
 
 %% handles — a branch-level literal whose value equals the name
@@ -840,6 +880,20 @@ answer(Pid, sites, {def_site_of, {'/', SName, _SArity}}) ->
             {error, {findall_never_fails, def_site_of}};
         {error, Reason} ->
             {error, {query_failed, Reason}}
+    end;
+
+%% calls with a file subject — any call site of the object whose file
+%% basename matches. Reuses the sites answer, which already merges all
+%% three call shapes.
+answer(Pid, yes_no, {calls_file, FileBin, Object}) ->
+    case answer(Pid, sites, {call_sites_of, Object}) of
+        {ok, #{<<"answer">> := Sites}} ->
+            Found = lists:any(
+                fun(#{<<"file">> := F}) -> file_matches(F, FileBin) end,
+                Sites),
+            {ok, yes_no_answer(Found)};
+        {error, Reason} ->
+            {error, Reason}
     end;
 
 %% is file F scanned? — the gate IS the proof: the basename appears in
@@ -931,7 +985,14 @@ bool_any(Pid, [C | Rest], GoalFun) ->
         {error, Reason} -> {error, Reason}
     end.
 
-expr_ref_goal({'/', SName, SArity}, Candidate) ->
+expr_ref_goal({'/', SName, SArity}, Candidate, Line) ->
+    "expr_ref(_, " ++ quoted_atom_name(SName) ++ ", "
+        ++ integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate)
+        ++ ", _, " ++ integer_to_list(Line) ++ ")".
+
+%% uses stays function-level: "does X use W" asks whether X's code
+%% mentions W anywhere, unlike returns which is line-scoped.
+expr_ref_anywhere({'/', SName, SArity}, Candidate) ->
     "expr_ref(_, " ++ quoted_atom_name(SName) ++ ", "
         ++ integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate)
         ++ ", _, _)".
@@ -939,11 +1000,41 @@ expr_ref_goal({'/', SName, SArity}, Candidate) ->
 %% HasValue is the extractor's string "true" (a charlist in erlog),
     %% not the atom — matching the atom proves nothing and answers a
     %% confident false about real returns.
-returns_goal({'/', SName, SArity}, Candidate) ->
-    "return_stmt(" ++ quoted_atom_name(SName) ++ ", "
-        ++ integer_to_list(SArity) ++ ", \"true\", _, _), expr_ref(_, "
-        ++ quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity)
-        ++ ", " ++ quoted_atom_name(Candidate) ++ ", _, _)".
+%% HasValue is the atom true (erlog's printer quotes every atom, which
+%% once masqueraded as a string and sent this goal chasing "true").
+object_key_goal({'/', SName, SArity}, Candidate, Line) ->
+    "object_key(" ++ quoted_atom_name(SName) ++ ", "
+        ++ integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate)
+        ++ ", _, " ++ integer_to_list(Line) ++ ")".
+
+mentions_at_line(Pid, Subject, Candidates, Line, GoalFun) ->
+    bool_any_lenient(Pid, Candidates, fun(C) -> GoalFun(Subject, C, Line) end).
+
+mention_true({ok, Bool}) -> Bool;
+mention_true(_) -> false.
+
+%% Like bool_any, but a predicate absent from the fact base counts as
+%% an empty source instead of failing the question.
+bool_any_lenient(_Pid, [], _GoalFun) ->
+    {ok, false};
+bool_any_lenient(Pid, [C | Rest], GoalFun) ->
+    case prolog_session:query(Pid, GoalFun(C)) of
+        {ok, _} -> {ok, true};
+        no_solution -> bool_any_lenient(Pid, Rest, GoalFun);
+        {error, {existence_error, procedure, _}} -> bool_any_lenient(Pid, Rest, GoalFun);
+        {error, Reason} -> {error, Reason}
+    end.
+
+return_lines(Pid, {'/', SName, SArity}) ->
+    Goal = "findall(L, return_stmt(" ++ quoted_atom_name(SName) ++ ", "
+        ++ integer_to_list(SArity) ++ ", true, _, L), Ls)",
+    case prolog_session:query(Pid, Goal) of
+        {ok, Bindings} -> {ok, proplists:get_value('Ls', Bindings, [])};
+        no_solution -> {ok, []};
+        {error, {existence_error, procedure, _}} -> {ok, []};
+        {error, Reason} -> {error, Reason}
+    end.
+
 file_hits(Pid, FileBin, Candidates) ->
     Hit = lists:any(
         fun(C) ->
