@@ -65,8 +65,27 @@ cp "$artifact" "priv/$crate.so"
 
 if [ "$crate" = "symbolic_nlp" ]; then
     libdir=$(ls -d "$PWD"/native/symbolic_nlp/target/release/build/torch-sys-*/out/libtorch/libtorch/lib 2>/dev/null | head -1 || true)
-    if [ -n "$libdir" ] && ! otool -l "priv/$crate.so" | grep -q "$libdir"; then
-        install_name_tool -add_rpath "$libdir" "priv/$crate.so"
+    if [ -n "$libdir" ]; then
+        case "$(uname -s)" in
+            Darwin)
+                # macOS: post-link surgery, because a link-time rpath
+                # cannot know the libdir before torch-sys has downloaded
+                # libtorch mid-build (and headerpad is already baked via
+                # RUSTFLAGS above so the edit fits).
+                if ! otool -l "priv/$crate.so" | grep -q "$libdir"; then
+                    install_name_tool -add_rpath "$libdir" "priv/$crate.so"
+                fi
+                ;;
+            *)
+                # Linux: same goal, different tool — patchelf, which CI
+                # installs. Without it, the NIF builds but dlopen cannot
+                # find libtorch at test time and the statistical tier's
+                # tests would silently degrade to skipping.
+                if command -v patchelf >/dev/null 2>&1; then
+                    patchelf --set-rpath "$libdir" "priv/$crate.so" 2>/dev/null || true
+                fi
+                ;;
+        esac
     fi
 fi
 

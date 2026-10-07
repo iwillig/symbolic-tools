@@ -29,6 +29,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # build_nif.sh sets the symbolic_nlp NIF's rpath to its libtorch
+      # with patchelf on Linux (the install_name_tool step is macOS-only);
+      # without it the NIF builds but cannot dlopen libtorch at test
+      # time, and the statistical tier's tests degrade instead of run.
+      - name: Install patchelf
+        run: sudo apt-get update && sudo apt-get install -y patchelf
+
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
