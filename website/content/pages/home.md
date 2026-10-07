@@ -9,6 +9,7 @@ Subtitle: Turn a codebase into a Prolog fact base an agent can query and get pro
 <a href="#why-prolog">Why Prolog</a>
 <a href="#how-it-works">How it works</a>
 <a href="#what-it-can-answer">What it can answer</a>
+<a href="ask.html">Using ask</a>
 <a href="fact-schema.html">The fact schema</a>
 <a href="#status">Status</a>
 </nav>
@@ -209,6 +210,12 @@ calls it. The first question gets caught and named, not answered with a
 confident `0`. The same gate runs whether the question comes from the
 CLI (`symbolic ask -db facts.dets "<question>"`) or the MCP `ask` tool —
 one pipeline, two entry points.
+
+The grammar covers far more than calls and existence now: returned
+fields, branch literals, call sites with file and line, file and config
+questions — and it grades a plan claim by claim before and after a fix.
+The full question grammar, the pipeline behind it, and a plan graded
+live against this repository are on <a href="ask.html">the ask page</a>.
 
 ### The ask grammar, shape by shape
 

@@ -371,6 +371,21 @@ pipeline_file_subject_calls_test() ->
     end).
 
 %% Gap 3: "what calls X?" parses like which/who.
+%% A snake_case subject whose front half is a relation verb
+%% (handle_query) must not be misread as a verb with an empty subject.
+pipeline_snake_case_verb_half_subject_test() ->
+    Facts = [
+        {defines, handle_query, 1, [], 'serve.ts', 1},
+        {calls, handle_query, 1, {remote, maps, get, 2}, 'serve.ts', 2},
+        {defines, get, 2, [], 'maps.ts', 3}
+    ],
+    with_db(Facts, fun(Db) ->
+        ?assertEqual({ok, yes_no_true()},
+            symbolic_ask:run_result(Db, "does handle_query/1 call maps/get/2?")),
+        ?assertEqual({ok, yes_no_false()},
+            symbolic_ask:run_result(Db, "does handle_query/1 call render_query/2?"))
+    end).
+
 pipeline_what_calls_test() ->
     Facts = [
         {calls, 'JoinAccountModal', 1, {local, setError, 1}, 'm.ts', 1},

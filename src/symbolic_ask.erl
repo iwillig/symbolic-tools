@@ -205,11 +205,26 @@ punctuation(Word) when is_binary(Word) ->
 %% is a known relation verb IS the main verb of a question in this
 %% domain, whatever tag the model gave it. Tags still matter for
 %% anything the table does not know (those stay unrecognized).
+%%
+%% One exception: a token followed by identifier glue (`handle` `_`
+%% `query` in snake_case) is the FRONT HALF of an identifier, not a
+%% verb — `handle_query` is a subject, and misreading its first half
+%% as the verb left the question with an empty subject span.
 find_verb(Tags) ->
-    Pred = fun({W, _}) -> verb_relation(W) =/= other end,
-    case find_tagged(Pred, Tags) of
-        {{Word, _Tag}, Before, After} -> {Word, Before, After};
-        none -> none
+    find_verb(Tags, []).
+
+find_verb([], _Acc) ->
+    none;
+find_verb([{W, _} = T | Rest], Acc) ->
+    %% A known-verb token whose NEXT word is identifier glue is the
+    %% front half of a snake_case identifier (handle_query), not a verb.
+    GlueNext = case Rest of
+        [{NW, _} | _] -> NW =:= <<"_">> orelse NW =:= <<".">>;
+        _ -> false
+    end,
+    case verb_relation(W) =/= other andalso not GlueNext of
+        true -> {W, lists:reverse(Acc), Rest};
+        false -> find_verb(Rest, [T | Acc])
     end.
 
 find_tagged(Pred, Tags) -> find_tagged(Pred, Tags, []).
@@ -1132,8 +1147,9 @@ enumerate_callers(Pid, {'/', OName, OArity}) ->
             L1 = proplists:get_value('L1', Bindings),
             L2 = proplists:get_value('L2', Bindings),
             L3 = proplists:get_value('L3', Bindings, []),
+            L4 = proplists:get_value('L4', Bindings, []),
             Callers = lists:usort(
-                [render_ident(I) || I <- L1 ++ L2 ++ L3]),
+                [render_ident(I) || I <- L1 ++ L2 ++ L3 ++ L4]),
             {ok, #{<<"type">> => <<"enumerate">>, <<"answer">> => Callers}};
         no_solution ->
             {error, {findall_never_fails, callers_of}};
@@ -1159,11 +1175,27 @@ yes_no_member(Pid, SName, SArity, OName, OArityText) ->
                 ++ "), _, _)",
             case prolog_session:query(Pid, Member) of
                 {ok, _} -> {ok, yes_no_answer(true)};
-                no_solution -> {ok, yes_no_answer(false)};
+                no_solution -> dotted_remote_probe(Pid, SName, SArity,
+                                                   Receiver, Method, OArityText);
                 {error, Reason} -> {error, {query_failed, Reason}}
             end;
         none ->
             {ok, yes_no_answer(false)}
+    end.
+
+%% A dotted name is ambiguous between a method call (obj.method) and an
+%% Erlang remote call (module:function) — the fact base decides. Without
+%% the remote probe, "does handle_query/1 call maps.get/2?" answers a
+%% confident false about a real remote call.
+dotted_remote_probe(Pid, SName, SArity, Receiver, Method, OArityText) ->
+    Remote = "calls(" ++ quoted_atom_name(SName) ++ ", "
+        ++ integer_to_list(SArity) ++ ", remote("
+        ++ quoted_atom_name(Receiver) ++ ", "
+        ++ quoted_atom_name(Method) ++ ", " ++ OArityText ++ "), _, _)",
+    case prolog_session:query(Pid, Remote) of
+        {ok, _} -> {ok, yes_no_answer(true)};
+        no_solution -> {ok, yes_no_answer(false)};
+        {error, Reason} -> {error, {query_failed, Reason}}
     end.
 
 split_receiver_method(Name) when is_atom(Name) ->
@@ -1192,7 +1224,11 @@ member_findall_tail(OName, OArityText) ->
             ", findall(C-A, calls(C, A, member("
                 ++ quoted_atom_name(Receiver) ++ ", "
                 ++ quoted_atom_name(Method) ++ ", " ++ OArityText
-                ++ "), _, _), L3)";
+                ++ "), _, _), L3), "
+                ++ "findall(C-A, calls(C, A, remote("
+                ++ quoted_atom_name(Receiver) ++ ", "
+                ++ quoted_atom_name(Method) ++ ", " ++ OArityText
+                ++ "), _, _), L4)";
         none ->
             ""
     end.

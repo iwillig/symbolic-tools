@@ -41,7 +41,6 @@ h1.page-title {
   margin-top: -0.75rem;
   font-size: 1.1rem;
   color: var(--pico-muted-color);
-  max-width: 56ch;
 }
 
 /* --- "Jump to" strip at the top of a long page, authored as plain
