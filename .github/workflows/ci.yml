@@ -50,5 +50,18 @@ jobs:
       - name: Compile (includes the symbolic_ts Rustler NIF via the compile pre-hook)
         run: rebar3 compile
 
+      # The statistical tier's first tag call downloads its ~94MB POS
+      # model; inside eunit that exceeds the per-test timeout and
+      # cancels the run. Warm it here, and cache it so later runs skip
+      # the download entirely.
+      - name: Cache the tagger model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rustbert
+          key: ${{ runner.os }}-rustbert-v1
+
+      - name: Warm the tagger model
+        run: erl -noshell -pa _build/*/lib/*/ebin -eval 'case symbolic_nlp:tag(<<"warm the model cache">>) of {ok, _} -> halt(0); _ -> halt(1) end.'
+
       - name: Run EUnit tests
         run: rebar3 eunit
