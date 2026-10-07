@@ -58,8 +58,94 @@ serve_test_() ->
         fun overview_with_unknown_path_is_friendly_error/1,
         fun overview_reports_version_before_parse/1,
         fun parse_reports_version/1,
-        fun parse_omits_file_list/1
+        fun parse_omits_file_list/1,
+        fun ask_before_parse_is_friendly_error/1,
+        fun ask_yes_no_call_against_parsed_cache/1,
+        fun ask_count_and_enumerate_shapes/1,
+        fun ask_wrong_arity_is_unverifiable_not_wrong/1,
+        fun ask_prose_returns_evidence/1,
+        fun ask_unrecognized_shape_is_friendly_error/1,
+        fun ask_with_unknown_path_is_friendly_error/1
     ]}.
+
+ask_before_parse_is_friendly_error(_Setup) ->
+    fun() ->
+        Json = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => <<"does foo/1 call bar/1?">>})),
+        ?assertMatch(#{<<"error">> := _}, Json)
+    end.
+
+ask_yes_no_call_against_parsed_cache(_Setup) ->
+    fun() ->
+        %% sample.ts: shout/1 calls capitalize/1 — a real local call the
+        %% gate can resolve and the proof can confirm against the cache.
+        _ = decode(symbolic_serve:handle_parse(#{
+            <<"path">> => list_to_binary(?FIXTURES)})),
+        Json = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => <<"does shout/1 call capitalize/1?">>})),
+        ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"yes_no">>,
+                                     <<"answer">> := true}}, Json)
+    end.
+
+ask_count_and_enumerate_shapes(_Setup) ->
+    fun() ->
+        _ = decode(symbolic_serve:handle_parse(#{
+            <<"path">> => list_to_binary(?FIXTURES)})),
+        Count = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => <<"how many functions call capitalize/1?">>})),
+        ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"count">>,
+                                     <<"answer">> := 1}}, Count),
+        Enumerate = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => <<"who calls capitalize/1?">>})),
+        ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"enumerate">>,
+                                     <<"answer">> := [<<"shout/1">>]}},
+            Enumerate)
+    end.
+
+ask_wrong_arity_is_unverifiable_not_wrong(_Setup) ->
+    fun() ->
+        _ = decode(symbolic_serve:handle_parse(#{
+            <<"path">> => list_to_binary(?FIXTURES)})),
+        %% capitalize/2 does not exist; capitalize/1 does — the gate must
+        %% report the arity mismatch as an answer, not a tool error, and
+        %% never answer a count of 0.
+        Json = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => <<"how many functions call capitalize/2?">>})),
+        ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"unverifiable">>,
+                                     <<"reason">> := _}}, Json)
+    end.
+
+ask_prose_returns_evidence(_Setup) ->
+    fun() ->
+        _ = decode(symbolic_serve:handle_parse(#{
+            <<"path">> => list_to_binary(?FIXTURES)})),
+        %% sample.ts's shout JSDoc contains "exclamation mark" — prose
+        %% questions come back as ranked evidence, never a verdict.
+        Json = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => <<"where is exclamation mark documented?">>})),
+        ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"prose">>,
+                                     <<"evidence">> := [_ | _]}}, Json)
+    end.
+
+ask_unrecognized_shape_is_friendly_error(_Setup) ->
+    fun() ->
+        _ = decode(symbolic_serve:handle_parse(#{
+            <<"path">> => list_to_binary(?FIXTURES)})),
+        Json = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => <<"what is the meaning of life">>})),
+        ?assertMatch(#{<<"error">> := <<"unrecognized question shape", _/binary>>},
+            Json)
+    end.
+
+ask_with_unknown_path_is_friendly_error(_Setup) ->
+    fun() ->
+        _ = decode(symbolic_serve:handle_parse(#{
+            <<"path">> => list_to_binary(?FIXTURES)})),
+        Json = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => <<"does foo/1 call bar/1?">>,
+            <<"path">> => <<"no/such/path_zz">>})),
+        ?assertMatch(#{<<"error">> := _}, Json)
+    end.
 
 overview_before_parse(_Setup) ->
     fun() ->

@@ -117,7 +117,7 @@ Engine capabilities verified live against this repo's own cached base:
 | Enumeration + counting | **verified** — `findall/3` and `length/2` prove in erlog |
 | Question grammar (wh → variable) | **shipped (v1)** — `priv/question_grammar.pl`, five shapes |
 | Question classifier + verifiability gate | **shipped (v1)** — `symbolic_ask`'s gate (§4's rules, incl. the arity rule) |
-| `symbolic ask` wire-up | **shipped (v1)** — CLI, JSON answers, exit-code epistemics |
+| `symbolic ask` wire-up | **shipped (v1)** — CLI (JSON answers, exit-code epistemics) AND the MCP `ask` tool (same `symbolic_ask:ask/2` core over the codebase cache) |
 
 v1 gate refinement, found while implementing: subjects gate strictly
 against `defines/5`; callees gate loosely (arity checked only when the

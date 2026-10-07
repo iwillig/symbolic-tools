@@ -32,9 +32,11 @@
 %%% directly).
 -module(symbolic_ask).
 -export([run/2]).
-%% Exported for symbolic_ask_tests.erl — run_result/2 is the halt-free
-%% core.
--export([run_result/2]).
+%% run_result/2 exported for symbolic_ask_tests.erl (the halt-free CLI
+%% core); ask/2 for the MCP server's ask tool — the shared pipeline core
+%% over a raw fact list: the CLI reads DETS, the MCP tool reads the
+%% codebase cache.
+-export([run_result/2, ask/2]).
 
 -define(GRAMMAR_FILE, "question_grammar.pl").
 
@@ -59,10 +61,10 @@ run(DbPath, Question) ->
             fail("cannot answer: ~p", [Reason])
     end.
 
-%% Tokenize, load the fact database, consult the question grammar, and
-%% parse — all halt-free. `unrecognized` is its own return value, not an
-%% error: the phrasing fell outside the grammar, which is a fact about
-%%% the question, not a failure of the machinery.
+%% The CLI path: read the fact database, run the shared core. All
+%% halt-free. `unrecognized` is its own return value, not an error: the
+%% phrasing fell outside the grammar, which is a fact about the
+%% question, not a failure of the machinery.
 -spec run_result(file:filename(), string()) ->
     {ok, map()} | unrecognized | {error, term()}.
 run_result(DbPath, Question) ->
@@ -70,18 +72,27 @@ run_result(DbPath, Question) ->
         false ->
             {error, {no_such_db, DbPath}};
         true ->
-            case symbolic_extract:tokenize(Question) of
-                {ok, TokensText} ->
-                    ask(DbPath, TokensText);
-                {error, Reason} ->
-                    {error, {tokenize_error, Reason}}
-            end
+            ask(symbolic_fact_store:read(DbPath), Question)
     end.
 
-ask(DbPath, TokensText) ->
+%% The shared pipeline core: tokenize, load a one-shot session from a
+%% raw fact list, consult the question grammar, gate, prove, shape. The
+%% CLI path (run_result/2, facts from DETS) and the MCP ask tool (facts
+%% from the codebase cache) both land here — one pipeline, two sources.
+-spec ask([tuple()], string()) ->
+    {ok, map()} | unrecognized | {error, term()}.
+ask(Facts, Question) ->
+    case symbolic_extract:tokenize(Question) of
+        {ok, TokensText} ->
+            ask_facts(Facts, TokensText);
+        {error, Reason} ->
+            {error, {tokenize_error, Reason}}
+    end.
+
+ask_facts(Facts, TokensText) ->
     {ok, Pid} = prolog_session:start_link(),
     Result =
-        case prolog_session:load_facts(Pid, symbolic_fact_store:read(DbPath)) of
+        case prolog_session:load_facts(Pid, Facts) of
             ok ->
                 case prolog_session:consult(Pid, grammar_file()) of
                     ok -> parse(Pid, TokensText);

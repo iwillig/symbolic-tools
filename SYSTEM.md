@@ -78,19 +78,24 @@ reference. This section is orders.
 </rule>
 
 <tools>
-The server exposes exactly three tools. There are no others.
+The server exposes exactly four tools. There are no others.
 
   symbolic_parse    { path?, rules? } scan a directory (or, with a
                                       .symbolic/config.json, a project's
                                       whole `paths` list), cache its facts
                                       keyed by that project's own root,
                                       auto-consult the rules library
+  symbolic_ask      { question, path? }
+                                      answer a bounded English question
+                                      (gated for verifiability first — a
+                                      wrong arity is `unverifiable`,
+                                      never a silent wrong answer)
   symbolic_overview { path? }         what is loaded right now
   symbolic_query    { goal, limit?, path? }
                                       prove a goal, return all solutions
                                       (default cap 50)
 
-`path` is optional on all three, and the cache is **per-project**: several
+`path` is optional on all four, and the cache is **per-project**: several
 projects can be cached at once; `query`/`overview` take `path` to pick one
 (omitted = whichever was most recently parsed), and re-`parse` replaces
 just that entry. `parse` with no `path` discovers a

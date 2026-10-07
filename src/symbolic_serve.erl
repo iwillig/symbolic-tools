@@ -36,7 +36,7 @@
 %% starting the erlmcp application) that a unit test shouldn't mutate;
 %% verified instead by the manual stdio smoke tests (see
 %% docs/erlang-mcp-design.md).
--export([handle_parse/1, handle_query/1, handle_overview/1]).
+-export([handle_parse/1, handle_query/1, handle_ask/1, handle_overview/1]).
 
 %% Start the MCP server over stdio: logging first (so early failures
 %% are visible), then the erlmcp application, the symbolic_codebase
@@ -50,7 +50,7 @@ run() ->
     {ok, _CachePid} = symbolic_codebase:start_link(),
     ok = erlmcp_stdio:start(),
     ok = register_tools(),
-    ?LOG_INFO("symbolic serve ready: tools parse, query, overview registered"),
+    ?LOG_INFO("symbolic serve ready: tools parse, query, ask, overview registered"),
     receive after infinity -> ok end.
 
 %% A file under the platform's standard log directory (e.g. ~/Library/Logs
@@ -258,6 +258,41 @@ register_tools() ->
                                    "whichever directory was most recently "
                                    "parsed.">>}},
           <<"required">> => [<<"goal">>]}),
+    ok = erlmcp_stdio:add_tool(<<"ask">>,
+        <<"Answer a bounded English question against a cached codebase "
+          "— for callers that think in questions rather than goals. "
+          "Parses the question, verifies every entity against the fact "
+          "base BEFORE proving (a wrong arity is reported as `unverifiable`, "
+          "never silently answered), then proves and shapes the answer by "
+          "question type. Covered shapes (lowercase words only): "
+          "`does X/N call Y/M?` -> {type: yes_no, answer: true|false}; "
+          "`which functions call X/N?` / `who calls X/N?` -> {type: "
+          "enumerate, answer: [\"name/arity\", ...]}; `how many functions "
+          "call X/N?` -> {type: count, answer: N}; `is X/N defined?` / "
+          "`does X/N exist?` -> {type: yes_no, answer: true|false}; "
+          "`where is ... documented?` / `where is ... discussed?` -> "
+          "{type: prose, evidence: [ranked hits]} — prose returns evidence, "
+          "never a verdict. Unverifiable questions come back as "
+          "{type: unverifiable, reason} naming the unresolvable entity; "
+          "phrasings outside the grammar are an `unrecognized` error. "
+          "Callers that need anything the grammar doesn't cover should "
+          "write a `query` goal instead. Pass `path` to pick which cached "
+          "directory, or omit it to use whichever was most recently "
+          "parsed (see `parse`).">>,
+        fun handle_ask/1,
+        #{<<"type">> => <<"object">>,
+          <<"properties">> => #{
+              <<"question">> => #{<<"type">> => <<"string">>,
+                                <<"description">> =>
+                                    <<"The question, e.g. \"how many "
+                                      "functions call query_binary/2?\"">>},
+              <<"path">> => #{<<"type">> => <<"string">>,
+                             <<"description">> =>
+                                 <<"Which cached directory to ask about, by "
+                                   "the same path passed to `parse`. Omit "
+                                   "to use whichever directory was most "
+                                   "recently parsed.">>}},
+          <<"required">> => [<<"question">>]}),
     ok = erlmcp_stdio:add_tool(<<"overview">>,
         <<"Report the current state of a cached fact base: whether a "
           "codebase is loaded, how many files/languages, and fact counts by "
@@ -328,6 +363,48 @@ handle_query(Params) ->
             ?LOG_ERROR("query: crashed ~p:~p~n~p", [Class, Crash, ST]),
             json(#{error => caught_str(Class, Crash, ST)})
     end.
+
+%% The `ask` MCP tool: answer a bounded English question against a
+%% cached fact base — the same pipeline the `symbolic ask` CLI runs
+%% (symbolic_ask:ask/2, one-shot session from the cache's raw facts).
+%% Answers (including `false`, `0`, empty lists, and `unverifiable`) come
+%% back as {ok, ...} — they are facts about the question; only tool-level
+%% failures (nothing parsed, unknown path, bad params) are {error, ...}.
+handle_ask(Params) ->
+    try
+        Question = to_list(maps:get(<<"question">>, Params)),
+        Path = optional_path(Params),
+        ?LOG_INFO("ask: question=~s path=~p", [Question, Path]),
+        render_ask(symbolic_codebase:ask(Question, Path))
+    catch
+        Class:Crash:ST ->
+            ?LOG_ERROR("ask: crashed ~p:~p~n~p", [Class, Crash, ST]),
+            json(#{error => caught_str(Class, Crash, ST)})
+    end.
+
+render_ask({ok, Answer}) ->
+    json(#{ok => Answer});
+render_ask({error, {unverifiable, Reason}}) ->
+    %% Unverifiable is an answer about the question, not a tool failure —
+    %% the same JSON shape the CLI prints, with the reason naming the
+    %% unresolvable entity so the caller can repair the question.
+    json(#{ok => #{
+        type => <<"unverifiable">>,
+        reason => iolist_to_binary(io_lib:format("~p", [Reason]))}});
+render_ask(unrecognized) ->
+    json(#{error =>
+        <<"unrecognized question shape - the grammar covers: "
+          "does X/N call Y/M? / which functions call X/N? / "
+          "who calls X/N? / how many functions call X/N? / "
+          "is X/N defined? / does X/N exist? / "
+          "where is ... documented? / where is ... discussed? "
+          "(lowercase words only). Write a `query` goal for anything "
+          "else.">>});
+render_ask({error, {tokenize_error, Reason}}) ->
+    json(#{error => iolist_to_binary(
+        [<<"question rejected: ">>, jstr(io_lib:format("~p", [Reason]))])});
+render_ask({error, Reason}) ->
+    json(#{error => error_str(Reason)}).
 
 log_query_result({ok, Solutions}) ->
     ?LOG_INFO("query: ok count=~p", [length(Solutions)]);

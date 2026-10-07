@@ -48,7 +48,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -export([start_link/0, parse/1, parse/2, query/1, query/2, query/3,
-         overview/0, overview/1]).
+    ask/2, overview/0, overview/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
 
 -define(DEFAULT_LIMIT, 50).
@@ -138,6 +138,17 @@ query(Goal, Limit, Path) ->
     %% itself timing out first (same reasoning as prolog_session:query/3).
     gen_server:call(?MODULE, {query, Goal, Limit, Path}, ?QUERY_TIMEOUT_MS + 1000).
 
+%% Answer a bounded English question against a cached directory's fact
+%% base — the MCP `ask` tool's back end. Runs symbolic_ask's whole
+%% pipeline (parse, gate, prove, shape) in its own one-shot prolog_session
+%% built from the cache entry's raw fact list, never on the cached erlog
+%% state itself, so a question can never advance or corrupt the cache —
+%% the same isolation discipline query's timeout handling carries.
+-spec ask(string(), file:name() | undefined) ->
+    {ok, map()} | unrecognized | {error, term()}.
+ask(Question, Path) ->
+    gen_server:call(?MODULE, {ask, Question, Path}, ?QUERY_TIMEOUT_MS + 1000).
+
 -type query_result() ::
     {ok, [Solutions :: [{atom(), term()}]]}
     | {truncated, [Solutions :: [{atom(), term()}]]}
@@ -166,7 +177,9 @@ overview(Path) ->
 
 %% gen_server callbacks
 
-%% caches: NormalizedDir -> #{erl => ErlState, meta => Meta}.
+%% caches: NormalizedDir -> #{erl => ErlState, meta => Meta,
+%%                        facts => [Fact]} (raw facts — the ask
+%% pipeline's one-shot sessions; see the finish_parse comment).
 %% current: the NormalizedDir most recently parsed successfully, or
 %% undefined if nothing has been parsed yet — what query/3 and
 %% overview/1 fall back to when their Path argument is undefined.
@@ -221,6 +234,14 @@ handle_call({query, Goal, Limit, Path}, _From, State) ->
             {reply, {error, Reason}, State};
         {ok, #{erl := Erl}} ->
             {reply, query_reply(Goal, Limit, Erl), State}
+    end;
+
+handle_call({ask, Question, Path}, _From, State) ->
+    case resolve_cache_entry(Path, State) of
+        {error, Reason} ->
+            {reply, {error, Reason}, State};
+        {ok, #{facts := Facts}} ->
+            {reply, symbolic_ask:ask(Facts, Question), State}
     end;
 
 handle_call({overview, Path}, _From, State) ->
@@ -403,8 +424,16 @@ finish_parse({ok, {Files, Facts}}, CacheKey, RulesOverride, StartMs, State, Extr
             ElapsedMs = erlang:monotonic_time(millisecond) - StartMs,
             Meta = maps:merge(compute_meta(Files, Facts, RulesPath, CacheKey, ElapsedMs), ExtraMeta),
             Caches = maps:get(caches, State),
+            %% `facts` — the raw fact list — rides alongside the erlog
+            %% state so the ask pipeline can build its own one-shot
+            %% session (it consults the question grammar, which must
+            %% never land in the cached state). Duplicates the facts the
+            %% erlog state already holds; measured size for a repo this
+            %% scale is ~10MB of terms per cached project, traded for
+            %% keeping the cache provably read-only.
             NewState = State#{
-                caches => Caches#{CacheKey => #{erl => Erl, meta => Meta}},
+                caches => Caches#{CacheKey => #{erl => Erl, meta => Meta,
+                                                facts => Facts}},
                 current => CacheKey},
             {reply, {ok, Meta}, NewState};
         {error, Reason} ->
