@@ -1,0 +1,191 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'Symbolic MCP tool-calling eval: the model must route codebase questions to the symbolic MCP tools (with valid arguments) and answer general questions without them'
+# Single-turn eval: the tools are never executed; assertions check which
+# tool the model requests and whether its arguments are well-formed.
+
+prompts:
+  - id: file://prompts/symbolic_mcp_cached.json
+    label: cached
+  - id: file://prompts/symbolic_mcp_fresh.json
+    label: fresh
+
+providers:
+  - id: huggingface:chat:Qwen/Qwen3.8-27B
+    label: 'Qwen 3.8 27B (HuggingFace -> novita)'
+    config:
+      inferenceProvider: novita
+      temperature: 0
+      max_new_tokens: 2048
+      showThinking: false
+      tools:
+        - type: function
+          function:
+            name: mcp__symbolic__parse
+            description: 'Parse a PROJECT and cache its codebase facts in memory, keyed by that project''s own root. Omit path to discover a .symbolic/config.json by walking up from the server''s cwd. A previously cached project is untouched by parsing a different one. Re-parsing the SAME project rescans it and replaces just that entry.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Project root (must have .symbolic/config.json inside) or any plain directory to scan literally'
+                rules:
+                  type: string
+                  description: 'Prolog rules file to consult instead of auto-discovering .symbolic/rules.pl'
+        - type: function
+          function:
+            name: mcp__symbolic__query
+            description: 'Prove a Prolog goal against a cached codebase and return all solutions (capped). Raw facts: defines(Function, Arity, Params, File, Line); calls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Function, Arity); export(Function, Arity, File, Line); branch(Function, Arity, Kind, File, Line); doc(Function, Arity, File, Line, Text); comment(File, Line, Text).'
+            parameters:
+              type: object
+              required: [goal]
+              properties:
+                goal:
+                  type: string
+                  description: 'One Prolog goal over those facts, e.g. calls(X, _, local(parse, 2), File, Line) or defines(scan_one, 1, Params, File, Line)'
+                limit:
+                  type: integer
+                  description: 'Max solutions to return (default 50)'
+                path:
+                  type: string
+                  description: 'Which cached directory to query, by the same path passed to parse'
+        - type: function
+          function:
+            name: mcp__symbolic__overview
+            description: 'Report the current state of a cached fact base: whether a codebase is loaded, how many files/languages, and fact counts by predicate.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Which cached directory to report on; omit for the most recently parsed'
+        - type: function
+          function:
+            name: mcp__symbolic__ask
+            description: 'Answer a bounded English question against a cached codebase: does X/N call Y/M, which functions call X/N, how many functions call X/N, is X/N defined, where is X discussed.'
+            parameters:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: 'The question, e.g. "how many functions call query_binary/2?"'
+                path:
+                  type: string
+                  description: 'Which cached directory to ask about; omit for the most recently parsed'
+
+tests:
+  # ---- cached scenario: codebase already loaded, answer with query ----
+
+  - description: 'call-graph question routes to mcp__symbolic__query'
+    prompts: [cached]
+    vars:
+      query: 'Which functions call parse/2 in this codebase?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      # the generated goal must be a Prolog goal over the call graph
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\bcalls\s*\(/.test(goal) && /parse/.test(goal);
+
+  - description: 'definition lookup routes to mcp__symbolic__query (or ask)'
+    prompts: [cached]
+    vars:
+      query: 'In which file is the function scan_one/1 defined?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query, mcp__symbolic__ask]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          const a = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__ask');
+          if (q) {
+            let goal = '';
+            try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
+            return /\bdefines\s*\(/.test(goal) && /scan_one/.test(goal);
+          }
+          if (a) {
+            let question = '';
+            try { question = JSON.parse(a.function.arguments).question || ''; } catch (e) { return false; }
+            return /scan_one/.test(question);
+          }
+          return false;
+
+  - description: 'cache-state question routes to mcp__symbolic__overview'
+    prompts: [cached]
+    vars:
+      query: 'How many files does the cached codebase cover, and which fact families are loaded?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__overview]
+        threshold: 0.5
+
+  - description: 'general knowledge does NOT trigger a symbolic MCP tool call'
+    prompts: [cached]
+    vars:
+      query: 'What is the capital of France?'
+    assert:
+      - type: not-tool-call-f1
+        value:
+          - mcp__symbolic__parse
+          - mcp__symbolic__query
+          - mcp__symbolic__overview
+          - mcp__symbolic__ask
+        threshold: 0.5
+
+  - description: 'general knowledge (person) does NOT trigger a symbolic MCP tool call'
+    prompts: [cached]
+    vars:
+      query: 'Who was Alan Turing?'
+    assert:
+      - type: not-tool-call-f1
+        value:
+          - mcp__symbolic__parse
+          - mcp__symbolic__query
+          - mcp__symbolic__overview
+          - mcp__symbolic__ask
+        threshold: 0.5
+
+  # ---- fresh scenario: nothing cached yet, load first ----
+
+  - description: 'fresh session: first call loads ./src via mcp__symbolic__parse'
+    prompts: [fresh]
+    vars:
+      query: 'Which functions call parse/2 in the codebase under ./src?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__parse]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__parse');
+          if (!tc) return false;
+          let args = '';
+          try { args = JSON.stringify(JSON.parse(tc.function.arguments)); } catch (e) { return false; }
+          return /src/.test(args);
+
+  - description: 'general math does NOT trigger a symbolic MCP tool call'
+    prompts: [fresh]
+    vars:
+      query: 'What is 17 times 23?'
+    assert:
+      - type: not-tool-call-f1
+        value:
+          - mcp__symbolic__parse
+          - mcp__symbolic__query
+          - mcp__symbolic__overview
+          - mcp__symbolic__ask
+        threshold: 0.5

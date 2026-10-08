@@ -45,3 +45,7 @@ native/*/target/
 # Built slide decks (Justfile `build-presentations`) — one portable HTML
 # file per docs/presentations/*.md, regenerated from source, not versioned.
 docs/presentations/*.html
+
+# promptfoo eval output (evals/README.md regenerates it on every run) —
+# per-run JSON tables, never meant to be committed.
+evals/mcp-output.json
