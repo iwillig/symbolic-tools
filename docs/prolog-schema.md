@@ -54,6 +54,7 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `rust_use/4` | Rust | Raw path and containing context of a `use` declaration; no resolution implied |
 | `rust_visibility/5` | Rust | Explicit public visibility on selected item nodes, keyed by source span |
 | `rust_call/5` | Rust | Call site linked to its enclosing function's source-span identity |
+| `rust_macro/6` | Rust | Macro invocation site linked to its enclosing function when present |
 
 Three genuinely different *shapes* of fact live in this one schema:
 **code facts** (something with named definitions and call sites),
@@ -892,6 +893,15 @@ IDs. This preserves the relationship when same-named functions with the
 same arity occur in different module/impl contexts, which the legacy
 `calls/5` shape cannot express by itself. `Id` values are not persistent
 across edits.
+
+### `rust_macro(Id, Name, CallerFunctionId, File, Line)`
+
+One fact per `macro_invocation` syntax node. `Id` is the invocation's
+parse-local byte span. `Name` is the written macro identifier or scoped
+path, as an atom. `CallerFunctionId` is the enclosing `function_item` span,
+or `undefined` at module/file scope. This fact records the macro site only.
+It does not parse token-tree contents, expand macros, resolve the macro, or
+create `calls/5` facts for macro syntax.
 
 ## What's deliberately not here yet
 

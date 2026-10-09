@@ -56,6 +56,24 @@ extracts_nested_modules_visibility_and_uses_test() ->
            (_) -> false
         end, Facts)).
 
+extracts_macro_invocation_sites_test() ->
+    Source = <<"fn report() {\n"
+               "  println!(\"ready\");\n"
+               "  crate::log::event!();\n"
+               "}\n"
+               "vec![1, 2];\n">>,
+    Facts = ts_extract_rust:text("macros.rs", Source),
+    Path = 'macros.rs',
+    ReportId = element(2, only_fact(
+        fun({rust_function, _, report, _, _, _, _, _, _, _}) -> true;
+           (_) -> false
+        end, Facts)),
+    ?assert(has_rust_macro(println, ReportId, Path, 2, Facts)),
+    ?assert(has_rust_macro('crate::log::event', ReportId, Path, 3, Facts)),
+    ?assert(has_rust_macro(vec, undefined, Path, 5, Facts)),
+    ?assertEqual([], [F || {calls, report, 0, _, Path0, _} = F <- Facts,
+                           Path0 =:= Path]).
+
 extracts_generic_calls_test() ->
     Source = <<"fn run(input: u8) {\n"
                "  parse::<u16>(input);\n"
@@ -85,6 +103,14 @@ extracts_calls_with_syntax_shape_and_nearest_function_test() ->
                                  RunId0 =:= RunId, Path0 =:= Path])),
     ?assertEqual([], [F || {calls, undefined, undefined, _, _, _} = F <- Facts]),
     ?assertEqual(lists:sort(Facts), lists:usort(Facts)).
+
+has_rust_macro(Name, CallerId, Path, Line, Facts) ->
+    lists:any(
+        fun({rust_macro, _, Name0, CallerId0, Path0, Line0}) ->
+            Name0 =:= Name andalso CallerId0 =:= CallerId andalso
+                Path0 =:= Path andalso Line0 =:= Line;
+           (_) -> false
+        end, Facts).
 
 only_fact(Pred, Facts) ->
     case [F || F <- Facts, Pred(F)] of

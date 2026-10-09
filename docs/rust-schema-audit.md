@@ -133,7 +133,8 @@ a common contract, and only with rule-level compatibility tests.
 | Modules | `mod_item`, with inline/external form and parent context | An external `mod name;` is recorded but its referenced file is not traversed |
 | Imports | One `rust_use/4` with raw path text and context | Imports are not resolved or expanded into individual bindings |
 | Visibility | Explicit visibility on selected functions, signatures, modules, and type/value items; private is retained on function/module facts where applicable | No general declaration fact for fields or enum variants; `rust_visibility/5` omits implicit private visibility |
-| Calls | Call expressions with identifier, field, scoped, and generic/turbofish callees; nearest named `function_item` attribution | Macro invocations are not expanded/counted; unsupported callee shapes are skipped; calls outside named functions are skipped |
+| Calls | Call expressions with identifier, field, scoped, and generic/turbofish callees; nearest named `function_item` attribution | Macro invocations remain separate from calls; unsupported callee shapes are skipped; calls outside named functions are skipped |
+| Macro invocations | One `rust_macro/6` fact with macro path, source span, and enclosing function span when present | Token-tree contents are not parsed; macros are not expanded or resolved; no `calls/5` facts are inferred |
 | Control flow, bindings, types | Not emitted as Rust-specific families | Match arms, pattern bindings, `?`, return flow, and type relationships remain future candidates |
 
 Task 6 selected generic/turbofish calls as the first high-value coverage
@@ -144,10 +145,12 @@ calls with their raw callee text and generic methods with the existing
 `member(Receiver, Method, Arity)` shape. Tests cover both forms. This is
 still syntax-only; type arguments and paths are not resolved.
 
-Macro invocation coverage remains the next strong candidate, but it needs
-a separate contract: macro token trees are not ordinary call expressions,
-and treating their contents as expanded calls would be misleading without
-macro expansion.
+Task 7 adds macro invocation-site coverage with `rust_macro/6`. The fact
+records only the written macro path, source span, and enclosing function
+span when one exists. Macro token trees are not ordinary call expressions,
+so the extractor does not inspect them, expand macros, or infer calls from
+them. Tests cover an unqualified macro, a scoped macro, and a module-scope
+macro.
 
 ## Acceptance criteria for Task 1
 

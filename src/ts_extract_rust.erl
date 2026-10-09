@@ -10,6 +10,7 @@
 %%%   rust_use(PathText, Context, File, Line)
 %%%   rust_visibility(Id, Kind, Visibility, File, Line)
 %%%   rust_call(Id, CallerFunctionId, CallSpec, File, Line)
+%%%   rust_macro(Id, Name, CallerFunctionId, File, Line)
 %%%
 %%% These are syntax facts, not resolved symbols. Rust call expressions
 %%% use {path, Text, Arity} for all supported callee shapes; no claim is
@@ -30,6 +31,7 @@
       "(enum_item) (union_item) (trait_item) (type_item) (const_item) "
       "(static_item)] @item">>).
 -define(CALL_QUERY, <<"(call_expression) @call">>).
+-define(MACRO_QUERY, <<"(macro_invocation) @macro">>).
 
 -spec file(file:filename()) -> [tuple()].
 file(Path) ->
@@ -48,8 +50,9 @@ text(Path, Source) when is_binary(Source) ->
     Modules = module_facts(Language, Root, Source, PathAtom),
     Uses = use_facts(Language, Root, Source, PathAtom),
     Calls = call_facts(Language, Root, Source, PathAtom),
+    Macros = macro_facts(Language, Root, Source, PathAtom),
     Visibilities = visibility_facts(Language, Root, Source, PathAtom),
-    lists:usort(Functions ++ Modules ++ Uses ++ Calls ++ Visibilities).
+    lists:usort(Functions ++ Modules ++ Uses ++ Calls ++ Macros ++ Visibilities).
 
 function_facts(Language, Root, Source, Path) ->
     Nodes = captures(Language, Root, ?FUNCTION_QUERY, "f"),
@@ -205,6 +208,27 @@ visibility_facts(Language, Root, Source, Path) ->
 call_facts(Language, Root, Source, Path) ->
     Nodes = captures(Language, Root, ?CALL_QUERY, "call"),
     lists:flatmap(fun(N) -> call_fact(N, Source, Path) end, Nodes).
+
+%% A macro invocation is its own syntactic operation, not a function call:
+%% the extractor records its written path but does not inspect its token tree
+%% or claim that macro expansion invokes any functions.
+macro_facts(Language, Root, Source, Path) ->
+    Nodes = captures(Language, Root, ?MACRO_QUERY, "macro"),
+    lists:flatmap(fun(N) -> macro_fact(N, Source, Path) end, Nodes).
+
+macro_fact(Node, Source, Path) ->
+    NameNode = symbolic_ts:node_named_child(Node, 0),
+    case symbolic_ts:node_is_null(NameNode) of
+        true -> [];
+        false ->
+            CallerId = case caller_node(Node) of
+                undefined -> undefined;
+                CallerNode -> node_id(Path, CallerNode)
+            end,
+            [{rust_macro, node_id(Path, Node),
+              to_atom(symbolic_ts:node_text(NameNode, Source)),
+              CallerId, Path, line(Node)}]
+    end.
 
 call_fact(Node, Source, Path) ->
     Callee = symbolic_ts:node_child_by_field_name(Node, <<"function">>),
