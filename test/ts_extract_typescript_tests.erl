@@ -18,7 +18,13 @@ extracts_normalized_function_declarations_test() ->
         {function_decl, _, typescript, Name, Arity, Kind, Path0, _Line} <- Facts,
         Path0 =:= Path
     ]),
-    ?assertEqual([{generated, 0, generator_function}, {ordinary, 1, function}], Kinds).
+    ?assertEqual([{generated, 0, generator_function}, {ordinary, 1, function}], Kinds),
+    Legacy = lists:sort([{Name, Arity} ||
+        {defines, Name, Arity, _Params, Path0, _Line} <- Facts, Path0 =:= Path]),
+    Common = lists:sort([{Name, Arity} ||
+        {function_decl, _, typescript, Name, Arity, _, Path0, _Line} <- Facts,
+        Path0 =:= Path]),
+    ?assertEqual(Legacy, Common).
 
 extracts_local_call_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),

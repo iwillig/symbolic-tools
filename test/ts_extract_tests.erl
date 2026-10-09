@@ -12,10 +12,14 @@ extracts_defines_test() ->
 extracts_normalized_function_declarations_test() ->
     Facts = ts_extract_erlang:text("normalized.erl", "foo(X) -> ok.\nfoo(X, Y) -> {X, Y}."),
     Path = 'normalized.erl',
-    DeclFacts = [{Arity, Line} ||
-                 {function_decl, _, erlang, foo, Arity, clause, Path0, Line} <- Facts,
+    DeclFacts = [{Name, Arity} ||
+                 {function_decl, _, erlang, Name, Arity, clause, Path0, _Line} <- Facts,
                  Path0 =:= Path],
-    ?assertEqual(lists:sort([{1, 1}, {2, 2}]), lists:sort(DeclFacts)).
+    LegacyFacts = [{Name, Arity} ||
+                   {defines, Name, Arity, _Params, Path0, _Line} <- Facts,
+                   Path0 =:= Path],
+    ?assertEqual(lists:sort([{foo, 1}, {foo, 2}]), lists:sort(DeclFacts)),
+    ?assertEqual(lists:sort(LegacyFacts), lists:sort(DeclFacts)).
 
 extracts_arity_for_destructured_args_test() ->
     %% A destructured pattern ({Y,Z}, [H|T]) is still one named child, so

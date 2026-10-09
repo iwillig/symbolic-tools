@@ -21,7 +21,13 @@ extracts_free_functions_and_method_signatures_test() ->
         end, Facts)),
     ?assertMatch(
         {rust_function, _, convert, 2, _, trait_signature, <<"trait Convert">>, private, Path, 3},
-        only_fact(fun({rust_function, _, convert, _, _, _, _, _, _, _}) -> true; (_) -> false end, Facts)).
+        only_fact(fun({rust_function, _, convert, _, _, _, _, _, _, _}) -> true; (_) -> false end, Facts)),
+    Legacy = lists:sort([{Name, Arity} ||
+        {defines, Name, Arity, _Params, Path0, _Line} <- Facts, Path0 =:= Path]),
+    Common = lists:sort([{Name, Arity} ||
+        {function_decl, _, rust, Name, Arity, _, Path0, _Line} <- Facts,
+        Path0 =:= Path]),
+    ?assertEqual(Legacy, Common).
 
 extracts_nested_modules_visibility_and_uses_test() ->
     Source = <<"pub mod api {\n"

@@ -107,6 +107,24 @@ not class methods; Rust covers function items, methods, and signatures.
 These limits are explicit and can expand as extractor evidence and query
 needs justify it.
 
+## Derived-rule review (Task 5)
+
+No `.symbolic/rules.pl` rule is migrated to `function_decl/7` in this
+step. The current derived rules intentionally use `defines/5`: many need
+its parameter text and line behavior, or depend on related facts keyed by
+name/arity (`calls/5`, `doc/5`, `export/4`, and `fun_ref/4`). The normalized
+fact omits parameter text, is bounded to three languages, and gives each
+language's declaration form a different granularity. Replacing the source
+would either drop Bash coverage or silently alter existing query results.
+
+`function_decl/7` is therefore the common discovery/identity surface for
+cross-language queries; `defines/5` remains the compatibility source for
+existing rules and clients. Extractor tests now compare the name/arity
+projection of both fact families for representative Erlang, TypeScript,
+and Rust input, ensuring the additive view does not displace legacy facts.
+Reconsider migration after coverage and linked call/entry-point facts have
+a common contract, and only with rule-level compatibility tests.
+
 ## Acceptance criteria for Task 1
 
 - Predicate semantics and language availability are checked against the
