@@ -1,0 +1,2419 @@
+{
+  "evalId": "eval-FHb-2026-10-09T20:15:21",
+  "results": {
+    "version": 3,
+    "timestamp": "2026-10-09T20:15:21.741Z",
+    "prompts": [
+      {
+        "raw": "[{\"role\":\"system\",\"content\":\"{{system}}\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"{{claim}}\"}]",
+        "label": "claims",
+        "id": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "provider": "Qwen 3.8 27B (local llama-server)",
+        "metrics": {
+          "score": 10,
+          "testPassCount": 10,
+          "testFailCount": 0,
+          "testErrorCount": 0,
+          "assertPassCount": 30,
+          "assertFailCount": 0,
+          "totalLatencyMs": 170331,
+          "tokenUsage": {
+            "prompt": 19017,
+            "completion": 1206,
+            "cached": 0,
+            "total": 20223,
+            "numRequests": 10,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 13297,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "namedScores": {},
+          "namedScoresCount": {},
+          "namedScoreWeights": {},
+          "cost": 0
+        }
+      }
+    ],
+    "results": [
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /parse_number/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "e790a1e8-3735-4e47-9597-4d501b91e5c1",
+        "latencyMs": 26596,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"parse_number/1 is defined in ts_extract_typescript.erl, and ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback bug.\\\" Verify where parse_number/1 is defined in this codebase.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"defines(parse_number, 1, Params, File, Line)\"}"
+              },
+              "id": "nH2a1vEWnknvgubWvA0zgVnnA259qqpb"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1909,
+            "completion": 95,
+            "cached": 0,
+            "total": 2004,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 26596,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1074",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace 19148384 L936 (Sep 24) - claim TRUE - parse_number/1 in both extractors",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"parse_number/1 is defined in ts_extract_typescript.erl, and ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback bug.\" Verify where parse_number/1 is defined in this codebase."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /parse_number/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 0,
+        "tokenUsage": {
+          "prompt": 1909,
+          "completion": 95,
+          "cached": 0,
+          "total": 2004,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"parse_number/1 is defined in ts_extract_typescript.erl, and ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback bug.\" Verify where parse_number/1 is defined in this codebase."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1074",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /scan_one/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "025c3089-889d-432f-be23-dfd57b25a77e",
+        "latencyMs": 25366,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the function scan_one/1 is defined in this codebase, in symbolic_parse.erl.\\\" Verify where scan_one/1 is defined.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"defines(scan_one, 1, Params, File, Line)\"}"
+              },
+              "id": "vM2D5Ehoe2QEfle68XjTtDWa1QK28rQ2"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1888,
+            "completion": 80,
+            "cached": 0,
+            "total": 1968,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 1121,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 25366,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1013",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace evals premise (Oct 8) - claim TRUE - scan_one/1 in symbolic_parse.erl",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"the function scan_one/1 is defined in this codebase, in symbolic_parse.erl.\" Verify where scan_one/1 is defined."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /scan_one/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 1,
+        "tokenUsage": {
+          "prompt": 1888,
+          "completion": 80,
+          "cached": 0,
+          "total": 1968,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 1121,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"the function scan_one/1 is defined in this codebase, in symbolic_parse.erl.\" Verify where scan_one/1 is defined."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1013",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\b(calls|callers)\\s*\\(/.test(goal) && /extract_file_timed/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "7e49b3ca-164e-495f-ac8a-b375fe0d3db7",
+        "latencyMs": 28832,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the new extract_file_timed/1 helper is called by scan/1 in symbolic_parse.erl.\\\" Verify which function actually calls extract_file_timed/1.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"callers(extract_file_timed, 1, Callers)\"}"
+              },
+              "id": "NPpQ5LfqsDT1oo0HFgb4Ix5c4jRhw54l"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1893,
+            "completion": 116,
+            "cached": 0,
+            "total": 2009,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 28832,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1128",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace 7d71fbd7 L449 (Sep 24) - claim FALSE - scan/1 vs extract_file_timed/1",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"the new extract_file_timed/1 helper is called by scan/1 in symbolic_parse.erl.\" Verify which function actually calls extract_file_timed/1."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\b(calls|callers)\\s*\\(/.test(goal) && /extract_file_timed/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 2,
+        "tokenUsage": {
+          "prompt": 1893,
+          "completion": 116,
+          "cached": 0,
+          "total": 2009,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"the new extract_file_timed/1 helper is called by scan/1 in symbolic_parse.erl.\" Verify which function actually calls extract_file_timed/1."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1128",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\b(calls|callers)\\s*\\(/.test(goal) && /to_atom/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "b66a5eb8-d43d-4858-b427-2c6b7cb2d8f0",
+        "latencyMs": 27635,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"callers(to_atom, 1, ...) returns 12 real callers.\\\" Verify how many functions call to_atom/1 in this codebase today.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"callers(to_atom, 1, Callers)\"}"
+              },
+              "id": "22yBYRlJfXfhOZER66aserYQ2uS8daU1"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1891,
+            "completion": 105,
+            "cached": 0,
+            "total": 1996,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 1118,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 27635,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1102",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace c5c66f7d L2695 (Sep 22) - claim STALE/FALSE - to_atom/1 has 12 callers",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"callers(to_atom, 1, ...) returns 12 real callers.\" Verify how many functions call to_atom/1 in this codebase today."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\b(calls|callers)\\s*\\(/.test(goal) && /to_atom/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 3,
+        "tokenUsage": {
+          "prompt": 1891,
+          "completion": 105,
+          "cached": 0,
+          "total": 1996,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 1118,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"callers(to_atom, 1, ...) returns 12 real callers.\" Verify how many functions call to_atom/1 in this codebase today."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1102",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /truly_uncalled/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "ab3e7c26-fed9-4db4-8d60-d10bbb18f206",
+        "latencyMs": 13179,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"this codebase is architecturally clean, with zero dead code: no function in src/ is uncalled.\\\" Verify whether any function under src/ is truly uncalled.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"truly_uncalled(F, A, File), sub_atom(File, _, _, 0, 'src/')\",\"limit\":50}"
+              },
+              "id": "rmPyjbnslZ4dAzhlyZOpmU6W2tPVWY5M"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1894,
+            "completion": 152,
+            "cached": 0,
+            "total": 2046,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 1843,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 13179,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1272",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace 19148384 L146 (Sep 24) - claim FALSE - no dead code in src/",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"this codebase is architecturally clean, with zero dead code: no function in src/ is uncalled.\" Verify whether any function under src/ is truly uncalled."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /truly_uncalled/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 4,
+        "tokenUsage": {
+          "prompt": 1894,
+          "completion": 152,
+          "cached": 0,
+          "total": 2046,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 1843,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"this codebase is architecturally clean, with zero dead code: no function in src/ is uncalled.\" Verify whether any function under src/ is truly uncalled."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1272",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /(duplicate_name|defines)\\s*\\(/.test(goal) && /line/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "454017c5-9798-4fd3-8b92-27914b0cfaeb",
+        "latencyMs": 9177,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"line/1 is byte-for-byte identical in ts_extract_erlang.erl, ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated across files.\\\" Verify that line/1 is a duplicated function name in this codebase.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"duplicate_name(line, 1, Files)\"}"
+              },
+              "id": "GuhlBhxV39okRasAk4JryDxLR3kJcgiQ"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1915,
+            "completion": 105,
+            "cached": 0,
+            "total": 2020,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 1843,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 9177,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1128",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace 97eac5c7 L105 (Sep 23) - claim TRUE - line/1 duplicated across extractors",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"line/1 is byte-for-byte identical in ts_extract_erlang.erl, ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated across files.\" Verify that line/1 is a duplicated function name in this codebase."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /(duplicate_name|defines)\\s*\\(/.test(goal) && /line/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 5,
+        "tokenUsage": {
+          "prompt": 1915,
+          "completion": 105,
+          "cached": 0,
+          "total": 2020,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 1843,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"line/1 is byte-for-byte identical in ts_extract_erlang.erl, ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated across files.\" Verify that line/1 is a duplicated function name in this codebase."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1128",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /parse/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "8b6991f7-a967-4534-89fc-8ef2b426028d",
+        "latencyMs": 6551,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"parse/2, the function that loads a codebase into the cache, is defined in symbolic_codebase.erl.\\\" Verify where parse/2 is defined.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"defines(parse, 2, Params, File, Line)\"}"
+              },
+              "id": "bGGczpHibFbU35Hwx567fRHKQ5UVvfso"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1892,
+            "completion": 78,
+            "cached": 0,
+            "total": 1970,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 1843,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 6551,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1005",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace evals premise (Oct 8) - claim TRUE - parse/2 in symbolic_codebase.erl",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"parse/2, the function that loads a codebase into the cache, is defined in symbolic_codebase.erl.\" Verify where parse/2 is defined."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /parse/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 6,
+        "tokenUsage": {
+          "prompt": 1892,
+          "completion": 78,
+          "cached": 0,
+          "total": 1970,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 1843,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"parse/2, the function that loads a codebase into the cache, is defined in symbolic_codebase.erl.\" Verify where parse/2 is defined."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1005",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /real_complexity/.test(goal) && /handle_call/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "534f3d83-a20b-4dd3-922b-2597fdddde74",
+        "latencyMs": 8157,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"handle_call/3, the gen_server callback in symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest real-complexity functions in the codebase.\\\" Verify the real complexity of handle_call/3 in symbolic_codebase.erl.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"real_complexity(handle_call, 3, File, Score), sub_atom(File, _, _, 0, 'symbolic_codebase.erl')\"}"
+              },
+              "id": "1CByj9PZc8XJDjnMJt2iGOTBApZA4uFv"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1918,
+            "completion": 95,
+            "cached": 0,
+            "total": 2013,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 1843,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 8157,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1075",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace 19148384 L146 (Sep 24) - claim STALE - handle_call/3 complexity 16",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"handle_call/3, the gen_server callback in symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest real-complexity functions in the codebase.\" Verify the real complexity of handle_call/3 in symbolic_codebase.erl."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /real_complexity/.test(goal) && /handle_call/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 7,
+        "tokenUsage": {
+          "prompt": 1918,
+          "completion": 95,
+          "cached": 0,
+          "total": 2013,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 1843,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"handle_call/3, the gen_server callback in symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest real-complexity functions in the codebase.\" Verify the real complexity of handle_call/3 in symbolic_codebase.erl."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1075",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /real_complexity/.test(goal) && /walk_scope/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "c52d5fdb-d8ba-43cf-a3e7-3904041e7c8f",
+        "latencyMs": 7487,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"walk_scope/5 in ts_extract_typescript.erl is a real complexity hotspot, one of the highest in the codebase.\\\" Verify the real complexity of walk_scope/5 in ts_extract_typescript.erl.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"real_complexity(walk_scope, 5, File, Score)\"}"
+              },
+              "id": "vV38J7kryGNhWaCoei1WBVpKhCLFiA9y"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1903,
+            "completion": 99,
+            "cached": 0,
+            "total": 2002,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 1843,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 7487,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1095",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace 19148384 L146 (Sep 24) - claim TRUE - walk_scope/5 complexity hotspot",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"walk_scope/5 in ts_extract_typescript.erl is a real complexity hotspot, one of the highest in the codebase.\" Verify the real complexity of walk_scope/5 in ts_extract_typescript.erl."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /real_complexity/.test(goal) && /walk_scope/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 8,
+        "tokenUsage": {
+          "prompt": 1903,
+          "completion": 99,
+          "cached": 0,
+          "total": 2002,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 1843,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"walk_scope/5 in ts_extract_typescript.erl is a real complexity hotspot, one of the highest in the codebase.\" Verify the real complexity of walk_scope/5 in ts_extract_typescript.erl."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1095",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "is-valid-openai-tools-call"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Tool Call F1: 1.000 (precision=1.000, recall=1.000). Expected: [mcp__symbolic__query], Called: [mcp__symbolic__query]",
+              "assertion": {
+                "type": "tool-call-f1",
+                "value": [
+                  "mcp__symbolic__query"
+                ],
+                "threshold": 0.5
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bheading\\s*\\(/.test(goal) && /(BEAM|Eval-framework)/.test(goal);\n"
+              }
+            }
+          ]
+        },
+        "id": "a82d5976-7e59-4c47-b67f-aaeee5d216ca",
+        "latencyMs": 17351,
+        "namedScores": {},
+        "prompt": {
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the repo has a research doc, docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework data models' and section 9 is titled 'BEAM ecosystem'.\\\" Verify that those sections exist in that document.\"}]",
+          "label": "claims",
+          "config": {}
+        },
+        "promptId": "a61808fe40feb8b3433778bbc2ececcaa47c8c47fc1657f054c239efd3f0e984",
+        "promptIdx": 0,
+        "provider": {
+          "id": "openai:chat:local",
+          "label": "Qwen 3.8 27B (local llama-server)"
+        },
+        "response": {
+          "output": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"heading(File, 2, 'Eval-framework data models', Line), sub_atom(File, _, _, 0, 'docs/research-llm-judge-and-benchmarking.md')\"}"
+              },
+              "id": "0lQKoZ2SYAt51R58Os16oxuGxjpHdHky"
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"heading(File, 2, 'BEAM ecosystem', Line), sub_atom(File, _, _, 0, 'docs/research-llm-judge-and-benchmarking.md')\"}"
+              },
+              "id": "jmto7RUrE5lCQYTWhrGtcnrO5NoQl24w"
+            }
+          ],
+          "tokenUsage": {
+            "prompt": 1914,
+            "completion": 281,
+            "cached": 0,
+            "total": 2195,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 1843,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "cached": false,
+          "latencyMs": 17351,
+          "finishReason": "tool_calls",
+          "guardrails": {
+            "flagged": false
+          },
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "access-control-allow-origin": "",
+                "content-length": "1779",
+                "content-type": "application/json; charset=utf-8",
+                "keep-alive": "timeout=5, max=100",
+                "server": "llama.cpp"
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "trace 6adb995a L124 (Oct 8) - claim TRUE - judge doc sections 5 and 9",
+          "vars": {
+            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "claim": "Claim from a past session: \"the repo has a research doc, docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework data models' and section 9 is titled 'BEAM ecosystem'.\" Verify that those sections exist in that document."
+          },
+          "assert": [
+            {
+              "type": "is-valid-openai-tools-call"
+            },
+            {
+              "type": "tool-call-f1",
+              "value": [
+                "mcp__symbolic__query"
+              ],
+              "threshold": 0.5
+            },
+            {
+              "type": "javascript",
+              "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bheading\\s*\\(/.test(goal) && /(BEAM|Eval-framework)/.test(goal);\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 9,
+        "tokenUsage": {
+          "prompt": 1914,
+          "completion": 281,
+          "cached": 0,
+          "total": 2195,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 1843,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "claim": "Claim from a past session: \"the repo has a research doc, docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework data models' and section 9 is titled 'BEAM ecosystem'.\" Verify that those sections exist in that document."
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "access-control-allow-origin": "",
+              "content-length": "1779",
+              "content-type": "application/json; charset=utf-8",
+              "keep-alive": "timeout=5, max=100",
+              "server": "llama.cpp"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      }
+    ],
+    "stats": {
+      "successes": 10,
+      "failures": 0,
+      "errors": 0,
+      "tokenUsage": {
+        "prompt": 19017,
+        "completion": 1206,
+        "cached": 0,
+        "total": 20223,
+        "numRequests": 10,
+        "completionDetails": {
+          "reasoning": 0,
+          "acceptedPrediction": 0,
+          "rejectedPrediction": 0,
+          "cacheReadInputTokens": 13297,
+          "cacheCreationInputTokens": 0
+        },
+        "assertions": {
+          "total": 0,
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "numRequests": 0,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          }
+        }
+      },
+      "durationMs": 53199,
+      "evaluationDurationMs": 53199
+    }
+  },
+  "config": {
+    "tags": {},
+    "description": "Symbolic MCP claim-verification eval: replay codebase claims mined from real Claude Code session traces and check whether the model routes each one to a well-formed Prolog goal",
+    "prompts": [
+      {
+        "id": "file:///Users/iwillig/dev/symbolic-tools/evals/prompts/symbolic_mcp_claims.json",
+        "label": "claims"
+      }
+    ],
+    "providers": [
+      {
+        "id": "openai:chat:local",
+        "label": "Qwen 3.8 27B (local llama-server)",
+        "config": {
+          "apiBaseUrl": "http://localhost:8080/v1",
+          "apiKeyRequired": false,
+          "temperature": 0,
+          "max_tokens": 2048,
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__parse",
+                "description": "Parse a PROJECT and cache its codebase facts in memory, keyed by that project's own root. Omit path to discover a .symbolic/config.json by walking up from the server's cwd. A previously cached project is untouched by parsing a different one. Re-parsing the SAME project rescans it and replaces just that entry.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Project root (must have .symbolic/config.json inside) or any plain directory to scan literally"
+                    },
+                    "rules": {
+                      "type": "string",
+                      "description": "Prolog rules file to consult instead of auto-discovering .symbolic/rules.pl"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "description": "Prove a Prolog goal against a cached codebase and return all solutions (capped). Raw facts, from `overview`: defines(Function, Arity, Params, File, Line), export(Function, Arity, File, Line), calls(Caller, CallerArity, CallSpec, File, Line) where CallSpec is local(Callee, ArgCount)/remote(Module, Function, ArgCount)/member(Object, Method, ArgCount), doc(Function, Arity, File, Line, Text), branch(Function, Arity, Kind, File, Line), comment/3, heading/4, paragraph/3, code_block/3, config_value/4, config_section/3. Prefer an existing derived predicate over reinventing it inline, when `parse`'s `rules_file` shows a library was consulted: callees/2, callers/3, undocumented/4, duplicate_name/3 (+all_duplicate_names/1), self_recursive/3, fan_out/3, fan_in/3, no_local_callers/3 (+all_no_local_callers/1), reaches/2, truly_uncalled/3 (+all_truly_uncalled/1 - excludes entry_point/3, so exported API and OTP callbacks are not dead code), real_complexity/4 (+too_complex_real/4, +all_too_complex_real/1 - real McCabe-style branch counting on branch/5, more accurate than too_complex/3's fan-out proxy), plus the markdown facts heading/4 for documentation claims.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "goal"
+                  ],
+                  "properties": {
+                    "goal": {
+                      "type": "string",
+                      "description": "One Prolog goal over those facts, e.g. calls(X, _, local(parse, 2), File, Line), callers(parse, 2, File), or defines(scan_one, 1, Params, File, Line)"
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "description": "Max solutions to return (default 50)"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Which cached directory to query, by the same path passed to parse"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__overview",
+                "description": "Report the current state of a cached fact base: whether a codebase is loaded, how many files/languages, and fact counts by predicate.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Which cached directory to report on; omit for the most recently parsed"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__ask",
+                "description": "Answer a bounded English question against a cached codebase: does X/N call Y/M, which functions call X/N, how many functions call X/N, is X/N defined, where is X documented. Unverifiable questions come back as {type: unverifiable, reason}; phrasings outside the grammar are an unrecognized error. Callers that need anything the grammar does not cover should write a query goal instead.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "question"
+                  ],
+                  "properties": {
+                    "question": {
+                      "type": "string",
+                      "description": "The question, e.g. \"how many functions call query_binary/2?\""
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Which cached directory to ask about; omit for the most recently parsed"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "tests": [
+      {
+        "description": "trace 19148384 L936 (Sep 24) - claim TRUE - parse_number/1 in both extractors",
+        "vars": {
+          "claim": "Claim from a past session: \"parse_number/1 is defined in ts_extract_typescript.erl, and ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback bug.\" Verify where parse_number/1 is defined in this codebase."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /parse_number/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace evals premise (Oct 8) - claim TRUE - scan_one/1 in symbolic_parse.erl",
+        "vars": {
+          "claim": "Claim from a past session: \"the function scan_one/1 is defined in this codebase, in symbolic_parse.erl.\" Verify where scan_one/1 is defined."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /scan_one/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace 7d71fbd7 L449 (Sep 24) - claim FALSE - scan/1 vs extract_file_timed/1",
+        "vars": {
+          "claim": "Claim from a past session: \"the new extract_file_timed/1 helper is called by scan/1 in symbolic_parse.erl.\" Verify which function actually calls extract_file_timed/1."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\b(calls|callers)\\s*\\(/.test(goal) && /extract_file_timed/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace c5c66f7d L2695 (Sep 22) - claim STALE/FALSE - to_atom/1 has 12 callers",
+        "vars": {
+          "claim": "Claim from a past session: \"callers(to_atom, 1, ...) returns 12 real callers.\" Verify how many functions call to_atom/1 in this codebase today."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\b(calls|callers)\\s*\\(/.test(goal) && /to_atom/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace 19148384 L146 (Sep 24) - claim FALSE - no dead code in src/",
+        "vars": {
+          "claim": "Claim from a past session: \"this codebase is architecturally clean, with zero dead code: no function in src/ is uncalled.\" Verify whether any function under src/ is truly uncalled."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /truly_uncalled/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace 97eac5c7 L105 (Sep 23) - claim TRUE - line/1 duplicated across extractors",
+        "vars": {
+          "claim": "Claim from a past session: \"line/1 is byte-for-byte identical in ts_extract_erlang.erl, ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated across files.\" Verify that line/1 is a duplicated function name in this codebase."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /(duplicate_name|defines)\\s*\\(/.test(goal) && /line/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace evals premise (Oct 8) - claim TRUE - parse/2 in symbolic_codebase.erl",
+        "vars": {
+          "claim": "Claim from a past session: \"parse/2, the function that loads a codebase into the cache, is defined in symbolic_codebase.erl.\" Verify where parse/2 is defined."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bdefines\\s*\\(/.test(goal) && /parse/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace 19148384 L146 (Sep 24) - claim STALE - handle_call/3 complexity 16",
+        "vars": {
+          "claim": "Claim from a past session: \"handle_call/3, the gen_server callback in symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest real-complexity functions in the codebase.\" Verify the real complexity of handle_call/3 in symbolic_codebase.erl."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /real_complexity/.test(goal) && /handle_call/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace 19148384 L146 (Sep 24) - claim TRUE - walk_scope/5 complexity hotspot",
+        "vars": {
+          "claim": "Claim from a past session: \"walk_scope/5 in ts_extract_typescript.erl is a real complexity hotspot, one of the highest in the codebase.\" Verify the real complexity of walk_scope/5 in ts_extract_typescript.erl."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /real_complexity/.test(goal) && /walk_scope/.test(goal);\n"
+          }
+        ]
+      },
+      {
+        "description": "trace 6adb995a L124 (Oct 8) - claim TRUE - judge doc sections 5 and 9",
+        "vars": {
+          "claim": "Claim from a past session: \"the repo has a research doc, docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework data models' and section 9 is titled 'BEAM ecosystem'.\" Verify that those sections exist in that document."
+        },
+        "assert": [
+          {
+            "type": "is-valid-openai-tools-call"
+          },
+          {
+            "type": "tool-call-f1",
+            "value": [
+              "mcp__symbolic__query"
+            ],
+            "threshold": 0.5
+          },
+          {
+            "type": "javascript",
+            "value": "const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);\nconst tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');\nif (!tc) return false;\nlet goal = '';\ntry { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }\nreturn /\\bheading\\s*\\(/.test(goal) && /(BEAM|Eval-framework)/.test(goal);\n"
+          }
+        ]
+      }
+    ],
+    "env": {},
+    "outputPath": [
+      "claims-output.json"
+    ],
+    "extensions": [],
+    "metadata": {},
+    "evaluateOptions": {},
+    "defaultTest": {
+      "vars": {
+        "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md"
+      },
+      "assert": [],
+      "options": {},
+      "metadata": {}
+    },
+    "basePath": "/Users/iwillig/dev/symbolic-tools/evals"
+  },
+  "shareableUrl": null,
+  "metadata": {
+    "promptfooVersion": "0.124.0",
+    "nodeVersion": "v26.11.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "exportedAt": "2026-10-09T20:16:15.000Z",
+    "evaluationCreatedAt": "2026-10-09T20:15:21.741Z"
+  },
+  "vars": [
+    "system",
+    "claim"
+  ],
+  "runtimeOptions": {
+    "eventSource": "cli",
+    "showProgressBar": false,
+    "repeat": 1,
+    "maxConcurrency": 4,
+    "cache": false
+  }
+}

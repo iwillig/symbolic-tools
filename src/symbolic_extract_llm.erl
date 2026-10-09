@@ -95,8 +95,11 @@ run_result(Sentence, ModelOpts) ->
 model_opts(Path) ->
     case file:read_file(Path) of
         {ok, Bin} ->
-            {ok, #{model_path => Path, fingerprint => crypto:hash(sha256, Bin),
-                   model_opts => #{n_gpu_layers => 99}}};
+            {ok, #{
+                model_path => Path,
+                fingerprint => crypto:hash(sha256, Bin),
+                model_opts => #{n_gpu_layers => 99}
+            }};
         {error, Reason} ->
             {error, {read_model_error, Reason}}
     end.
@@ -134,30 +137,46 @@ chat_result(Model, Sentence) ->
 %% it can put anything there since decode_call/1 never reads it.
 -spec tools() -> [map()].
 tools() ->
-    [#{name => <<"extract_svo">>,
-       description =>
-           <<"Extract a subject-verb-object claim about code from a sentence, "
-             "if and only if the sentence describes one of the supported "
-             "relations. Do not call this for a sentence that isn't a "
-             "structural claim about code.">>,
-       parameters => #{
-           type => object,
-           properties => #{
-               subject => #{type => string,
-                            description =>
-                                <<"The function the sentence is ABOUT, as "
-                                  "Function/Arity (e.g. \"foo/2\"). Always fill this "
-                                  "in, for every verb, including \"removed\" -- this "
-                                  "field is never left blank.">>},
-               verb => #{type => string, 'enum' => ?KNOWN_VERBS},
-               object => #{type => string,
-                           description =>
-                               <<"Only meaningful for \"calls\": the function BEING "
-                                 "called, as Function/Arity (e.g. \"bar/1\") -- the "
-                                 "one on the right of the word \"calls\", never the "
-                                 "same value as subject. For \"removed\", this field "
-                                 "is unused; put \"none\".">>}},
-           required => [subject, verb, object]}}].
+    [
+        #{
+            name => <<"extract_svo">>,
+            description =>
+                <<
+                    "Extract a subject-verb-object claim about code from a sentence, "
+                    "if and only if the sentence describes one of the supported "
+                    "relations. Do not call this for a sentence that isn't a "
+                    "structural claim about code."
+                >>,
+            parameters => #{
+                type => object,
+                properties => #{
+                    subject => #{
+                        type => string,
+                        description =>
+                            <<
+                                "The function the sentence is ABOUT, as "
+                                "Function/Arity (e.g. \"foo/2\"). Always fill this "
+                                "in, for every verb, including \"removed\" -- this "
+                                "field is never left blank."
+                            >>
+                    },
+                    verb => #{type => string, 'enum' => ?KNOWN_VERBS},
+                    object => #{
+                        type => string,
+                        description =>
+                            <<
+                                "Only meaningful for \"calls\": the function BEING "
+                                "called, as Function/Arity (e.g. \"bar/1\") -- the "
+                                "one on the right of the word \"calls\", never the "
+                                "same value as subject. For \"removed\", this field "
+                                "is unused; put \"none\"."
+                            >>
+                    }
+                },
+                required => [subject, verb, object]
+            }
+        }
+    ].
 
 %% Turn one tool_calls entry into the same {svo, Subject, Verb, Object}
 %% shape symbolic_extract:run_result/1 (the DCG tier) already returns —
@@ -189,8 +208,13 @@ decode_call(Call) ->
 %% here to a tool-call argument instead of a raw sentence word.
 -spec parse_ident(binary() | undefined) -> {ok, term()} | error.
 parse_ident(Bin) when is_binary(Bin) ->
-    case re:run(Bin, "^([a-z][a-zA-Z0-9_]*)/([0-9]+)$",
-                [{capture, all_but_first, binary}]) of
+    case
+        re:run(
+            Bin,
+            "^([a-z][a-zA-Z0-9_]*)/([0-9]+)$",
+            [{capture, all_but_first, binary}]
+        )
+    of
         {match, [NameBin, ArityBin]} ->
             {ok, {'/', binary_to_atom(NameBin, utf8), binary_to_integer(ArityBin)}};
         nomatch ->

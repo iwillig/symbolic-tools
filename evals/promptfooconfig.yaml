@@ -9,14 +9,18 @@ prompts:
   - id: file://prompts/symbolic_mcp_fresh.json
     label: fresh
 
+defaultTest:
+  vars:
+    system: file://../QWEN-SYSTEM.md
+
 providers:
-  - id: huggingface:chat:Qwen/Qwen3.8-27B
-    label: 'Qwen 3.8 27B (HuggingFace -> novita)'
+  - id: openai:chat:local
+    label: 'Qwen 3.8 27B (local llama-server)'
     config:
-      inferenceProvider: novita
+      apiBaseUrl: http://localhost:8080/v1
+      apiKeyRequired: false
       temperature: 0
-      max_new_tokens: 2048
-      showThinking: false
+      max_tokens: 2048
       tools:
         - type: function
           function:

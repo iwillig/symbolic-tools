@@ -54,10 +54,12 @@ run(DbPath, Question) ->
             io:put_chars(standard_error, "Unrecognized.\n"),
             halt(1);
         {error, {unverifiable, Reason}} ->
-            io:format("~ts~n", [jsx:encode(#{
-                <<"type">> => <<"unverifiable">>,
-                <<"reason">> => iolist_to_binary(io_lib:format("~p", [Reason]))
-            })]),
+            io:format("~ts~n", [
+                jsx:encode(#{
+                    <<"type">> => <<"unverifiable">>,
+                    <<"reason">> => iolist_to_binary(io_lib:format("~p", [Reason]))
+                })
+            ]),
             halt(2);
         {error, Reason} ->
             fail("cannot answer: ~p", [Reason])
@@ -113,8 +115,11 @@ parse(Pid, TokensText, Question) ->
         {ok, Bindings} ->
             %% Bindings come back in engine order, not goal-text order —
             %% look them up by name, never by position.
-            answer(Pid, proplists:get_value('Type', Bindings),
-                   proplists:get_value('Rel', Bindings));
+            answer(
+                Pid,
+                proplists:get_value('Type', Bindings),
+                proplists:get_value('Rel', Bindings)
+            );
         no_solution ->
             %% DCG said no: fall through to the statistical tier (Stage
             %% 2, PLAN-statistical-nlp-tier.md). Same session, same gate,
@@ -139,12 +144,17 @@ statistical_fallback(Pid, Question) ->
     try symbolic_nlp:tag(unicode:characters_to_binary(Question)) of
         {ok, Tags} ->
             case map_tags(Tags) of
-                unrecognized -> unrecognized;
+                unrecognized ->
+                    unrecognized;
                 {ok, {prose, SpanWords}} ->
                     %% Same prose clause the DCG uses — evidence, never a
                     %% verdict. Glue tokens never make search sense.
-                    Words = [W || {W, _} <- SpanWords,
-                                  W =/= <<"_">>, W =/= <<".">>],
+                    Words = [
+                        W
+                     || {W, _} <- SpanWords,
+                        W =/= <<"_">>,
+                        W =/= <<".">>
+                    ],
                     case Words of
                         [] -> unrecognized;
                         _ -> answer(Pid, prose, Words)
@@ -155,7 +165,8 @@ statistical_fallback(Pid, Question) ->
         {error, _} ->
             unrecognized
     catch
-        _:_ -> unrecognized   %% NIF not built/loaded: tier absent
+        %% NIF not built/loaded: tier absent
+        _:_ -> unrecognized
     end.
 
 %% The mapper: pure, no NIF, no session — unit-tested directly.
@@ -180,8 +191,7 @@ map_tags(Tags0) ->
         [{<<"does">>, _} | Rest] -> does_shape(Rest);
         [{<<"is">>, _} | Rest] -> is_shape(Rest);
         [{<<"are">>, _} | Rest] -> is_shape(Rest);
-        [{<<"where">>, _}, {<<"is">>, _} | Rest] ->
-            where_shape(Rest);
+        [{<<"where">>, _}, {<<"is">>, _} | Rest] -> where_shape(Rest);
         [{<<"which">>, _} | Rest] -> wh_shape(enumerate, Rest);
         [{<<"who">>, _} | Rest] -> wh_shape(enumerate, Rest);
         [{<<"what">>, _} | Rest] -> wh_shape(enumerate, Rest);
@@ -218,10 +228,11 @@ find_verb([], _Acc) ->
 find_verb([{W, _} = T | Rest], Acc) ->
     %% A known-verb token whose NEXT word is identifier glue is the
     %% front half of a snake_case identifier (handle_query), not a verb.
-    GlueNext = case Rest of
-        [{NW, _} | _] -> NW =:= <<"_">> orelse NW =:= <<".">>;
-        _ -> false
-    end,
+    GlueNext =
+        case Rest of
+            [{NW, _} | _] -> NW =:= <<"_">> orelse NW =:= <<".">>;
+            _ -> false
+        end,
     case verb_relation(W) =/= other andalso not GlueNext of
         true -> {W, lists:reverse(Acc), Rest};
         false -> find_verb(Rest, [T | Acc])
@@ -229,7 +240,8 @@ find_verb([{W, _} = T | Rest], Acc) ->
 
 find_tagged(Pred, Tags) -> find_tagged(Pred, Tags, []).
 
-find_tagged(_Pred, [], _Acc) -> none;
+find_tagged(_Pred, [], _Acc) ->
+    none;
 find_tagged(Pred, [T | Rest], Acc) ->
     case Pred(T) of
         true -> {T, lists:reverse(Acc), Rest};
@@ -370,14 +382,28 @@ where_shape(Words) ->
 %% survive whole (`verifyPhoneCode`), so the common case is one token.
 
 ident_candidates(Tags) ->
-    Ws = [W || {W, _} <- Tags,
-               not lists:member(W, [<<"the">>, <<"a">>, <<"an">>,
-                                    <<"this">>, <<"that">>, <<"these">>,
-                                    <<"those">>, <<"my">>, <<"our">>,
-                                    <<"their">>, <<"its">>])],
+    Ws = [
+        W
+     || {W, _} <- Tags,
+        not lists:member(W, [
+            <<"the">>,
+            <<"a">>,
+            <<"an">>,
+            <<"this">>,
+            <<"that">>,
+            <<"these">>,
+            <<"those">>,
+            <<"my">>,
+            <<"our">>,
+            <<"their">>,
+            <<"its">>
+        ])
+    ],
     case [S || S <- segments(Ws, none, <<>>, []), S =/= <<>>] of
-        [] -> [];
-        [Only] -> [Only];
+        [] ->
+            [];
+        [Only] ->
+            [Only];
         Multi ->
             Joined = iolist_to_binary(lists:join(<<"_">>, Multi)),
             [Joined | Multi]
@@ -431,7 +457,8 @@ seg_plain(Rest, Joiner, Cur, Segs) ->
 
 is_digits(B) when is_binary(B), byte_size(B) > 0 ->
     lists:all(fun(C) -> C >= $0 andalso C =< $9 end, binary_to_list(B));
-is_digits(_) -> false.
+is_digits(_) ->
+    false.
 
 split_arity(Cand) ->
     %% Last slash followed by only digits = an explicit arity.
@@ -451,7 +478,8 @@ digits_run_from_end(B, Pos) when Pos > 0 ->
         true -> digits_run_from_end(B, Pos - 1);
         false -> Pos
     end;
-digits_run_from_end(_B, 0) -> 0.
+digits_run_from_end(_B, 0) ->
+    0.
 
 quoted_atom(Name) ->
     %% Always quote: code identifiers carry capitals and dots that bare
@@ -459,14 +487,18 @@ quoted_atom(Name) ->
     %% Prolog variable.
     Escaped = binary:replace(
         binary:replace(Name, <<"\\">>, <<"\\\\">>, [global]),
-        <<"'">>, <<"\\'">>, [global]),
+        <<"'">>,
+        <<"\\'">>,
+        [global]
+    ),
     ["'", binary_to_list(Escaped), "'"].
 
 arities_of(Pid, Name) ->
     Goal = "findall(A, defines(" ++ quoted_atom(Name) ++ ", A, _, _, _), L)",
     case prolog_session:query(Pid, Goal) of
         {ok, Bindings} -> {ok, proplists:get_value('L', Bindings)};
-        no_solution -> {ok, []};   %% findall never fails; defensive
+        %% findall never fails; defensive
+        no_solution -> {ok, []};
         {error, Reason} -> {error, Reason}
     end.
 
@@ -484,10 +516,12 @@ resolve_strict(_Pid, [], [{Name, _} | _]) ->
     {error, {unverifiable, {no_such_function, Name, unknown}}};
 resolve_strict(Pid, [{Name, Given} | Rest], All) ->
     case arities_of(Pid, Name) of
-        {ok, []} -> resolve_strict(Pid, Rest, All);
+        {ok, []} ->
+            resolve_strict(Pid, Rest, All);
         {ok, [A]} when Given =:= undefined -> {ok, {'/', Name, A}};
         {ok, [A]} when Given =:= A -> {ok, {'/', Name, A}};
-        {ok, [_]} -> {error, {unverifiable, {wrong_arity, Name, Given}}};
+        {ok, [_]} ->
+            {error, {unverifiable, {wrong_arity, Name, Given}}};
         {ok, Many} when Given =:= undefined ->
             {error, {unverifiable, {ambiguous_arity, Name, Many}}};
         {ok, Many} ->
@@ -495,7 +529,8 @@ resolve_strict(Pid, [{Name, Given} | Rest], All) ->
                 true -> {ok, {'/', Name, Given}};
                 false -> {error, {unverifiable, {wrong_arity, Name, Given}}}
             end;
-        {error, Reason} -> {error, Reason}
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% Object resolution — loose-gate semantics. A name unknown to the base
@@ -509,9 +544,11 @@ resolve_object(Pid, Words) ->
 resolve_loose(Pid, [{Name, Given} | Rest], All) ->
     case arities_of(Pid, Name) of
         {ok, []} when Rest =:= [] -> {ok, {'/', Name, any}};
-        {ok, []} -> resolve_loose(Pid, Rest, All);
+        {ok, []} ->
+            resolve_loose(Pid, Rest, All);
         {ok, [A]} when Given =:= undefined; Given =:= A -> {ok, {'/', Name, A}};
-        {ok, [_]} -> {error, {unverifiable, {wrong_arity, Name, Given}}};
+        {ok, [_]} ->
+            {error, {unverifiable, {wrong_arity, Name, Given}}};
         {ok, Many} when Given =:= undefined ->
             {error, {unverifiable, {ambiguous_arity, Name, Many}}};
         {ok, Many} ->
@@ -519,7 +556,8 @@ resolve_loose(Pid, [{Name, Given} | Rest], All) ->
                 true -> {ok, {'/', Name, Given}};
                 false -> {error, {unverifiable, {wrong_arity, Name, Given}}}
             end;
-        {error, Reason} -> {error, Reason}
+        {error, Reason} ->
+            {error, Reason}
     end;
 resolve_loose(_Pid, [], [{Name, _} | _]) ->
     {ok, {'/', Name, any}}.
@@ -538,7 +576,8 @@ build_relation(Pid, {yes_no, {calls, SWords, OWords}}) ->
                     case resolve_object(Pid, OWords) of
                         {ok, Object} ->
                             answer(Pid, yes_no, {calls_file, FileBin, Object});
-                        Error -> Error
+                        Error ->
+                            Error
                     end;
                 {ok, false} ->
                     {error, {unverifiable, {no_such_file, file_segment(FileWords)}}};
@@ -552,7 +591,8 @@ build_relation(Pid, {yes_no, {calls, SWords, OWords}}) ->
                         {ok, Object} -> answer(Pid, yes_no, {calls, Subject, Object});
                         Error -> Error
                     end;
-                Error -> Error
+                Error ->
+                    Error
             end
     end;
 build_relation(Pid, {yes_no, {defines, SWords}}) ->
@@ -560,8 +600,9 @@ build_relation(Pid, {yes_no, {defines, SWords}}) ->
         {ok, Ident} -> answer(Pid, yes_no, {defines, Ident});
         Error -> Error
     end;
-build_relation(Pid, {Type, {callers_of, OWords}})
-    when Type =:= enumerate; Type =:= count ->
+build_relation(Pid, {Type, {callers_of, OWords}}) when
+    Type =:= enumerate; Type =:= count
+->
     case resolve_object(Pid, OWords) of
         {ok, Object} -> answer(Pid, Type, {callers_of, Object});
         Error -> Error
@@ -579,13 +620,15 @@ build_relation(Pid, {yes_no, {uses, SWords, OWords}}) ->
                     answer(Pid, yes_no, {uses_file, FileBin, name_candidates(OWords)});
                 {ok, false} ->
                     {error, {unverifiable, {no_such_file, file_segment(FileWords)}}};
-                Error -> Error
+                Error ->
+                    Error
             end;
         {ident, IdentWords} ->
             case resolve_ident(Pid, IdentWords) of
                 {ok, Subject} ->
                     answer(Pid, yes_no, {uses, Subject, name_candidates(OWords)});
-                Error -> Error
+                Error ->
+                    Error
             end
     end;
 %% Stage 2b: returns — a valued return statement that references the
@@ -594,14 +637,16 @@ build_relation(Pid, {yes_no, {returns, SWords, OWords}}) ->
     case resolve_ident(Pid, SWords) of
         {ok, Subject} ->
             answer(Pid, yes_no, {returns, Subject, name_candidates(OWords)});
-        Error -> Error
+        Error ->
+            Error
     end;
 %% Stage 2b: handles — a branch-level literal equal to the name.
 build_relation(Pid, {yes_no, {handles, SWords, OWords}}) ->
     case resolve_ident(Pid, SWords) of
         {ok, Subject} ->
             answer(Pid, yes_no, {handles, Subject, name_candidates(OWords)});
-        Error -> Error
+        Error ->
+            Error
     end;
 %% Stage 2b: file/config questions prove directly in their answer
 %% clauses — pass the template through.
@@ -677,7 +722,8 @@ dedup_consonant(B) when byte_size(B) >= 2 ->
         true -> binary:part(B, 0, Size - 1);
         false -> B
     end;
-dedup_consonant(B) -> B.
+dedup_consonant(B) ->
+    B.
 
 suffix_of(B, [Suf | Rest]) ->
     Size = byte_size(B),
@@ -686,7 +732,8 @@ suffix_of(B, [Suf | Rest]) ->
         true -> binary:part(B, 0, Size - SufSize);
         false -> suffix_of(B, Rest)
     end;
-suffix_of(_, []) -> nomatch.
+suffix_of(_, []) ->
+    nomatch.
 
 relation_of(<<"call">>) -> calls;
 relation_of(<<"invoke">>) -> calls;
@@ -759,11 +806,15 @@ answer(Pid, count, {callers_of, Object}) ->
         ok ->
             case enumerate_callers(Pid, Object) of
                 {ok, #{<<"answer">> := Callers}} ->
-                    {ok, #{<<"type">> => <<"count">>,
-                           <<"answer">> => length(Callers)}};
-                Other -> Other
+                    {ok, #{
+                        <<"type">> => <<"count">>,
+                        <<"answer">> => length(Callers)
+                    }};
+                Other ->
+                    Other
             end;
-        Unverifiable -> Unverifiable
+        Unverifiable ->
+            Unverifiable
     end;
 %% Prose: evidence, never a verdict (rule 2). No gate — there is nothing
 %% to resolve in free text.
@@ -772,10 +823,13 @@ answer(Pid, prose, Span) ->
     Goal = "text_search(\"" ++ QueryText ++ "\", Hits)",
     case prolog_session:query(Pid, Goal) of
         {ok, [{'Hits', Hits}]} ->
-            {ok, #{<<"type">> => <<"prose">>,
-                   <<"evidence">> => [evidence(H) || H <- Hits]}};
+            {ok, #{
+                <<"type">> => <<"prose">>,
+                <<"evidence">> => [evidence(H) || H <- Hits]
+            }};
         no_solution ->
-            unrecognized;   %% unreachable: text_search binds [] on no hits
+            %% unreachable: text_search binds [] on no hits
+            unrecognized;
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end;
@@ -785,25 +839,34 @@ answer(Pid, prose, Span) ->
 %% candidate name is tried until one proves; none does → false, which
 %% is an answer, not an error.
 answer(Pid, yes_no, {uses, Subject, Candidates}) ->
-    case bool_any(Pid, Candidates,
-                  fun(C) -> expr_ref_anywhere(Subject, C) end) of
+    case
+        bool_any(
+            Pid,
+            Candidates,
+            fun(C) -> expr_ref_anywhere(Subject, C) end
+        )
+    of
         {ok, Bool} -> {ok, yes_no_answer(Bool)};
         Error -> Error
     end;
 %% uses with a file subject — any expr_ref of the name in a file whose
 %% basename matches the question's file name.
 answer(Pid, yes_no, {uses_file, FileBin, Candidates}) ->
-    case bool_any(Pid, Candidates,
-                  fun(C) ->
-                      "findall(F, expr_ref(_, _, _, "
-                          ++ quoted_atom_name(C) ++ ", F, _), L)"
-                  end) of
+    case
+        bool_any(
+            Pid,
+            Candidates,
+            fun(C) ->
+                "findall(F, expr_ref(_, _, _, " ++
+                    quoted_atom_name(C) ++ ", F, _), L)"
+            end
+        )
+    of
         {ok, _} ->
             {ok, yes_no_answer(file_hits(Pid, FileBin, Candidates))};
         Error ->
             Error
     end;
-
 %% returns — a valued return statement in the subject that references
 %% the name: the return_stmt ∧ expr_ref join from the plan, mention
 %% level by design (checks the claim, not value-flow).
@@ -819,25 +882,36 @@ answer(Pid, yes_no, {returns, Subject, Candidates}) ->
         {ok, Lines} ->
             Found = lists:any(
                 fun(Line) ->
-                    ViaRef = mentions_at_line(Pid, Subject, Candidates, Line,
-                                              fun expr_ref_goal/3),
-                    ViaKey = mentions_at_line(Pid, Subject, Candidates, Line,
-                                              fun object_key_goal/3),
+                    ViaRef = mentions_at_line(
+                        Pid,
+                        Subject,
+                        Candidates,
+                        Line,
+                        fun expr_ref_goal/3
+                    ),
+                    ViaKey = mentions_at_line(
+                        Pid,
+                        Subject,
+                        Candidates,
+                        Line,
+                        fun object_key_goal/3
+                    ),
                     mention_true(ViaRef) orelse mention_true(ViaKey)
                 end,
-                Lines),
+                Lines
+            ),
             {ok, yes_no_answer(Found)};
         Error ->
             Error
     end;
-
 %% handles — a branch-level literal whose value equals the name
 %% (case-insensitive), proving "maps/handles X" against literal/7.
 answer(Pid, yes_no, {handles, {'/', SName, SArity}, Candidates}) ->
     %% literal/8: Id, Function, Arity, Kind, Value, File, Line, Raw
     %% (the tool description's literal/7 predates the Raw column).
-    Goal = "findall(V, literal(_, " ++ quoted_atom_name(SName)
-        ++ ", " ++ integer_to_list(SArity) ++ ", _, V, _, _, _), L)",
+    Goal =
+        "findall(V, literal(_, " ++ quoted_atom_name(SName) ++
+            ", " ++ integer_to_list(SArity) ++ ", _, V, _, _, _), L)",
     case prolog_session:query(Pid, Goal) of
         {ok, Bindings} ->
             Values = proplists:get_value('L', Bindings, []),
@@ -849,54 +923,62 @@ answer(Pid, yes_no, {handles, {'/', SName, SArity}, Candidates}) ->
                         Flat -> lists:member(string:lowercase(Flat), Wanted)
                     end
                 end,
-                Values),
+                Values
+            ),
             {ok, yes_no_answer(Found)};
         no_solution ->
             {ok, yes_no_answer(false)};
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end;
-
 %% sites — WHERE is X called: every call site as {caller, file, line},
 %% all three call shapes merged, deduped, sorted by file then line.
 answer(Pid, sites, {call_sites_of, {'/', OName, OArity}}) ->
     OArityText = arity_text(OArity),
-    Goal = "findall(st(C, A, F, L), calls(C, A, local("
-        ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++ "), F, L), L1), "
-        ++ "findall(st(C, A, F, L), calls(C, A, remote(_, "
-        ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++ "), F, L), L2)"
-        ++ member_sites_tail(OName, OArityText),
+    Goal =
+        "findall(st(C, A, F, L), calls(C, A, local(" ++
+            quoted_atom_name(OName) ++ ", " ++ OArityText ++ "), F, L), L1), " ++
+            "findall(st(C, A, F, L), calls(C, A, remote(_, " ++
+            quoted_atom_name(OName) ++ ", " ++ OArityText ++ "), F, L), L2)" ++
+            member_sites_tail(OName, OArityText),
     case prolog_session:query(Pid, Goal) of
         {ok, Bindings} ->
             Sites = lists:usort(
-                [site_entry(I)
-                 || L <- [proplists:get_value('L1', Bindings, []),
-                          proplists:get_value('L2', Bindings, []),
-                          proplists:get_value('L3', Bindings, [])],
-                    I <- L]),
+                [
+                    site_entry(I)
+                 || L <- [
+                        proplists:get_value('L1', Bindings, []),
+                        proplists:get_value('L2', Bindings, []),
+                        proplists:get_value('L3', Bindings, [])
+                    ],
+                    I <- L
+                ]
+            ),
             {ok, #{<<"type">> => <<"sites">>, <<"answer">> => Sites}};
         no_solution ->
             {error, {findall_never_fails, call_sites_of}};
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end;
-
 %% sites — WHERE is X defined: its defines/5 sites.
 answer(Pid, sites, {def_site_of, {'/', SName, _SArity}}) ->
-    Goal = "findall(st(" ++ quoted_atom_name(SName) ++ ", A, F, L), defines("
-        ++ quoted_atom_name(SName) ++ ", A, _, F, L), L1)",
+    Goal =
+        "findall(st(" ++ quoted_atom_name(SName) ++ ", A, F, L), defines(" ++
+            quoted_atom_name(SName) ++ ", A, _, F, L), L1)",
     case prolog_session:query(Pid, Goal) of
         {ok, Bindings} ->
             Sites = lists:usort(
-                [site_entry(I)
-                 || I <- proplists:get_value('L1', Bindings, [])]),
+                [
+                    site_entry(I)
+                 || I <- proplists:get_value('L1', Bindings, [])
+                ]
+            ),
             {ok, #{<<"type">> => <<"sites">>, <<"answer">> => Sites}};
         no_solution ->
             {error, {findall_never_fails, def_site_of}};
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end;
-
 %% calls with a file subject — any call site of the object whose file
 %% basename matches. Reuses the sites answer, which already merges all
 %% three call shapes.
@@ -905,12 +987,12 @@ answer(Pid, yes_no, {calls_file, FileBin, Object}) ->
         {ok, #{<<"answer">> := Sites}} ->
             Found = lists:any(
                 fun(#{<<"file">> := F}) -> file_matches(F, FileBin) end,
-                Sites),
+                Sites
+            ),
             {ok, yes_no_answer(Found)};
         {error, Reason} ->
             {error, Reason}
     end;
-
 %% is file F scanned? — the gate IS the proof: the basename appears in
 %% any fact's File field (defines, comments, paragraphs, config).
 answer(Pid, yes_no, {file_scanned, FileWords}) ->
@@ -918,7 +1000,6 @@ answer(Pid, yes_no, {file_scanned, FileWords}) ->
         {ok, Bool} -> {ok, yes_no_answer(Bool)};
         Error -> Error
     end;
-
 %% is config K defined? — exact dotted key against config_value/4.
 answer(Pid, yes_no, {config_defined, KeyWords}) ->
     Key = file_segment(KeyWords),
@@ -932,18 +1013,20 @@ answer(_Pid, Type, Rel) ->
 member_sites_tail(OName, OArityText) ->
     case split_receiver_method(OName) of
         {Receiver, Method} ->
-            ", findall(st(C, A, F, L), calls(C, A, member("
-                ++ quoted_atom_name(Receiver) ++ ", "
-                ++ quoted_atom_name(Method) ++ ", " ++ OArityText
-                ++ "), F, L), L3)";
+            ", findall(st(C, A, F, L), calls(C, A, member(" ++
+                quoted_atom_name(Receiver) ++ ", " ++
+                quoted_atom_name(Method) ++ ", " ++ OArityText ++
+                "), F, L), L3)";
         none ->
             ""
     end.
 
 site_entry({'st', Caller, CallerArity, File, Line}) ->
-    #{<<"caller">> => render_ident({'-', Caller, CallerArity}),
-      <<"file">> => to_bin(File),
-      <<"line">> => Line};
+    #{
+        <<"caller">> => render_ident({'-', Caller, CallerArity}),
+        <<"file">> => to_bin(File),
+        <<"line">> => Line
+    };
 site_entry(_Other) ->
     #{}.
 
@@ -952,10 +1035,12 @@ file_scanned_check(Pid, FileWords) ->
     %% Each source queried separately: a fact base may not carry every
     %% predicate (paragraph/3 is markdown-only), and an unknown
     %% predicate is an empty source, not an error.
-    Sources = ["findall(F, defines(_, _, _, F, _), L)",
-               "findall(F, comment(F, _, _), L)",
-               "findall(F, paragraph(F, _, _), L)",
-               "findall(F, config_value(F, _, _, _), L)"],
+    Sources = [
+        "findall(F, defines(_, _, _, F, _), L)",
+        "findall(F, comment(F, _, _), L)",
+        "findall(F, paragraph(F, _, _), L)",
+        "findall(F, config_value(F, _, _, _), L)"
+    ],
     Files = lists:append([files_from(Pid, G) || G <- Sources]),
     {ok, lists:any(fun(F) -> file_matches(F, Base) end, Files)}.
 
@@ -982,7 +1067,8 @@ flatten_value(V) when is_list(V) ->
         [C | _] when is_integer(C) -> V;
         _ -> nomatch
     end;
-flatten_value(_) -> nomatch.
+flatten_value(_) ->
+    nomatch.
 
 bool_answer(Pid, Goal) ->
     case prolog_session:query(Pid, Goal) of
@@ -1001,26 +1087,26 @@ bool_any(Pid, [C | Rest], GoalFun) ->
     end.
 
 expr_ref_goal({'/', SName, SArity}, Candidate, Line) ->
-    "expr_ref(_, " ++ quoted_atom_name(SName) ++ ", "
-        ++ integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate)
-        ++ ", _, " ++ integer_to_list(Line) ++ ")".
+    "expr_ref(_, " ++ quoted_atom_name(SName) ++ ", " ++
+        integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate) ++
+        ", _, " ++ integer_to_list(Line) ++ ")".
 
 %% uses stays function-level: "does X use W" asks whether X's code
 %% mentions W anywhere, unlike returns which is line-scoped.
 expr_ref_anywhere({'/', SName, SArity}, Candidate) ->
-    "expr_ref(_, " ++ quoted_atom_name(SName) ++ ", "
-        ++ integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate)
-        ++ ", _, _)".
+    "expr_ref(_, " ++ quoted_atom_name(SName) ++ ", " ++
+        integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate) ++
+        ", _, _)".
 
 %% HasValue is the extractor's string "true" (a charlist in erlog),
-    %% not the atom — matching the atom proves nothing and answers a
-    %% confident false about real returns.
+%% not the atom — matching the atom proves nothing and answers a
+%% confident false about real returns.
 %% HasValue is the atom true (erlog's printer quotes every atom, which
 %% once masqueraded as a string and sent this goal chasing "true").
 object_key_goal({'/', SName, SArity}, Candidate, Line) ->
-    "object_key(" ++ quoted_atom_name(SName) ++ ", "
-        ++ integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate)
-        ++ ", _, " ++ integer_to_list(Line) ++ ")".
+    "object_key(" ++ quoted_atom_name(SName) ++ ", " ++
+        integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate) ++
+        ", _, " ++ integer_to_list(Line) ++ ")".
 
 mentions_at_line(Pid, Subject, Candidates, Line, GoalFun) ->
     bool_any_lenient(Pid, Candidates, fun(C) -> GoalFun(Subject, C, Line) end).
@@ -1041,8 +1127,9 @@ bool_any_lenient(Pid, [C | Rest], GoalFun) ->
     end.
 
 return_lines(Pid, {'/', SName, SArity}) ->
-    Goal = "findall(L, return_stmt(" ++ quoted_atom_name(SName) ++ ", "
-        ++ integer_to_list(SArity) ++ ", true, _, L), Ls)",
+    Goal =
+        "findall(L, return_stmt(" ++ quoted_atom_name(SName) ++ ", " ++
+            integer_to_list(SArity) ++ ", true, _, L), Ls)",
     case prolog_session:query(Pid, Goal) of
         {ok, Bindings} -> {ok, proplists:get_value('Ls', Bindings, [])};
         no_solution -> {ok, []};
@@ -1053,8 +1140,9 @@ return_lines(Pid, {'/', SName, SArity}) ->
 file_hits(Pid, FileBin, Candidates) ->
     Hit = lists:any(
         fun(C) ->
-            Goal = "findall(F, expr_ref(_, _, _, "
-                ++ quoted_atom_name(C) ++ ", F, _), L)",
+            Goal =
+                "findall(F, expr_ref(_, _, _, " ++
+                    quoted_atom_name(C) ++ ", F, _), L)",
             case prolog_session:query(Pid, Goal) of
                 {ok, Bindings} ->
                     Files = proplists:get_value('L', Bindings, []),
@@ -1063,7 +1151,8 @@ file_hits(Pid, FileBin, Candidates) ->
                     false
             end
         end,
-        Candidates),
+        Candidates
+    ),
     Hit.
 
 %% --- the gate: verifiability decided BEFORE proving ---
@@ -1094,8 +1183,10 @@ gate(Pid, Ident, loose) ->
                 no_solution -> {error, {unverifiable, {wrong_arity, Name, Arity}}};
                 {error, Reason} -> {error, {query_failed, Reason}}
             end;
-        no_solution -> ok;
-        {error, Reason} -> {error, {query_failed, Reason}}
+        no_solution ->
+            ok;
+        {error, Reason} ->
+            {error, {query_failed, Reason}}
     end.
 
 %% A gate for a calls-question's both idents at once — subject strict,
@@ -1109,8 +1200,8 @@ gate(Pid, Subject, strict, Object, loose) ->
 %% Name may be an atom (DCG path) or a binary (statistical tier's
 %% resolver) — both render quoted, which is harmless for legal atoms.
 defines_goal(Name, Arity) when is_integer(Arity) ->
-    "defines(" ++ quoted_atom_name(Name) ++ ", " ++ integer_to_list(Arity)
-        ++ ", _, _, _)";
+    "defines(" ++ quoted_atom_name(Name) ++ ", " ++ integer_to_list(Arity) ++
+        ", _, _, _)";
 defines_goal(Name, ArityText) when is_list(ArityText) ->
     "defines(" ++ quoted_atom_name(Name) ++ ", " ++ ArityText ++ ", _, _, _)".
 
@@ -1118,14 +1209,17 @@ defines_goal(Name, ArityText) when is_list(ArityText) ->
 
 yes_no_calls(Pid, {'/', SName, SArity}, {'/', OName, OArity}) ->
     OArityText = arity_text(OArity),
-    Local = "calls(" ++ quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity)
-        ++ ", local(" ++ quoted_atom_name(OName) ++ ", " ++ OArityText
-        ++ "), _, _)",
-    Remote = "calls(" ++ quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity)
-        ++ ", remote(_, " ++ quoted_atom_name(OName) ++ ", " ++ OArityText
-        ++ "), _, _)",
+    Local =
+        "calls(" ++ quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity) ++
+            ", local(" ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++
+            "), _, _)",
+    Remote =
+        "calls(" ++ quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity) ++
+            ", remote(_, " ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++
+            "), _, _)",
     case prolog_session:query(Pid, Local) of
-        {ok, _} -> {ok, yes_no_answer(true)};
+        {ok, _} ->
+            {ok, yes_no_answer(true)};
         no_solution ->
             case prolog_session:query(Pid, Remote) of
                 {ok, _} -> {ok, yes_no_answer(true)};
@@ -1138,10 +1232,11 @@ yes_no_calls(Pid, {'/', SName, SArity}, {'/', OName, OArity}) ->
 
 enumerate_callers(Pid, {'/', OName, OArity}) ->
     OArityText = arity_text(OArity),
-    Goal = "findall(C-A, calls(C, A, local(" ++ quoted_atom_name(OName)
-        ++ ", " ++ OArityText ++ "), _, _), L1), "
-        ++ "findall(C-A, calls(C, A, remote(_, " ++ quoted_atom_name(OName)
-        ++ ", " ++ OArityText ++ "), _, _), L2)" ++ member_findall_tail(OName, OArityText),
+    Goal =
+        "findall(C-A, calls(C, A, local(" ++ quoted_atom_name(OName) ++
+            ", " ++ OArityText ++ "), _, _), L1), " ++
+            "findall(C-A, calls(C, A, remote(_, " ++ quoted_atom_name(OName) ++
+            ", " ++ OArityText ++ "), _, _), L2)" ++ member_findall_tail(OName, OArityText),
     case prolog_session:query(Pid, Goal) of
         {ok, Bindings} ->
             L1 = proplists:get_value('L1', Bindings),
@@ -1149,7 +1244,8 @@ enumerate_callers(Pid, {'/', OName, OArity}) ->
             L3 = proplists:get_value('L3', Bindings, []),
             L4 = proplists:get_value('L4', Bindings, []),
             Callers = lists:usort(
-                [render_ident(I) || I <- L1 ++ L2 ++ L3 ++ L4]),
+                [render_ident(I) || I <- L1 ++ L2 ++ L3 ++ L4]
+            ),
             {ok, #{<<"type">> => <<"enumerate">>, <<"answer">> => Callers}};
         no_solution ->
             {error, {findall_never_fails, callers_of}};
@@ -1168,16 +1264,26 @@ enumerate_callers(Pid, {'/', OName, OArity}) ->
 yes_no_member(Pid, SName, SArity, OName, OArityText) ->
     case split_receiver_method(OName) of
         {Receiver, Method} ->
-            Member = "calls(" ++ quoted_atom_name(SName) ++ ", "
-                ++ integer_to_list(SArity) ++ ", member("
-                ++ quoted_atom_name(Receiver) ++ ", "
-                ++ quoted_atom_name(Method) ++ ", " ++ OArityText
-                ++ "), _, _)",
+            Member =
+                "calls(" ++ quoted_atom_name(SName) ++ ", " ++
+                    integer_to_list(SArity) ++ ", member(" ++
+                    quoted_atom_name(Receiver) ++ ", " ++
+                    quoted_atom_name(Method) ++ ", " ++ OArityText ++
+                    "), _, _)",
             case prolog_session:query(Pid, Member) of
-                {ok, _} -> {ok, yes_no_answer(true)};
-                no_solution -> dotted_remote_probe(Pid, SName, SArity,
-                                                   Receiver, Method, OArityText);
-                {error, Reason} -> {error, {query_failed, Reason}}
+                {ok, _} ->
+                    {ok, yes_no_answer(true)};
+                no_solution ->
+                    dotted_remote_probe(
+                        Pid,
+                        SName,
+                        SArity,
+                        Receiver,
+                        Method,
+                        OArityText
+                    );
+                {error, Reason} ->
+                    {error, {query_failed, Reason}}
             end;
         none ->
             {ok, yes_no_answer(false)}
@@ -1188,10 +1294,11 @@ yes_no_member(Pid, SName, SArity, OName, OArityText) ->
 %% the remote probe, "does handle_query/1 call maps.get/2?" answers a
 %% confident false about a real remote call.
 dotted_remote_probe(Pid, SName, SArity, Receiver, Method, OArityText) ->
-    Remote = "calls(" ++ quoted_atom_name(SName) ++ ", "
-        ++ integer_to_list(SArity) ++ ", remote("
-        ++ quoted_atom_name(Receiver) ++ ", "
-        ++ quoted_atom_name(Method) ++ ", " ++ OArityText ++ "), _, _)",
+    Remote =
+        "calls(" ++ quoted_atom_name(SName) ++ ", " ++
+            integer_to_list(SArity) ++ ", remote(" ++
+            quoted_atom_name(Receiver) ++ ", " ++
+            quoted_atom_name(Method) ++ ", " ++ OArityText ++ "), _, _)",
     case prolog_session:query(Pid, Remote) of
         {ok, _} -> {ok, yes_no_answer(true)};
         no_solution -> {ok, yes_no_answer(false)};
@@ -1203,13 +1310,12 @@ split_receiver_method(Name) when is_atom(Name) ->
 split_receiver_method(Name) when is_binary(Name) ->
     case last_dot(Name, byte_size(Name)) of
         0 -> none;
-        Pos ->
-            {binary:part(Name, 0, Pos - 1),
-             binary:part(Name, Pos, byte_size(Name) - Pos)}
+        Pos -> {binary:part(Name, 0, Pos - 1), binary:part(Name, Pos, byte_size(Name) - Pos)}
     end.
 
 %% Returns the 1-based position just after the last dot, or 0.
-last_dot(Name, 0) -> 0;
+last_dot(Name, 0) ->
+    0;
 last_dot(Name, Pos) when Pos > 0 ->
     case binary:at(Name, Pos - 1) of
         $. -> Pos;
@@ -1221,14 +1327,14 @@ last_dot(Name, Pos) when Pos > 0 ->
 member_findall_tail(OName, OArityText) ->
     case split_receiver_method(OName) of
         {Receiver, Method} ->
-            ", findall(C-A, calls(C, A, member("
-                ++ quoted_atom_name(Receiver) ++ ", "
-                ++ quoted_atom_name(Method) ++ ", " ++ OArityText
-                ++ "), _, _), L3), "
-                ++ "findall(C-A, calls(C, A, remote("
-                ++ quoted_atom_name(Receiver) ++ ", "
-                ++ quoted_atom_name(Method) ++ ", " ++ OArityText
-                ++ "), _, _), L4)";
+            ", findall(C-A, calls(C, A, member(" ++
+                quoted_atom_name(Receiver) ++ ", " ++
+                quoted_atom_name(Method) ++ ", " ++ OArityText ++
+                "), _, _), L3), " ++
+                "findall(C-A, calls(C, A, remote(" ++
+                quoted_atom_name(Receiver) ++ ", " ++
+                quoted_atom_name(Method) ++ ", " ++ OArityText ++
+                "), _, _), L4)";
         none ->
             ""
     end.

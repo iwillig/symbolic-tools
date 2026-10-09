@@ -124,7 +124,10 @@ handle_call({load_facts, Facts}, _From, Erl) ->
         fun(Fact, ErlAcc) ->
             {{succeed, _}, ErlAcc1} = erlog:prove({asserta, Fact}, ErlAcc),
             ErlAcc1
-        end, Erl, Facts),
+        end,
+        Erl,
+        Facts
+    ),
     {reply, ok, Erl1};
 handle_call({query, GoalString, TimeoutMs}, _From, Erl) ->
     case parse_goal(GoalString) of

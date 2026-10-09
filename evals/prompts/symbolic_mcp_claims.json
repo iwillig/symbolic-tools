@@ -1,0 +1,14 @@
+[
+  {
+    "role": "system",
+    "content": "{{system}}"
+  },
+  {
+    "role": "system",
+    "content": "<session>\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\n</session>\n\n<task>\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\n</task>"
+  },
+  {
+    "role": "user",
+    "content": "{{claim}}"
+  }
+]

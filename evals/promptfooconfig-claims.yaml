@@ -1,0 +1,291 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'Symbolic MCP claim-verification eval: replay codebase claims mined from real Claude Code session traces and check whether the model routes each one to a well-formed Prolog goal'
+# Each test's claim is a verbatim-or-condensed statement an LLM made about this
+# repository in a past session (trace file + line noted in the description).
+# Ground truth was established by proving the claim against the current fact
+# base with the symbolic engine BEFORE this config was written. The eval still
+# never executes tools: it checks routing and goal shape, i.e. whether the model
+# picks the predicate that could decide the claim.
+#
+# Ground-truth ledger (verified against the fact base, Oct 9 2026):
+#  1 parse_number/1 in both extractors    TRUE  (ts_extract_typescript.erl:1047, ts_extract_erlang.erl:525)
+#  2 scan_one/1 in symbolic_parse.erl     TRUE  (symbolic_parse.erl:175)
+#  3 scan/1 calls extract_file_timed/1    FALSE (caller is scan_one_file/1, symbolic_parse.erl:189)
+#  4 to_atom/1 has 12 callers             FALSE (37 callers today; 12 was true on Sep 22)
+#  5 no truly-uncalled function in src/   FALSE (find_tagged is truly_uncalled)
+#  6 line/1 duplicated across extractors  TRUE  (duplicate_name: 6 defs)
+#  7 parse/2 in symbolic_codebase.erl     TRUE  (symbolic_codebase.erl:105)
+#  8 handle_call/3 complexity 16           STALE (18 today; 16 was true on Sep 24)
+#  9 walk_scope/5 complexity hotspot       TRUE  (complexity 17)
+# 10 judge doc sections 5 and 9           TRUE  (headings exist at lines 151/208)
+
+prompts:
+  - id: file://prompts/symbolic_mcp_claims.json
+    label: claims
+
+defaultTest:
+  vars:
+    system: file://../QWEN-SYSTEM.md
+
+providers:
+  - id: openai:chat:local
+    label: 'Qwen 3.8 27B (local llama-server)'
+    config:
+      apiBaseUrl: http://localhost:8080/v1
+      apiKeyRequired: false
+      temperature: 0
+      max_tokens: 2048
+      tools:
+        - type: function
+          function:
+            name: mcp__symbolic__parse
+            description: 'Parse a PROJECT and cache its codebase facts in memory, keyed by that project''s own root. Omit path to discover a .symbolic/config.json by walking up from the server''s cwd. A previously cached project is untouched by parsing a different one. Re-parsing the SAME project rescans it and replaces just that entry.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Project root (must have .symbolic/config.json inside) or any plain directory to scan literally'
+                rules:
+                  type: string
+                  description: 'Prolog rules file to consult instead of auto-discovering .symbolic/rules.pl'
+        - type: function
+          function:
+            name: mcp__symbolic__query
+            description: 'Prove a Prolog goal against a cached codebase and return all solutions (capped). Raw facts, from `overview`: defines(Function, Arity, Params, File, Line), export(Function, Arity, File, Line), calls(Caller, CallerArity, CallSpec, File, Line) where CallSpec is local(Callee, ArgCount)/remote(Module, Function, ArgCount)/member(Object, Method, ArgCount), doc(Function, Arity, File, Line, Text), branch(Function, Arity, Kind, File, Line), comment/3, heading/4, paragraph/3, code_block/3, config_value/4, config_section/3. Prefer an existing derived predicate over reinventing it inline, when `parse`''s `rules_file` shows a library was consulted: callees/2, callers/3, undocumented/4, duplicate_name/3 (+all_duplicate_names/1), self_recursive/3, fan_out/3, fan_in/3, no_local_callers/3 (+all_no_local_callers/1), reaches/2, truly_uncalled/3 (+all_truly_uncalled/1 - excludes entry_point/3, so exported API and OTP callbacks are not dead code), real_complexity/4 (+too_complex_real/4, +all_too_complex_real/1 - real McCabe-style branch counting on branch/5, more accurate than too_complex/3''s fan-out proxy), plus the markdown facts heading/4 for documentation claims.'
+            parameters:
+              type: object
+              required: [goal]
+              properties:
+                goal:
+                  type: string
+                  description: 'One Prolog goal over those facts, e.g. calls(X, _, local(parse, 2), File, Line), callers(parse, 2, File), or defines(scan_one, 1, Params, File, Line)'
+                limit:
+                  type: integer
+                  description: 'Max solutions to return (default 50)'
+                path:
+                  type: string
+                  description: 'Which cached directory to query, by the same path passed to parse'
+        - type: function
+          function:
+            name: mcp__symbolic__overview
+            description: 'Report the current state of a cached fact base: whether a codebase is loaded, how many files/languages, and fact counts by predicate.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Which cached directory to report on; omit for the most recently parsed'
+        - type: function
+          function:
+            name: mcp__symbolic__ask
+            description: 'Answer a bounded English question against a cached codebase: does X/N call Y/M, which functions call X/N, how many functions call X/N, is X/N defined, where is X documented. Unverifiable questions come back as {type: unverifiable, reason}; phrasings outside the grammar are an unrecognized error. Callers that need anything the grammar does not cover should write a query goal instead.'
+            parameters:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: 'The question, e.g. "how many functions call query_binary/2?"'
+                path:
+                  type: string
+                  description: 'Which cached directory to ask about; omit for the most recently parsed'
+
+tests:
+  - description: 'trace 19148384 L936 (Sep 24) - claim TRUE - parse_number/1 in both extractors'
+    vars:
+      claim: >-
+        Claim from a past session: "parse_number/1 is defined in ts_extract_typescript.erl, and
+        ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback
+        bug." Verify where parse_number/1 is defined in this codebase.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\bdefines\s*\(/.test(goal) && /parse_number/.test(goal);
+
+  - description: 'trace evals premise (Oct 8) - claim TRUE - scan_one/1 in symbolic_parse.erl'
+    vars:
+      claim: >-
+        Claim from a past session: "the function scan_one/1 is defined in this codebase, in
+        symbolic_parse.erl." Verify where scan_one/1 is defined.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\bdefines\s*\(/.test(goal) && /scan_one/.test(goal);
+
+  - description: 'trace 7d71fbd7 L449 (Sep 24) - claim FALSE - scan/1 vs extract_file_timed/1'
+    vars:
+      claim: >-
+        Claim from a past session: "the new extract_file_timed/1 helper is called by scan/1 in
+        symbolic_parse.erl." Verify which function actually calls extract_file_timed/1.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\b(calls|callers)\s*\(/.test(goal) && /extract_file_timed/.test(goal);
+
+  - description: 'trace c5c66f7d L2695 (Sep 22) - claim STALE/FALSE - to_atom/1 has 12 callers'
+    vars:
+      claim: >-
+        Claim from a past session: "callers(to_atom, 1, ...) returns 12 real callers." Verify how
+        many functions call to_atom/1 in this codebase today.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\b(calls|callers)\s*\(/.test(goal) && /to_atom/.test(goal);
+
+  - description: 'trace 19148384 L146 (Sep 24) - claim FALSE - no dead code in src/'
+    vars:
+      claim: >-
+        Claim from a past session: "this codebase is architecturally clean, with zero dead code:
+        no function in src/ is uncalled." Verify whether any function under src/ is truly
+        uncalled.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /truly_uncalled/.test(goal);
+
+  - description: 'trace 97eac5c7 L105 (Sep 23) - claim TRUE - line/1 duplicated across extractors'
+    vars:
+      claim: >-
+        Claim from a past session: "line/1 is byte-for-byte identical in ts_extract_erlang.erl,
+        ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated
+        across files." Verify that line/1 is a duplicated function name in this codebase.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /(duplicate_name|defines)\s*\(/.test(goal) && /line/.test(goal);
+
+  - description: 'trace evals premise (Oct 8) - claim TRUE - parse/2 in symbolic_codebase.erl'
+    vars:
+      claim: >-
+        Claim from a past session: "parse/2, the function that loads a codebase into the cache,
+        is defined in symbolic_codebase.erl." Verify where parse/2 is defined.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\bdefines\s*\(/.test(goal) && /parse/.test(goal);
+
+  - description: 'trace 19148384 L146 (Sep 24) - claim STALE - handle_call/3 complexity 16'
+    vars:
+      claim: >-
+        Claim from a past session: "handle_call/3, the gen_server callback in
+        symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest
+        real-complexity functions in the codebase." Verify the real complexity of handle_call/3
+        in symbolic_codebase.erl.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /real_complexity/.test(goal) && /handle_call/.test(goal);
+
+  - description: 'trace 19148384 L146 (Sep 24) - claim TRUE - walk_scope/5 complexity hotspot'
+    vars:
+      claim: >-
+        Claim from a past session: "walk_scope/5 in ts_extract_typescript.erl is a real
+        complexity hotspot, one of the highest in the codebase." Verify the real complexity of
+        walk_scope/5 in ts_extract_typescript.erl.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /real_complexity/.test(goal) && /walk_scope/.test(goal);
+
+  - description: 'trace 6adb995a L124 (Oct 8) - claim TRUE - judge doc sections 5 and 9'
+    vars:
+      claim: >-
+        Claim from a past session: "the repo has a research doc,
+        docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework
+        data models' and section 9 is titled 'BEAM ecosystem'." Verify that those sections exist
+        in that document.
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\bheading\s*\(/.test(goal) && /(BEAM|Eval-framework)/.test(goal);
