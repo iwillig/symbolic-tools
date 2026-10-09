@@ -17,9 +17,9 @@ all of them for the version you're bumping *from*:
 
 - `src/symbolic_tools.app.src` — the `{vsn, "X.Y.Z"}` tuple.
 - `rebar.config` — the `relx` `{release, {symbolic_tools, "X.Y.Z"}, ...}`
-  tuple. This is the one that actually ends up in the built release's
-  directory name (`_build/default/rel/symbolic_tools-X.Y.Z`); missing
-  it means the app version and the release version disagree.
+  tuple. This becomes the release metadata directory
+  (`_build/default/rel/symbolic_tools/releases/X.Y.Z`); missing it means
+  the app version and the release version disagree.
 - `Formula/symbolic-tools.rb` — both the `tag:` in the `url` line and
   the separate `version "X.Y.Z"` line. These are independent strings;
   Homebrew doesn't derive one from the other.
@@ -38,8 +38,8 @@ sketch both use `"0.1.0"` as illustrative example data for a
 
 ```sh
 rm -rf _build && rebar3 eunit --cover   # full suite, clean
-rebar3 release                          # confirm the release dir name
-                                         # picked up the new version
+rebar3 release                          # confirm releases/X.Y.Z exists
+                                         # under _build/default/rel/symbolic_tools
 ```
 
 ## 3. Commit, tag, push

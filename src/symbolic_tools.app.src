@@ -1,6 +1,6 @@
 {application, symbolic_tools, [
     {description, "Prolog database and query tools for a software codebase"},
-    {vsn, "0.2.0"},
+    {vsn, "0.3.0"},
     {registered, []},
     {applications, [
         kernel,
