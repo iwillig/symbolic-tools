@@ -237,7 +237,22 @@ call_spec(Callee, Source, ArgCount) ->
              to_atom(symbolic_ts:node_text(Method, Source)), ArgCount};
         "scoped_identifier" ->
             {path, to_atom(symbolic_ts:node_text(Callee, Source)), ArgCount};
+        "generic_function" ->
+            generic_call_spec(Callee, Source, ArgCount);
         _ -> skip
+    end.
+
+generic_call_spec(Node, Source, ArgCount) ->
+    Function = symbolic_ts:node_child_by_field_name(Node, <<"function">>),
+    case symbolic_ts:node_is_null(Function) of
+        true -> skip;
+        false ->
+            case call_spec(Function, Source, ArgCount) of
+                {member, Receiver, Method, _} ->
+                    {member, Receiver, Method, ArgCount};
+                _ ->
+                    {path, to_atom(symbolic_ts:node_text(Node, Source)), ArgCount}
+            end
     end.
 
 caller_node(Node) ->

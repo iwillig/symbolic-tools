@@ -876,13 +876,15 @@ and `rust_module/6`).
 ### Rust `calls/5` and `rust_call/5`
 
 Rust contributes to `calls/5` for call expressions whose callee is a bare
-identifier, a field expression, or a scoped identifier. `path(PathText,
-N)` records the atom-normalized raw callee text even for an unqualified
-identifier; it deliberately does not use `local/2`, because syntax alone
-does not establish that a `use` binding or path resolves locally.
-`member(Receiver, Method, N)` records the syntax-level receiver and
-method. Unsupported callee node shapes (including macro invocations) are
-currently skipped. Calls outside a function body are skipped.
+identifier, a field expression, a scoped identifier, or a generic function
+(turbofish) expression. `path(PathText, N)` records the atom-normalized
+raw callee text even for an unqualified identifier; it deliberately does
+not use `local/2`, because syntax alone does not establish that a `use`
+binding or path resolves locally. `member(Receiver, Method, N)` records
+the syntax-level receiver and method, including methods with turbofish
+arguments. Unsupported callee node shapes (including closure expressions)
+and macro invocations are currently skipped. Calls outside a function
+body are skipped.
 
 `rust_call(Id, CallerFunctionId, CallSpec, File, Line)` gives the call
 site and enclosing `function_item` their respective parse-local byte-span

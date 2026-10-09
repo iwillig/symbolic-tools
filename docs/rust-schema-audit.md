@@ -125,6 +125,30 @@ and Rust input, ensuring the additive view does not displace legacy facts.
 Reconsider migration after coverage and linked call/entry-point facts have
 a common contract, and only with rule-level compatibility tests.
 
+## Rust syntax coverage review (Task 6)
+
+| Area | Current extraction | Deliberate gap / limit |
+|---|---|---|
+| Callable declarations | `function_item` and `function_signature_item`; emits legacy and Rust-specific facts | Closures and macro-generated declarations are not enumerated; no name resolution |
+| Modules | `mod_item`, with inline/external form and parent context | An external `mod name;` is recorded but its referenced file is not traversed |
+| Imports | One `rust_use/4` with raw path text and context | Imports are not resolved or expanded into individual bindings |
+| Visibility | Explicit visibility on selected functions, signatures, modules, and type/value items; private is retained on function/module facts where applicable | No general declaration fact for fields or enum variants; `rust_visibility/5` omits implicit private visibility |
+| Calls | Call expressions with identifier, field, scoped, and generic/turbofish callees; nearest named `function_item` attribution | Macro invocations are not expanded/counted; unsupported callee shapes are skipped; calls outside named functions are skipped |
+| Control flow, bindings, types | Not emitted as Rust-specific families | Match arms, pattern bindings, `?`, return flow, and type relationships remain future candidates |
+
+Task 6 selected generic/turbofish calls as the first high-value coverage
+fix: generic calls are common Rust syntax, and the existing call-expression
+query already finds them, but the extractor previously discarded their
+`generic_function` callee node. The extractor now records generic free/path
+calls with their raw callee text and generic methods with the existing
+`member(Receiver, Method, Arity)` shape. Tests cover both forms. This is
+still syntax-only; type arguments and paths are not resolved.
+
+Macro invocation coverage remains the next strong candidate, but it needs
+a separate contract: macro token trees are not ordinary call expressions,
+and treating their contents as expanded calls would be misleading without
+macro expansion.
+
 ## Acceptance criteria for Task 1
 
 - Predicate semantics and language availability are checked against the

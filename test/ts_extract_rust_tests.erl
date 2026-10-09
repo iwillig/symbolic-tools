@@ -56,6 +56,18 @@ extracts_nested_modules_visibility_and_uses_test() ->
            (_) -> false
         end, Facts)).
 
+extracts_generic_calls_test() ->
+    Source = <<"fn run(input: u8) {\n"
+               "  parse::<u16>(input);\n"
+               "  input.convert::<u32>();\n"
+               "}\n">>,
+    Facts = ts_extract_rust:text("generic_calls.rs", Source),
+    Path = 'generic_calls.rs',
+    ?assert(lists:member(
+        {calls, run, 1, {path, 'parse::<u16>', 1}, Path, 2}, Facts)),
+    ?assert(lists:member(
+        {calls, run, 1, {member, input, convert, 0}, Path, 3}, Facts)).
+
 extracts_calls_with_syntax_shape_and_nearest_function_test() ->
     Source = <<"fn run(x: i32) {\n"
                "  direct(x);\n"
