@@ -32,14 +32,14 @@ ignores the model name in single-model mode.
 
 ## System prompt
 
-Every eval loads `../QWEN-SYSTEM.md` into the first system message
-(`defaultTest.vars.system: file://../QWEN-SYSTEM.md` in each config; the
-prompt files reference it as `{{system}}`). Each prompt file adds a second
-system message with the scenario state (`<session>`: cached or fresh;
-`<task>` for claims). The eval loop:
+Every eval loads `../SYSTEM.md` into the first system message
+(`defaultTest.vars.system: file://../SYSTEM.md` in each config; the prompt
+files reference it as `{{system}}`). Each prompt file adds a second system
+message with the scenario state (`<session>`: cached or fresh; `<task>` for
+claims). The eval loop:
 
 1. Run an eval. Read the failing row's tool call.
-2. Add or change one rule in `QWEN-SYSTEM.md`. Bump `<version>`.
+2. Add or change one rule in `SYSTEM.md`.
 3. Rerun. Keep the rule if the row passes and nothing else regresses.
 
 ## Run
@@ -59,7 +59,7 @@ promptfoo eval -c promptfooconfig.yaml --no-cache --output mcp-output.json
   mined from real Claude Code session traces, each with provenance (trace file
   + line) and ground truth proven against the current fact base before the
   config was written; run the same way, output `claims-output.json`
-- `../QWEN-SYSTEM.md` — the shared system prompt under iteration
+- `../SYSTEM.md` — the shared system prompt under iteration
 - `prompts/symbolic_mcp_cached.json` — scenario: codebase already cached
 - `prompts/symbolic_mcp_fresh.json` — scenario: fresh session, load first
 - `prompts/symbolic_mcp_claims.json` — scenario: verify a past-session claim

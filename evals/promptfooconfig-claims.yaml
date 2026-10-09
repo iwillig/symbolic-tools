@@ -25,7 +25,7 @@ prompts:
 
 defaultTest:
   vars:
-    system: file://../QWEN-SYSTEM.md
+    system: file://../SYSTEM.md
 
 providers:
   - id: openai:chat:local

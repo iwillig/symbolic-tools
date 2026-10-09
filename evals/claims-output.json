@@ -1,8 +1,8 @@
 {
-  "evalId": "eval-FHb-2026-10-09T20:15:21",
+  "evalId": "eval-P86-2026-10-09T22:58:02",
   "results": {
     "version": 3,
-    "timestamp": "2026-10-09T20:15:21.741Z",
+    "timestamp": "2026-10-09T22:58:02.020Z",
     "prompts": [
       {
         "raw": "[{\"role\":\"system\",\"content\":\"{{system}}\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"{{claim}}\"}]",
@@ -16,18 +16,18 @@
           "testErrorCount": 0,
           "assertPassCount": 30,
           "assertFailCount": 0,
-          "totalLatencyMs": 170331,
+          "totalLatencyMs": 166563,
           "tokenUsage": {
-            "prompt": 19017,
-            "completion": 1206,
+            "prompt": 23017,
+            "completion": 1843,
             "cached": 0,
-            "total": 20223,
+            "total": 24860,
             "numRequests": 10,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 13297,
+              "cacheReadInputTokens": 18491,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -99,11 +99,11 @@
             }
           ]
         },
-        "id": "e790a1e8-3735-4e47-9597-4d501b91e5c1",
-        "latencyMs": 26596,
+        "id": "f62fe9dc-3b9f-4a38-8c22-ec255e36ea28",
+        "latencyMs": 17133,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"parse_number/1 is defined in ts_extract_typescript.erl, and ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback bug.\\\" Verify where parse_number/1 is defined in this codebase.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"parse_number/1 is defined in ts_extract_typescript.erl, and ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback bug.\\\" Verify where parse_number/1 is defined in this codebase.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -121,20 +121,20 @@
                 "name": "mcp__symbolic__query",
                 "arguments": "{\"goal\":\"defines(parse_number, 1, Params, File, Line)\"}"
               },
-              "id": "nH2a1vEWnknvgubWvA0zgVnnA259qqpb"
+              "id": "3mlW9d2ZVq4pOZj1yR3Bn7r2TfvIncax"
             }
           ],
           "tokenUsage": {
-            "prompt": 1909,
-            "completion": 95,
+            "prompt": 2309,
+            "completion": 100,
             "cached": 0,
-            "total": 2004,
+            "total": 2409,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 0,
+              "cacheReadInputTokens": 1675,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -153,7 +153,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 26596,
+          "latencyMs": 17133,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -164,7 +164,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1074",
+                "content-length": "1086",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -177,7 +177,7 @@
         "testCase": {
           "description": "trace 19148384 L936 (Sep 24) - claim TRUE - parse_number/1 in both extractors",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"parse_number/1 is defined in ts_extract_typescript.erl, and ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback bug.\" Verify where parse_number/1 is defined in this codebase."
           },
           "assert": [
@@ -201,16 +201,16 @@
         },
         "testIdx": 0,
         "tokenUsage": {
-          "prompt": 1909,
-          "completion": 95,
+          "prompt": 2309,
+          "completion": 100,
           "cached": 0,
-          "total": 2004,
+          "total": 2409,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 0,
+            "cacheReadInputTokens": 1675,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -229,7 +229,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"parse_number/1 is defined in ts_extract_typescript.erl, and ts_extract_erlang.erl has its own parse_number/1 with the identical unprotected-fallback bug.\" Verify where parse_number/1 is defined in this codebase."
         },
         "metadata": {
@@ -238,7 +238,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1074",
+              "content-length": "1086",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -294,11 +294,11 @@
             }
           ]
         },
-        "id": "025c3089-889d-432f-be23-dfd57b25a77e",
-        "latencyMs": 25366,
+        "id": "fb999e6a-8982-4dcf-a07a-1e2854b15cc0",
+        "latencyMs": 14644,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the function scan_one/1 is defined in this codebase, in symbolic_parse.erl.\\\" Verify where scan_one/1 is defined.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the function scan_one/1 is defined in this codebase, in symbolic_parse.erl.\\\" Verify where scan_one/1 is defined.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -316,20 +316,20 @@
                 "name": "mcp__symbolic__query",
                 "arguments": "{\"goal\":\"defines(scan_one, 1, Params, File, Line)\"}"
               },
-              "id": "vM2D5Ehoe2QEfle68XjTtDWa1QK28rQ2"
+              "id": "7cq3GU9LppzNdgWUYBVEakRRPUcpqN5y"
             }
           ],
           "tokenUsage": {
-            "prompt": 1888,
-            "completion": 80,
+            "prompt": 2288,
+            "completion": 72,
             "cached": 0,
-            "total": 1968,
+            "total": 2360,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 1121,
+              "cacheReadInputTokens": 1678,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -348,7 +348,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 25366,
+          "latencyMs": 14644,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -359,7 +359,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1013",
+                "content-length": "980",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -372,7 +372,7 @@
         "testCase": {
           "description": "trace evals premise (Oct 8) - claim TRUE - scan_one/1 in symbolic_parse.erl",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"the function scan_one/1 is defined in this codebase, in symbolic_parse.erl.\" Verify where scan_one/1 is defined."
           },
           "assert": [
@@ -396,16 +396,16 @@
         },
         "testIdx": 1,
         "tokenUsage": {
-          "prompt": 1888,
-          "completion": 80,
+          "prompt": 2288,
+          "completion": 72,
           "cached": 0,
-          "total": 1968,
+          "total": 2360,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 1121,
+            "cacheReadInputTokens": 1678,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -424,7 +424,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"the function scan_one/1 is defined in this codebase, in symbolic_parse.erl.\" Verify where scan_one/1 is defined."
         },
         "metadata": {
@@ -433,7 +433,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1013",
+              "content-length": "980",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -489,11 +489,11 @@
             }
           ]
         },
-        "id": "7e49b3ca-164e-495f-ac8a-b375fe0d3db7",
-        "latencyMs": 28832,
+        "id": "af6aa514-a576-47f7-9174-b54e2f9e82f6",
+        "latencyMs": 24096,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the new extract_file_timed/1 helper is called by scan/1 in symbolic_parse.erl.\\\" Verify which function actually calls extract_file_timed/1.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the new extract_file_timed/1 helper is called by scan/1 in symbolic_parse.erl.\\\" Verify which function actually calls extract_file_timed/1.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -511,20 +511,28 @@
                 "name": "mcp__symbolic__query",
                 "arguments": "{\"goal\":\"callers(extract_file_timed, 1, Callers)\"}"
               },
-              "id": "NPpQ5LfqsDT1oo0HFgb4Ix5c4jRhw54l"
+              "id": "2P5lWSc3gVQoQYeuPglPThtqOiwXtj9e"
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "mcp__symbolic__query",
+                "arguments": "{\"goal\":\"calls(scan, 1, local(extract_file_timed, 1), File, Line)\"}"
+              },
+              "id": "glyiDeCS5sSdWmIuv9CzpFNeIJ9OmkUQ"
             }
           ],
           "tokenUsage": {
-            "prompt": 1893,
-            "completion": 116,
+            "prompt": 2293,
+            "completion": 186,
             "cached": 0,
-            "total": 2009,
+            "total": 2479,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 0,
+              "cacheReadInputTokens": 1680,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -543,7 +551,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 28832,
+          "latencyMs": 24096,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -554,7 +562,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1128",
+                "content-length": "1376",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -567,7 +575,7 @@
         "testCase": {
           "description": "trace 7d71fbd7 L449 (Sep 24) - claim FALSE - scan/1 vs extract_file_timed/1",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"the new extract_file_timed/1 helper is called by scan/1 in symbolic_parse.erl.\" Verify which function actually calls extract_file_timed/1."
           },
           "assert": [
@@ -591,16 +599,16 @@
         },
         "testIdx": 2,
         "tokenUsage": {
-          "prompt": 1893,
-          "completion": 116,
+          "prompt": 2293,
+          "completion": 186,
           "cached": 0,
-          "total": 2009,
+          "total": 2479,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 0,
+            "cacheReadInputTokens": 1680,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -619,7 +627,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"the new extract_file_timed/1 helper is called by scan/1 in symbolic_parse.erl.\" Verify which function actually calls extract_file_timed/1."
         },
         "metadata": {
@@ -628,7 +636,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1128",
+              "content-length": "1376",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -684,11 +692,11 @@
             }
           ]
         },
-        "id": "b66a5eb8-d43d-4858-b427-2c6b7cb2d8f0",
-        "latencyMs": 27635,
+        "id": "2d99b7d8-76d0-4c1b-9569-790d6739a951",
+        "latencyMs": 16753,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"callers(to_atom, 1, ...) returns 12 real callers.\\\" Verify how many functions call to_atom/1 in this codebase today.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"callers(to_atom, 1, ...) returns 12 real callers.\\\" Verify how many functions call to_atom/1 in this codebase today.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -706,20 +714,20 @@
                 "name": "mcp__symbolic__query",
                 "arguments": "{\"goal\":\"callers(to_atom, 1, Callers)\"}"
               },
-              "id": "22yBYRlJfXfhOZER66aserYQ2uS8daU1"
+              "id": "qlTg9UP2AcGhYeK8nqSSGhBYfqoWKPpR"
             }
           ],
           "tokenUsage": {
-            "prompt": 1891,
-            "completion": 105,
+            "prompt": 2291,
+            "completion": 98,
             "cached": 0,
-            "total": 1996,
+            "total": 2389,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 1118,
+              "cacheReadInputTokens": 0,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -738,7 +746,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 27635,
+          "latencyMs": 16753,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -749,7 +757,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1102",
+                "content-length": "1055",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -762,7 +770,7 @@
         "testCase": {
           "description": "trace c5c66f7d L2695 (Sep 22) - claim STALE/FALSE - to_atom/1 has 12 callers",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"callers(to_atom, 1, ...) returns 12 real callers.\" Verify how many functions call to_atom/1 in this codebase today."
           },
           "assert": [
@@ -786,16 +794,16 @@
         },
         "testIdx": 3,
         "tokenUsage": {
-          "prompt": 1891,
-          "completion": 105,
+          "prompt": 2291,
+          "completion": 98,
           "cached": 0,
-          "total": 1996,
+          "total": 2389,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 1118,
+            "cacheReadInputTokens": 0,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -814,7 +822,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"callers(to_atom, 1, ...) returns 12 real callers.\" Verify how many functions call to_atom/1 in this codebase today."
         },
         "metadata": {
@@ -823,7 +831,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1102",
+              "content-length": "1055",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -879,11 +887,11 @@
             }
           ]
         },
-        "id": "ab3e7c26-fed9-4db4-8d60-d10bbb18f206",
-        "latencyMs": 13179,
+        "id": "41132bbf-3761-435d-a6f0-a14c98e09059",
+        "latencyMs": 12082,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"this codebase is architecturally clean, with zero dead code: no function in src/ is uncalled.\\\" Verify whether any function under src/ is truly uncalled.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"this codebase is architecturally clean, with zero dead code: no function in src/ is uncalled.\\\" Verify whether any function under src/ is truly uncalled.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -899,22 +907,22 @@
               "type": "function",
               "function": {
                 "name": "mcp__symbolic__query",
-                "arguments": "{\"goal\":\"truly_uncalled(F, A, File), sub_atom(File, _, _, 0, 'src/')\",\"limit\":50}"
+                "arguments": "{\"goal\":\"truly_uncalled(F, A, File), sub_atom(File, 0, _, _, 'src/')\",\"limit\":50}"
               },
-              "id": "rmPyjbnslZ4dAzhlyZOpmU6W2tPVWY5M"
+              "id": "43vZMrqw8iWZOKxNEU9UfGgetqjOoqll"
             }
           ],
           "tokenUsage": {
-            "prompt": 1894,
-            "completion": 152,
+            "prompt": 2294,
+            "completion": 143,
             "cached": 0,
-            "total": 2046,
+            "total": 2437,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 1843,
+              "cacheReadInputTokens": 2243,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -933,7 +941,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 13179,
+          "latencyMs": 12082,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -944,7 +952,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1272",
+                "content-length": "1237",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -957,7 +965,7 @@
         "testCase": {
           "description": "trace 19148384 L146 (Sep 24) - claim FALSE - no dead code in src/",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"this codebase is architecturally clean, with zero dead code: no function in src/ is uncalled.\" Verify whether any function under src/ is truly uncalled."
           },
           "assert": [
@@ -981,16 +989,16 @@
         },
         "testIdx": 4,
         "tokenUsage": {
-          "prompt": 1894,
-          "completion": 152,
+          "prompt": 2294,
+          "completion": 143,
           "cached": 0,
-          "total": 2046,
+          "total": 2437,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 1843,
+            "cacheReadInputTokens": 2243,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -1009,7 +1017,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"this codebase is architecturally clean, with zero dead code: no function in src/ is uncalled.\" Verify whether any function under src/ is truly uncalled."
         },
         "metadata": {
@@ -1018,7 +1026,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1272",
+              "content-length": "1237",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -1074,11 +1082,11 @@
             }
           ]
         },
-        "id": "454017c5-9798-4fd3-8b92-27914b0cfaeb",
-        "latencyMs": 9177,
+        "id": "2ab1ee20-6986-4e6f-a3d1-6d92a36e5a6f",
+        "latencyMs": 11551,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"line/1 is byte-for-byte identical in ts_extract_erlang.erl, ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated across files.\\\" Verify that line/1 is a duplicated function name in this codebase.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"line/1 is byte-for-byte identical in ts_extract_erlang.erl, ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated across files.\\\" Verify that line/1 is a duplicated function name in this codebase.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -1096,20 +1104,20 @@
                 "name": "mcp__symbolic__query",
                 "arguments": "{\"goal\":\"duplicate_name(line, 1, Files)\"}"
               },
-              "id": "GuhlBhxV39okRasAk4JryDxLR3kJcgiQ"
+              "id": "MdsxRxxs8FrFmYsHvdIVzLLO6mTCiYsd"
             }
           ],
           "tokenUsage": {
-            "prompt": 1915,
-            "completion": 105,
+            "prompt": 2315,
+            "completion": 135,
             "cached": 0,
-            "total": 2020,
+            "total": 2450,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 1843,
+              "cacheReadInputTokens": 2243,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -1128,7 +1136,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 9177,
+          "latencyMs": 11551,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -1139,7 +1147,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1128",
+                "content-length": "1254",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -1152,7 +1160,7 @@
         "testCase": {
           "description": "trace 97eac5c7 L105 (Sep 23) - claim TRUE - line/1 duplicated across extractors",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"line/1 is byte-for-byte identical in ts_extract_erlang.erl, ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated across files.\" Verify that line/1 is a duplicated function name in this codebase."
           },
           "assert": [
@@ -1176,16 +1184,16 @@
         },
         "testIdx": 5,
         "tokenUsage": {
-          "prompt": 1915,
-          "completion": 105,
+          "prompt": 2315,
+          "completion": 135,
           "cached": 0,
-          "total": 2020,
+          "total": 2450,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 1843,
+            "cacheReadInputTokens": 2243,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -1204,7 +1212,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"line/1 is byte-for-byte identical in ts_extract_erlang.erl, ts_extract_typescript.erl, and ts_extract_bash.erl - the same function name is duplicated across files.\" Verify that line/1 is a duplicated function name in this codebase."
         },
         "metadata": {
@@ -1213,7 +1221,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1128",
+              "content-length": "1254",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -1269,11 +1277,11 @@
             }
           ]
         },
-        "id": "8b6991f7-a967-4534-89fc-8ef2b426028d",
-        "latencyMs": 6551,
+        "id": "80036116-b6ad-4341-94fd-6e8ca2a57cca",
+        "latencyMs": 6432,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"parse/2, the function that loads a codebase into the cache, is defined in symbolic_codebase.erl.\\\" Verify where parse/2 is defined.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"parse/2, the function that loads a codebase into the cache, is defined in symbolic_codebase.erl.\\\" Verify where parse/2 is defined.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -1291,20 +1299,20 @@
                 "name": "mcp__symbolic__query",
                 "arguments": "{\"goal\":\"defines(parse, 2, Params, File, Line)\"}"
               },
-              "id": "bGGczpHibFbU35Hwx567fRHKQ5UVvfso"
+              "id": "yuK4bmQR64uQ5uLpb8EZGrMzWwoQKIGR"
             }
           ],
           "tokenUsage": {
-            "prompt": 1892,
-            "completion": 78,
+            "prompt": 2292,
+            "completion": 81,
             "cached": 0,
-            "total": 1970,
+            "total": 2373,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 1843,
+              "cacheReadInputTokens": 2243,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -1323,7 +1331,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 6551,
+          "latencyMs": 6432,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -1334,7 +1342,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1005",
+                "content-length": "1010",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -1347,7 +1355,7 @@
         "testCase": {
           "description": "trace evals premise (Oct 8) - claim TRUE - parse/2 in symbolic_codebase.erl",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"parse/2, the function that loads a codebase into the cache, is defined in symbolic_codebase.erl.\" Verify where parse/2 is defined."
           },
           "assert": [
@@ -1371,16 +1379,16 @@
         },
         "testIdx": 6,
         "tokenUsage": {
-          "prompt": 1892,
-          "completion": 78,
+          "prompt": 2292,
+          "completion": 81,
           "cached": 0,
-          "total": 1970,
+          "total": 2373,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 1843,
+            "cacheReadInputTokens": 2243,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -1399,7 +1407,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"parse/2, the function that loads a codebase into the cache, is defined in symbolic_codebase.erl.\" Verify where parse/2 is defined."
         },
         "metadata": {
@@ -1408,7 +1416,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1005",
+              "content-length": "1010",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -1464,11 +1472,11 @@
             }
           ]
         },
-        "id": "534f3d83-a20b-4dd3-922b-2597fdddde74",
-        "latencyMs": 8157,
+        "id": "05e7f405-246c-433e-92b6-7d43e3fc2e0c",
+        "latencyMs": 8177,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"handle_call/3, the gen_server callback in symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest real-complexity functions in the codebase.\\\" Verify the real complexity of handle_call/3 in symbolic_codebase.erl.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"handle_call/3, the gen_server callback in symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest real-complexity functions in the codebase.\\\" Verify the real complexity of handle_call/3 in symbolic_codebase.erl.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -1484,22 +1492,22 @@
               "type": "function",
               "function": {
                 "name": "mcp__symbolic__query",
-                "arguments": "{\"goal\":\"real_complexity(handle_call, 3, File, Score), sub_atom(File, _, _, 0, 'symbolic_codebase.erl')\"}"
+                "arguments": "{\"goal\":\"real_complexity(handle_call, 3, File, Score), sub_atom(File, _, _, 'symbolic_codebase.erl')\"}"
               },
-              "id": "1CByj9PZc8XJDjnMJt2iGOTBApZA4uFv"
+              "id": "fsXEAGmvd6iW8wLXiqFaRFwIGXM5NmAT"
             }
           ],
           "tokenUsage": {
-            "prompt": 1918,
-            "completion": 95,
+            "prompt": 2318,
+            "completion": 100,
             "cached": 0,
-            "total": 2013,
+            "total": 2418,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 1843,
+              "cacheReadInputTokens": 2243,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -1518,7 +1526,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 8157,
+          "latencyMs": 8177,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -1529,7 +1537,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1075",
+                "content-length": "1091",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -1542,7 +1550,7 @@
         "testCase": {
           "description": "trace 19148384 L146 (Sep 24) - claim STALE - handle_call/3 complexity 16",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"handle_call/3, the gen_server callback in symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest real-complexity functions in the codebase.\" Verify the real complexity of handle_call/3 in symbolic_codebase.erl."
           },
           "assert": [
@@ -1566,16 +1574,16 @@
         },
         "testIdx": 7,
         "tokenUsage": {
-          "prompt": 1918,
-          "completion": 95,
+          "prompt": 2318,
+          "completion": 100,
           "cached": 0,
-          "total": 2013,
+          "total": 2418,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 1843,
+            "cacheReadInputTokens": 2243,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -1594,7 +1602,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"handle_call/3, the gen_server callback in symbolic_codebase.erl, has a real complexity of 16, making it one of the three highest real-complexity functions in the codebase.\" Verify the real complexity of handle_call/3 in symbolic_codebase.erl."
         },
         "metadata": {
@@ -1603,7 +1611,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1075",
+              "content-length": "1091",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -1659,11 +1667,11 @@
             }
           ]
         },
-        "id": "c52d5fdb-d8ba-43cf-a3e7-3904041e7c8f",
-        "latencyMs": 7487,
+        "id": "2f776f07-0fb3-48cf-9113-4d52d93f1efc",
+        "latencyMs": 10018,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"walk_scope/5 in ts_extract_typescript.erl is a real complexity hotspot, one of the highest in the codebase.\\\" Verify the real complexity of walk_scope/5 in ts_extract_typescript.erl.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"walk_scope/5 in ts_extract_typescript.erl is a real complexity hotspot, one of the highest in the codebase.\\\" Verify the real complexity of walk_scope/5 in ts_extract_typescript.erl.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -1681,20 +1689,20 @@
                 "name": "mcp__symbolic__query",
                 "arguments": "{\"goal\":\"real_complexity(walk_scope, 5, File, Score)\"}"
               },
-              "id": "vV38J7kryGNhWaCoei1WBVpKhCLFiA9y"
+              "id": "2Tn2JOzbu2V5h6OnFacN8A8ySdWBgeST"
             }
           ],
           "tokenUsage": {
-            "prompt": 1903,
-            "completion": 99,
+            "prompt": 2303,
+            "completion": 136,
             "cached": 0,
-            "total": 2002,
+            "total": 2439,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 1843,
+              "cacheReadInputTokens": 2243,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -1713,7 +1721,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 7487,
+          "latencyMs": 10018,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -1724,7 +1732,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1095",
+                "content-length": "1254",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -1737,7 +1745,7 @@
         "testCase": {
           "description": "trace 19148384 L146 (Sep 24) - claim TRUE - walk_scope/5 complexity hotspot",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"walk_scope/5 in ts_extract_typescript.erl is a real complexity hotspot, one of the highest in the codebase.\" Verify the real complexity of walk_scope/5 in ts_extract_typescript.erl."
           },
           "assert": [
@@ -1761,16 +1769,16 @@
         },
         "testIdx": 8,
         "tokenUsage": {
-          "prompt": 1903,
-          "completion": 99,
+          "prompt": 2303,
+          "completion": 136,
           "cached": 0,
-          "total": 2002,
+          "total": 2439,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 1843,
+            "cacheReadInputTokens": 2243,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -1789,7 +1797,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"walk_scope/5 in ts_extract_typescript.erl is a real complexity hotspot, one of the highest in the codebase.\" Verify the real complexity of walk_scope/5 in ts_extract_typescript.erl."
         },
         "metadata": {
@@ -1798,7 +1806,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1095",
+              "content-length": "1254",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -1854,11 +1862,11 @@
             }
           ]
         },
-        "id": "a82d5976-7e59-4c47-b67f-aaeee5d216ca",
-        "latencyMs": 17351,
+        "id": "f0a8e234-94c5-45b4-86b6-87350084cfe8",
+        "latencyMs": 45677,
         "namedScores": {},
         "prompt": {
-          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. A Prolog engine, the `symbolic` MCP server, is attached to you. The engine scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<version>0.0.3</version>\\n\\n<tools>\\nmcp__symbolic__parse: load a codebase directory into the cache.\\nmcp__symbolic__query: prove one Prolog goal against the cache.\\nmcp__symbolic__overview: report the cache state (files, fact families).\\nmcp__symbolic__ask: ask one bounded English question against the cache.\\n</tools>\\n\\n<rules>\\n1. Answer every question about a codebase with a tool call. Never answer a codebase question from memory.\\n2. In a fresh session, call `parse` before the first `query`.\\n3. Write one Prolog goal per claim and send it to `query`.\\n4. Answer questions that are not about a codebase directly, with no tool call.\\n</rules>\\n\\n<routing>\\nPrefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.\\n</routing>\\n\\n<schema>\\nFact shapes in the cache. Use these names and argument orders; do not invent predicates.\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Callee, Arity)\\ncallers(Function, Arity, Callers): Callers is the list of functions that call Function/Arity\\ntruly_uncalled(Function, Arity, File): Function/Arity has no caller\\nduplicate_name(Function, Arity, Files): the same name is defined in more than one file\\nreal_complexity(Function, Arity, File, Score)\\nheading(File, Level, Title, Line): a Markdown heading; Title is the full heading text\\nFile is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.\\n</schema>\\n\\n<goals>\\nBind every entity the question or claim names as a constant in the goal: function names, arities, file names, heading titles. A goal made only of variables lists the schema; it proves nothing about the claim.\\nPick the predicate from <schema> that decides the question most directly: `callers/3` for \\\"who calls X\\\", `defines/5` for \\\"where is X defined\\\", `heading/4` for a section title.\\n</goals>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the repo has a research doc, docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework data models' and section 9 is titled 'BEAM ecosystem'.\\\" Verify that those sections exist in that document.\"}]",
+          "raw": "[{\"role\":\"system\",\"content\":\"<identity>\\nYou are a coding agent. The `symbolic` MCP server gives you a Prolog engine.\\nIt scans a codebase into facts and proves goals against those facts.\\n</identity>\\n\\n<tools>\\nUse these tools:\\n\\n- `symbolic_parse { path?, rules? }` scans a project and loads its facts.\\n- `symbolic_query { goal, limit?, path? }` proves a Prolog goal.\\n- `symbolic_overview { path? }` reports the loaded fact base.\\n- `symbolic_ask { question, path? }` answers supported English questions.\\n- `symbolic_search { query, limit?, path? }` searches cached prose facts.\\n- `symbolic_extract { sentence, model? }` extracts a bounded claim.\\n- `symbolic_check { sentence, model?, path? }` extracts and checks a claim.\\n</tools>\\n\\n<rules>\\n1. Use a Symbolic tool for every codebase question.\\n2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.\\n3. Use `query` when you can write a Prolog goal.\\n4. Use `ask` only for its supported English question forms.\\n5. Use `search` for documentation wording and prose evidence.\\n6. Use one conjunctive goal for a compound claim.\\n7. Bind every named function, arity, module, and file in the goal.\\n8. Treat `count: 0` as a failed proof. Report it without guessing.\\n9. Quote a tool error exactly. Do not replace it with source inspection.\\n10. Show the goal and returned bindings when they support a codebase answer.\\n</rules>\\n\\n<routing>\\nUse `parse` with the project root. A project config can define several scan paths.\\n\\nUse `query` for definitions, calls, dependencies, complexity, dead code, and lint results.\\n\\nUse `search` for comments, Markdown, and other indexed prose.\\n\\nUse `extract` only when the user asks to parse a claim from a sentence.\\n\\nUse `check` only when the user asks to verify a claim from a sentence.\\n</routing>\\n\\n<facts>\\nCore fact shapes:\\n\\n```prolog\\ndefines(Function, Arity, Params, File, Line)\\ncalls(Caller, CallerArity, CallSpec, File, Line)\\ndoc(Function, Arity, File, Line, Text)\\ncomment(File, Line, Text)\\nheading(File, Level, Title, Line)\\nbranch(Function, Arity, Kind, File, Line)\\n```\\n\\n`CallSpec` is one of:\\n\\n```prolog\\nlocal(Name, Arity)\\nremote(Module, Name, Arity)\\nmember(Object, Method, Arity)\\nnew(Constructor, Arity)\\n```\\n\\nCommon derived predicates include:\\n\\n```prolog\\ncallees(Function, Callees)\\ncallers(Function, Arity, Callers)\\nreaches(From, To)\\ntruly_uncalled(Function, Arity, File)\\nundocumented(Function, Arity, File, Line)\\nreal_complexity(Function, Arity, File, Score)\\n```\\n\\nFile paths in facts are absolute atoms. Use single quotes for a path.\\n</facts>\\n\\n<goals>\\nUse the most direct predicate.\\n\\n```prolog\\n% Where is foo/2 defined?\\ndefines(foo, 2, _, File, Line)\\n\\n% Does foo/2 call bar/1?\\ncalls(foo, 2, local(bar, 1), File, Line)\\n\\n% Which functions call foo/2?\\ncallers(foo, 2, Callers)\\n\\n% Is foo/2 undocumented and uncalled?\\ntruly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)\\n\\n% Does a Markdown file contain both headings?\\nFile = '/absolute/path/docs/guide.md',\\nheading(File, _, FirstTitle, _), sub_text(FirstTitle, _, _, _, \\\"First heading\\\"),\\nheading(File, _, SecondTitle, _), sub_text(SecondTitle, _, _, _, \\\"Second heading\\\")\\n```\\n\\nMarkdown title text is binary. Use `sub_text/5` to match a title phrase.\\n\\nDo not use a goal of only variables to answer a named claim.\\n\\nUse an `all_*` predicate when it exists for a large audit.\\n</goals>\\n\\n<output>\\nAnswer non-codebase questions directly.\\n\\nFor codebase answers, state the result, then show the goal and JSON result.\\n\\nKeep the answer short. State facts from tool results only.\\n</output>\"},{\"role\":\"system\",\"content\":\"<session>\\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\\n</session>\\n\\n<task>\\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\\n</task>\"},{\"role\":\"user\",\"content\":\"Claim from a past session: \\\"the repo has a research doc, docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework data models' and section 9 is titled 'BEAM ecosystem'.\\\" Verify that those sections exist in that document.\"}]",
           "label": "claims",
           "config": {}
         },
@@ -1874,30 +1882,22 @@
               "type": "function",
               "function": {
                 "name": "mcp__symbolic__query",
-                "arguments": "{\"goal\":\"heading(File, 2, 'Eval-framework data models', Line), sub_atom(File, _, _, 0, 'docs/research-llm-judge-and-benchmarking.md')\"}"
+                "arguments": "{\"goal\":\"heading(File, _, Title1, _), sub_text(Title1, _, _, _, \\\"Eval-framework data models\\\"), heading(File, _, Title2, _), sub_text(Title2, _, _, _, \\\"BEAM ecosystem\\\")\"}"
               },
-              "id": "0lQKoZ2SYAt51R58Os16oxuGxjpHdHky"
-            },
-            {
-              "type": "function",
-              "function": {
-                "name": "mcp__symbolic__query",
-                "arguments": "{\"goal\":\"heading(File, 2, 'BEAM ecosystem', Line), sub_atom(File, _, _, 0, 'docs/research-llm-judge-and-benchmarking.md')\"}"
-              },
-              "id": "jmto7RUrE5lCQYTWhrGtcnrO5NoQl24w"
+              "id": "dEOmtPre21bdfuO4fnjU8mIMr9e7gbHt"
             }
           ],
           "tokenUsage": {
-            "prompt": 1914,
-            "completion": 281,
+            "prompt": 2314,
+            "completion": 792,
             "cached": 0,
-            "total": 2195,
+            "total": 3106,
             "numRequests": 1,
             "completionDetails": {
               "reasoning": 0,
               "acceptedPrediction": 0,
               "rejectedPrediction": 0,
-              "cacheReadInputTokens": 1843,
+              "cacheReadInputTokens": 2243,
               "cacheCreationInputTokens": 0
             },
             "assertions": {
@@ -1916,7 +1916,7 @@
             }
           },
           "cached": false,
-          "latencyMs": 17351,
+          "latencyMs": 45677,
           "finishReason": "tool_calls",
           "guardrails": {
             "flagged": false
@@ -1927,7 +1927,7 @@
               "statusText": "OK",
               "headers": {
                 "access-control-allow-origin": "",
-                "content-length": "1779",
+                "content-length": "3968",
                 "content-type": "application/json; charset=utf-8",
                 "keep-alive": "timeout=5, max=100",
                 "server": "llama.cpp"
@@ -1940,7 +1940,7 @@
         "testCase": {
           "description": "trace 6adb995a L124 (Oct 8) - claim TRUE - judge doc sections 5 and 9",
           "vars": {
-            "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+            "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
             "claim": "Claim from a past session: \"the repo has a research doc, docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework data models' and section 9 is titled 'BEAM ecosystem'.\" Verify that those sections exist in that document."
           },
           "assert": [
@@ -1964,16 +1964,16 @@
         },
         "testIdx": 9,
         "tokenUsage": {
-          "prompt": 1914,
-          "completion": 281,
+          "prompt": 2314,
+          "completion": 792,
           "cached": 0,
-          "total": 2195,
+          "total": 3106,
           "numRequests": 1,
           "completionDetails": {
             "reasoning": 0,
             "acceptedPrediction": 0,
             "rejectedPrediction": 0,
-            "cacheReadInputTokens": 1843,
+            "cacheReadInputTokens": 2243,
             "cacheCreationInputTokens": 0
           },
           "assertions": {
@@ -1992,7 +1992,7 @@
           }
         },
         "vars": {
-          "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md",
+          "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md",
           "claim": "Claim from a past session: \"the repo has a research doc, docs/research-llm-judge-and-benchmarking.md, whose section 5 is titled 'Eval-framework data models' and section 9 is titled 'BEAM ecosystem'.\" Verify that those sections exist in that document."
         },
         "metadata": {
@@ -2001,7 +2001,7 @@
             "statusText": "OK",
             "headers": {
               "access-control-allow-origin": "",
-              "content-length": "1779",
+              "content-length": "3968",
               "content-type": "application/json; charset=utf-8",
               "keep-alive": "timeout=5, max=100",
               "server": "llama.cpp"
@@ -2017,16 +2017,16 @@
       "failures": 0,
       "errors": 0,
       "tokenUsage": {
-        "prompt": 19017,
-        "completion": 1206,
+        "prompt": 23017,
+        "completion": 1843,
         "cached": 0,
-        "total": 20223,
+        "total": 24860,
         "numRequests": 10,
         "completionDetails": {
           "reasoning": 0,
           "acceptedPrediction": 0,
           "rejectedPrediction": 0,
-          "cacheReadInputTokens": 13297,
+          "cacheReadInputTokens": 18491,
           "cacheCreationInputTokens": 0
         },
         "assertions": {
@@ -2044,8 +2044,8 @@
           }
         }
       },
-      "durationMs": 53199,
-      "evaluationDurationMs": 53199
+      "durationMs": 72461,
+      "evaluationDurationMs": 72461
     }
   },
   "config": {
@@ -2381,14 +2381,14 @@
     ],
     "env": {},
     "outputPath": [
-      "claims-output.json"
+      "evals/claims-output.json"
     ],
     "extensions": [],
     "metadata": {},
     "evaluateOptions": {},
     "defaultTest": {
       "vars": {
-        "system": "file:///Users/iwillig/dev/symbolic-tools/QWEN-SYSTEM.md"
+        "system": "file:///Users/iwillig/dev/symbolic-tools/SYSTEM.md"
       },
       "assert": [],
       "options": {},
@@ -2399,11 +2399,11 @@
   "shareableUrl": null,
   "metadata": {
     "promptfooVersion": "0.124.0",
-    "nodeVersion": "v26.11.0",
+    "nodeVersion": "v26.11.1",
     "platform": "darwin",
     "arch": "arm64",
-    "exportedAt": "2026-10-09T20:16:15.000Z",
-    "evaluationCreatedAt": "2026-10-09T20:15:21.741Z"
+    "exportedAt": "2026-10-09T22:59:14.515Z",
+    "evaluationCreatedAt": "2026-10-09T22:58:02.020Z"
   },
   "vars": [
     "system",
@@ -2411,7 +2411,7 @@
   ],
   "runtimeOptions": {
     "eventSource": "cli",
-    "showProgressBar": false,
+    "showProgressBar": true,
     "repeat": 1,
     "maxConcurrency": 4,
     "cache": false
