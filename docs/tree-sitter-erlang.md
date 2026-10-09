@@ -189,6 +189,20 @@ erlog / Prolog    -->  relational queries over the graph     (the MCP tools)
    between its `typescript` and `tsx` grammars), vendor that too and
    add its directory as a `build.include(...)` in the same script.
 
+Rust grammar integration (parser/NIF only) is vendored under
+`c_src/grammars/rust/` from `tree-sitter/tree-sitter-rust` commit
+`77a3747266f4d621d0757825e6b11edcbf991ca5` (grammar 0.24.2, ABI 15,
+MIT). Its external scanner requires `scanner.c` and the grammar-local
+`tree_sitter/{alloc.h,array.h,parser.h}` headers; these are compiled by
+the existing `build.rs` grammar loop. `symbolic_ts:tree_sitter_rust/0`
+loads that grammar, and `.rs` dispatches to `ts_extract_rust`. The
+extractor currently emits syntax-level function, call, module, import,
+and visibility facts; it does not resolve names, expand macros, or follow
+external modules. See [`prolog-schema.md`](prolog-schema.md)'s Rust
+section for the exact fact contracts and
+[`rust-schema-audit.md`](rust-schema-audit.md) for the broader schema
+work plan.
+
 Once loaded, the language's own public query names
 (`function_declaration`, `call_expression`, `member_expression` for
 TypeScript vs. `function_clause`, `call`, `remote` for Erlang, vs.

@@ -24,6 +24,7 @@
     tree_sitter_json/0,
     tree_sitter_bash/0,
     tree_sitter_jsdoc/0,
+    tree_sitter_rust/0,
     parser_new/0,
     parser_set_language/2,
     parser_parse_string/2,
@@ -67,6 +68,7 @@ tree_sitter_toml() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_json() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_bash() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_jsdoc() -> erlang:nif_error(nif_not_loaded).
+tree_sitter_rust() -> erlang:nif_error(nif_not_loaded).
 parser_new() -> erlang:nif_error(nif_not_loaded).
 parser_set_language(_Parser, _Language) -> erlang:nif_error(nif_not_loaded).
 parser_parse_string(_Parser, _Source) -> erlang:nif_error(nif_not_loaded).

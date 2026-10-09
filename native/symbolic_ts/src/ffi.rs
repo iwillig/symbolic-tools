@@ -56,6 +56,7 @@ extern "C" {
     pub fn tree_sitter_json() -> *const TSLanguage;
     pub fn tree_sitter_bash() -> *const TSLanguage;
     pub fn tree_sitter_jsdoc() -> *const TSLanguage;
+    pub fn tree_sitter_rust() -> *const TSLanguage;
 
     // Parser.
     pub fn ts_parser_new() -> *mut TSParser;

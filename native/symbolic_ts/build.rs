@@ -12,7 +12,7 @@
 //     gate (scripts/parity_check.sh) depends on zero drift here.
 use std::path::PathBuf;
 
-const GRAMMARS: [&str; 7] = [
+const GRAMMARS: [&str; 8] = [
     "erlang",
     "typescript",
     "markdown",
@@ -20,6 +20,7 @@ const GRAMMARS: [&str; 7] = [
     "json",
     "bash",
     "jsdoc",
+    "rust",
 ];
 
 fn main() {

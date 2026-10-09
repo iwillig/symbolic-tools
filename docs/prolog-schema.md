@@ -16,9 +16,9 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 
 | Predicate | Produced by | Meaning |
 |---|---|---|
-| `defines/5` | Erlang, TypeScript, Bash | A named function/definition exists |
+| `defines/5` | Erlang, TypeScript, Bash, Rust | A named function/definition exists |
 | `export/4` | Erlang | A function an `-export` list makes callable from outside the file |
-| `calls/5` | Erlang, TypeScript, Bash | A call site, shape varies per language |
+| `calls/5` | Erlang, TypeScript, Bash, Rust | A call site, shape varies per language |
 | `comment/3` | Erlang, TypeScript, Bash | Every comment, unconditionally |
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
 | `doc_tag/8` | TypeScript | One structured `@`-tag from inside a `doc/5` comment |
@@ -48,6 +48,11 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `example_calls/5` | Markdown | A `calls/5`-equivalent, but from inside a fenced code sample |
 | `config_value/4` | TOML, JSON | A dotted key path resolving to a scalar value |
 | `config_section/3` | TOML, JSON | A named table/object container exists |
+| `rust_function/9` | Rust | Function/method declaration with source-span identity, syntactic kind, context, and visibility |
+| `rust_module/6` | Rust | Module declaration, parent context, inline/external form, and visibility |
+| `rust_use/4` | Rust | Raw path and containing context of a `use` declaration; no resolution implied |
+| `rust_visibility/5` | Rust | Explicit public visibility on selected item nodes, keyed by source span |
+| `rust_call/5` | Rust | Call site linked to its enclosing function's source-span identity |
 
 Three genuinely different *shapes* of fact live in this one schema:
 **code facts** (something with named definitions and call sites),
@@ -69,12 +74,13 @@ itself.
 ## Code facts: `defines/5`, `calls/5`, `comment/3`, `doc/5`
 
 Produced by `src/ts_extract_erlang.erl`, `src/ts_extract_typescript.erl`,
-and `src/ts_extract_bash.erl` — one query set per language (no shared
-extraction code between them, a deliberate choice explained in each
-module's own header), but the same four predicate names and arities
-across all three, so a query written against one language's facts
-reads the same way against another's. The one exception is `export/4`,
-which Erlang has and the other two don't — see below.
+`src/ts_extract_bash.erl`, and `src/ts_extract_rust.erl` — one query set
+per language (no shared extraction code between them, a deliberate choice
+explained in each module's own header). The common predicate names provide
+useful shared entry points, but do not erase language-specific semantics.
+The exceptions include Erlang's `export/4`, TypeScript's
+`export_decl/4`, and Rust's additional `rust_*` facts — see below and the
+Rust section at the end of this document.
 
 ### `defines(Function, Arity, Params, File, Line)`
 
@@ -187,6 +193,7 @@ a local one) and `anonymous_fun` (names nothing at all).
   | Erlang | `local(Callee, ArgCount)`, `remote(Module, Function, ArgCount)` | `local(bar, 1)`, `remote(io, format, 2)` |
   | TypeScript | `local(Callee, ArgCount)`, `member(Object, Method, ArgCount)`, `new(Constructor, ArgCount)` | `local(bar, 1)`, `member(console, log, 1)`, `new(RegExp, 1)` |
   | Bash | `local(Command, ArgCount)` only | `local(build, 0)` |
+  | Rust | `path(PathText, ArgCount)`, `member(Receiver, Method, ArgCount)` | `path(parse, 1)`, `member(self, save, 1)`, `path('crate::io::read', 1)` |
 
   Bash has no qualified-call syntax (nothing like `mod:fun()` or
   `obj.method()`) to tell a call to a same-script function apart from a
@@ -792,6 +799,74 @@ array of objects produces multiple `config_section`/`config_value`
 facts **sharing the same `Path`**, each with its own `Line` — the
 correct shape for "list every host across all `[[servers]]` blocks,"
 since this pass doesn't do numeric array indexing.
+
+## Rust facts: syntax-level functions, modules, imports, and calls
+
+Produced by `src/ts_extract_rust.erl`. Rust facts come from the
+`tree-sitter-rust` concrete syntax tree. They are syntactic evidence only:
+there is no macro expansion, type checking, or cross-file name resolution.
+
+Rust emits `defines/5` for `function_item` and
+`function_signature_item` nodes. The name and arity are syntactic; arity is
+the number of named children in `parameters`, including `self` when
+present. `Params` is the raw parameter-list source text. Because
+`defines/5` has no containing-module or impl identity, `rust_function/9`
+adds that context and a source-span identity:
+
+### `rust_function(Id, Name, Arity, Params, Kind, Context, Visibility, File, Line)`
+
+`Id` is `{File, StartByte, EndByte}`, unique for that item in this parse
+but not stable across edits. `Kind` is `function`, `method`,
+`trait_method`, `trait_signature`, or `declaration`. `Context` is a binary
+containing the enclosing inline modules, traits, and/or impl type text;
+it is descriptive syntax, not a canonical Rust path. `Visibility` is
+`private`, `public`, `{public, crate}`, `{public, super}`, or
+`{public_in, PathText}`. `File` and `Line` follow the conventions of
+`defines/5`.
+
+### `rust_module(Name, ParentContext, Form, Visibility, File, Line)`
+
+One fact per `mod_item`. `Form` is `inline` when the item has a body and
+`external` otherwise. `ParentContext` is the enclosing module/trait/impl
+context as descriptive binary text (empty binary at file scope).
+`Visibility` uses the same values as `rust_function/9`. External module
+contents are not followed; a `mod name;` fact describes only that
+in-file declaration.
+
+### `rust_use(PathText, Context, File, Line)`
+
+The raw imported syntax after `use` and before the terminating semicolon,
+as a binary. `Context` is the descriptive parent module/trait/impl
+context used by `rust_function/9` and `rust_module/6` (empty at file
+scope). Grouped imports and aliases remain raw syntax. This does not
+resolve a path or enumerate individual imported bindings.
+
+### `rust_visibility(Id, Kind, Visibility, File, Line)`
+
+Emitted only for explicitly public item nodes among functions, function
+signatures, modules, structs, enums, unions, traits, type aliases,
+constants, and statics. `Kind` is the grammar node type as an atom; `Id`
+is the item's `{File, StartByte, EndByte}` span. Private visibility is
+not emitted in this predicate (it remains available on `rust_function/9`
+and `rust_module/6`).
+
+### Rust `calls/5` and `rust_call/5`
+
+Rust contributes to `calls/5` for call expressions whose callee is a bare
+identifier, a field expression, or a scoped identifier. `path(PathText,
+N)` records the atom-normalized raw callee text even for an unqualified
+identifier; it deliberately does not use `local/2`, because syntax alone
+does not establish that a `use` binding or path resolves locally.
+`member(Receiver, Method, N)` records the syntax-level receiver and
+method. Unsupported callee node shapes (including macro invocations) are
+currently skipped. Calls outside a function body are skipped.
+
+`rust_call(Id, CallerFunctionId, CallSpec, File, Line)` gives the call
+site and enclosing `function_item` their respective parse-local byte-span
+IDs. This preserves the relationship when same-named functions with the
+same arity occur in different module/impl contexts, which the legacy
+`calls/5` shape cannot express by itself. `Id` values are not persistent
+across edits.
 
 ## What's deliberately not here yet
 

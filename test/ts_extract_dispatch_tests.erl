@@ -21,6 +21,21 @@ dispatches_erl_test() ->
         ts_extract:file(Path)),
     ok = file:delete(Path).
 
+rust_grammar_loads_and_parses_test() ->
+    {ok, Parser} = symbolic_ts:parser_new(),
+    {ok, Lang} = symbolic_ts:tree_sitter_rust(),
+    ?assertEqual(true, symbolic_ts:parser_set_language(Parser, Lang)),
+    Tree = symbolic_ts:parser_parse_string(Parser, <<"fn answer() -> u32 { 42 }\n">>),
+    Root = symbolic_ts:tree_root_node(Tree),
+    ?assertEqual("source_file", symbolic_ts:node_type(Root)),
+    Function = symbolic_ts:node_named_child(Root, 0),
+    ?assertEqual("function_item", symbolic_ts:node_type(Function)).
+
+dispatches_rust_test() ->
+    ?assertEqual(
+        ts_extract_rust:file("test/fixtures/rust_sample.rs"),
+        ts_extract:file("test/fixtures/rust_sample.rs")).
+
 dispatches_ts_test() ->
     ?assertEqual(
         ts_extract_typescript:file("test/fixtures/sample.ts"),
