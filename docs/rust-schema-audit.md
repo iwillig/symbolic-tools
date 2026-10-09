@@ -83,6 +83,30 @@ The first three should be enough to validate the parser/extractor seam;
 items 4–6 are schema design probes, not a requirement to implement every
 one in the first Rust release.
 
+## First normalized slice: `function_decl/7`
+
+Task 4 adds `function_decl(Id, Language, Name, Arity, Kind, File, Line)`
+for selected named callable syntax in Erlang, TypeScript, and Rust. This is
+a common tuple shape and query surface, not a claim that the languages
+share one declaration model. `Kind` keeps the relevant grammar distinction
+visible; `Id` is a parse-local source span; existing `defines/5` and
+Rust-specific context/visibility facts remain available and unchanged.
+
+This is the first slice because all three extractors already identify
+named callable syntax, but their current `defines/5` facts lack a common
+identity and declaration-kind field. Other candidates—especially
+visibility and calls—have materially different semantics across the
+languages and need more design before normalization. For example, a Rust
+bare identifier in call position is not necessarily a local function
+reference, so it remains a Rust `path(...)` CallSpec rather than being
+forced into Erlang/TypeScript's `local(...)` vocabulary.
+
+Coverage is intentionally bounded: Erlang emits one record per function
+clause; TypeScript currently covers function and generator declarations,
+not class methods; Rust covers function items, methods, and signatures.
+These limits are explicit and can expand as extractor evidence and query
+needs justify it.
+
 ## Acceptance criteria for Task 1
 
 - Predicate semantics and language availability are checked against the

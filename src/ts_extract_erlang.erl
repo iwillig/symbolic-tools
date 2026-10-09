@@ -205,6 +205,7 @@ text(Path, Src0) ->
     PathAtom = list_to_atom(Path),
     Facts =
         defines(Lang, Root, Src, PathAtom) ++
+        function_decls(Lang, Root, Src, PathAtom) ++
         exports(Lang, Root, Src, PathAtom) ++
         local_calls(Lang, Root, Src, PathAtom) ++
         remote_calls(Lang, Root, Src, PathAtom) ++
@@ -288,6 +289,21 @@ define_fact(NameNode, Src, PathAtom) ->
     {Arity, Params} = args_shape(Clause, <<"args">>, Src),
     {defines, to_atom(symbolic_ts:node_text(NameNode, Src)), Arity, Params,
      PathAtom, line(NameNode)}.
+
+%% Normalized syntax-level callable declaration. Erlang emits one record
+%% per function_clause, preserving the grammar's clause-level granularity.
+function_decls(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?DEF_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    lists:usort([
+        begin
+            Clause = symbolic_ts:node_parent(NameNode),
+            {Arity, _Params} = args_shape(Clause, <<"args">>, Src),
+            {function_decl, node_id(PathAtom, Clause), erlang,
+             to_atom(symbolic_ts:node_text(NameNode, Src)), Arity,
+             clause, PathAtom, line(Clause)}
+        end || {"fun_name", NameNode} <- Caps
+    ]).
 
 %% A node's "args" field (an `expr_args` node, e.g. "(A, B)") — see this
 %% module's header for why its named-child count is the real arity.

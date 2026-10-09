@@ -71,6 +71,7 @@ function_facts(Node, Source, Path) ->
             Line = line(Node),
             [
                 {defines, Name, Arity, Params, Path, Line},
+                {function_decl, Id, rust, Name, Arity, Kind, Path, Line},
                 {rust_function, Id, Name, Arity, Params, Kind, Context, Visibility, Path, Line}
             ]
     end.

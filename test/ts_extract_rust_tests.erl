@@ -12,6 +12,10 @@ extracts_free_functions_and_method_signatures_test() ->
     ?assert(lists:member({defines, method, 2, <<"(&self, x: i32)">>, Path, 2}, Facts)),
     ?assert(lists:member({defines, convert, 2, <<"(&self, x: i32)">>, Path, 3}, Facts)),
     ?assert(lists:any(
+        fun({function_decl, _, rust, convert, 2, trait_signature, P, 3}) -> P =:= Path;
+           (_) -> false
+        end, Facts)),
+    ?assert(lists:any(
         fun({rust_function, _, make, 0, <<"()">>, method, <<"impl Widget">>, private, P, 2}) -> P =:= Path;
            (_) -> false
         end, Facts)),

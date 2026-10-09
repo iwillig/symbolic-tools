@@ -9,6 +9,14 @@ extracts_defines_test() ->
     ?assert(lists:member({defines, foo, 1, <<"(X)">>, Path, 4}, Facts)),
     ?assert(lists:member({defines, other, 0, <<"()">>, Path, 8}, Facts)).
 
+extracts_normalized_function_declarations_test() ->
+    Facts = ts_extract_erlang:text("normalized.erl", "foo(X) -> ok.\nfoo(X, Y) -> {X, Y}."),
+    Path = 'normalized.erl',
+    DeclFacts = [{Arity, Line} ||
+                 {function_decl, _, erlang, foo, Arity, clause, Path0, Line} <- Facts,
+                 Path0 =:= Path],
+    ?assertEqual(lists:sort([{1, 1}, {2, 2}]), lists:sort(DeclFacts)).
+
 extracts_arity_for_destructured_args_test() ->
     %% A destructured pattern ({Y,Z}, [H|T]) is still one named child, so
     %% one argument — confirmed empirically against the real grammar, not

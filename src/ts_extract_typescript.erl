@@ -248,6 +248,7 @@ text(Path, Src0) ->
     PathAtom = list_to_atom(Path),
     Facts =
         defines(Lang, Root, Src, PathAtom) ++
+        function_decl_facts(Lang, Root, Src, PathAtom) ++
         local_calls(Lang, Root, Src, PathAtom) ++
         member_calls(Lang, Root, Src, PathAtom) ++
         new_calls(Lang, Root, Src, PathAtom) ++
@@ -296,6 +297,29 @@ generator_defines(Lang, Root, Src, PathAtom) ->
         define_fact(N, Src, PathAtom)
      || {"fun_name", N} <- Caps
     ]).
+
+%% Common, additive declaration view. It includes the same named function
+%% declarations already represented by defines/5, plus their parse-local
+%% source-span identity and an explicit syntax kind. Methods are not yet
+%% part of TypeScript defines/5 and are therefore not claimed here.
+function_decl_facts(Lang, Root, Src, PathAtom) ->
+    Queries = [
+        {<<"(function_declaration) @f">>, function},
+        {<<"(generator_function_declaration) @f">>, generator_function}
+    ],
+    lists:flatmap(
+        fun({Query, Kind}) ->
+            {Q, _, _} = symbolic_ts:query_new(Lang, Query),
+            Caps = symbolic_ts:query_capture(Root, Q),
+            [function_decl_fact(Node, Kind, Src, PathAtom) || {"f", Node} <- Caps]
+        end, Queries).
+
+function_decl_fact(Node, Kind, Src, PathAtom) ->
+    NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+    ParamsNode = symbolic_ts:node_child_by_field_name(Node, <<"parameters">>),
+    {function_decl, node_id(PathAtom, Node), typescript,
+     to_atom(symbolic_ts:node_text(NameNode, Src)),
+     symbolic_ts:node_named_child_count(ParamsNode), Kind, PathAtom, line(Node)}.
 
 %% async_function/4: a function_declaration with a literal `async` token
 %% child — Name/Arity read directly off the captured node's own fields,

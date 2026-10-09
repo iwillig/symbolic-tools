@@ -9,6 +9,17 @@ extracts_defines_test() ->
     ?assert(lists:member({defines, foo, 1, <<"(x: number)">>, Path, 1}, Facts)),
     ?assert(lists:member({defines, other, 0, <<"()">>, Path, 6}, Facts)).
 
+extracts_normalized_function_declarations_test() ->
+    Facts = ts_extract_typescript:text(
+        "normalized.ts", "function ordinary(x: number) {}\nfunction* generated() {}"),
+    Path = 'normalized.ts',
+    Kinds = lists:sort([
+        {Name, Arity, Kind} ||
+        {function_decl, _, typescript, Name, Arity, Kind, Path0, _Line} <- Facts,
+        Path0 =:= Path
+    ]),
+    ?assertEqual([{generated, 0, generator_function}, {ordinary, 1, function}], Kinds).
+
 extracts_local_call_test() ->
     Facts = ts_extract_typescript:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),

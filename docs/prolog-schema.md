@@ -17,6 +17,7 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | Predicate | Produced by | Meaning |
 |---|---|---|
 | `defines/5` | Erlang, TypeScript, Bash, Rust | A named function/definition exists |
+| `function_decl/7` | Erlang, TypeScript, Rust | Normalized syntax-level function declaration/clause with parse-local identity and language kind |
 | `export/4` | Erlang | A function an `-export` list makes callable from outside the file |
 | `calls/5` | Erlang, TypeScript, Bash, Rust | A call site, shape varies per language |
 | `comment/3` | Erlang, TypeScript, Bash | Every comment, unconditionally |
@@ -799,6 +800,28 @@ array of objects produces multiple `config_section`/`config_value`
 facts **sharing the same `Path`**, each with its own `Line` — the
 correct shape for "list every host across all `[[servers]]` blocks,"
 since this pass doesn't do numeric array indexing.
+
+## Normalized callable declaration: `function_decl/7`
+
+`function_decl(Id, Language, Name, Arity, Kind, File, Line)` is an
+additive common view of selected named callable syntax in Erlang,
+TypeScript, and Rust. `Id` is `{File, StartByte, EndByte}` and is unique
+within the parsed source snapshot, not stable across edits. `Language` is
+`erlang`, `typescript`, or `rust`; `Name` and `Arity` have the meanings
+used by `defines/5`; `Kind` preserves the syntax distinction rather than
+pretending every language has the same declaration model:
+
+- Erlang: `clause`, one fact per `function_clause` (multi-clause
+  functions therefore have multiple records).
+- TypeScript: `function` or `generator_function`, for the named function
+  declaration forms currently captured by `defines/5`.
+- Rust: `function`, `method`, `trait_method`, `trait_signature`, or
+  `declaration`, as described under `rust_function/9`.
+
+This predicate normalizes tuple shape and provides a cross-language
+query surface; it does not assert equivalent declaration semantics or
+complete language coverage. In particular, TypeScript class methods are
+not yet included. Existing `defines/5` remains supported and unchanged.
 
 ## Rust facts: syntax-level functions, modules, imports, and calls
 
