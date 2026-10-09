@@ -122,6 +122,17 @@
 %% names nothing.
 -define(FUN_REF_QUERY, <<"(internal_fun) @fun">>).
 
+%% OTP 27+ `-moduledoc`/`-doc` attributes land in `wild_attribute`
+%% (children [attr_name, paren_expr] — confirmed by dumping the tree,
+%% not assumed). Only the `{file, "path.md"}` tuple form is honored
+%% here: an inline string or metadata map documents nothing external,
+%% and the extractor's job is the file reference. Single-capture query on
+%% purpose — a multi-capture pattern over this shape returns each match
+%% once per capture (the quirk ?DEF_QUERY's own header documents), and
+%% the kind/path walk below is done on the node, not in the pattern.
+-define(WILD_ATTR_QUERY, <<"(wild_attribute) @a">>).
+-define(MODULE_ATTR_QUERY, <<"(module_attribute) @m">>).
+
 %% One query per decision-point construct, for real (McCabe-style)
 %% complexity instead of the fan_out/3-based proxy too_complex/3 uses.
 %% cr_clause covers BOTH `case ... of` arms and `receive` arms (same
@@ -212,6 +223,7 @@ text(Path, Src0) ->
         fun_refs(Lang, Root, Src, PathAtom) ++
         comments(Lang, Root, Src, PathAtom) ++
         docs(Lang, Root, Src, PathAtom) ++
+        external_docs(Lang, Root, Src, Path, PathAtom) ++
         branches(Lang, Root, Src, PathAtom) ++
         exprs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
@@ -586,6 +598,143 @@ definition_name(Node, Src) ->
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
         _ ->
             false
+    end.
+
+%% -moduledoc({file, "..."}) / -doc({file, "..."}) — external Markdown
+%% documentation attributes (OTP 27+; see the Erlang docs' "External
+%% documentation files"). A -doc's resolved text becomes a regular doc/5
+%% fact anchored at the attribute's own line, targeted at the next
+%% sibling fun_decl — the exact attribution a preceding comment run gets,
+%% so existing consumers (undocumented/4, search) need no changes. A
+%% -moduledoc becomes module_doc/5: there is no Function/Arity to key a
+%% doc/5 on, and the module name (from -module, one attribute earlier)
+%% is the natural anchor. Unresolvable references (missing file, path
+%% outside the source dir's reach, inline rather than {file, ...} form)
+%% emit nothing — a broken link is the compiler's warning to raise, not
+%% this extractor's guess to fill in.
+external_docs(Lang, Root, Src, Path, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?WILD_ATTR_QUERY),
+    Attrs = lists:usort([N || {"a", N} <- symbolic_ts:query_capture(Root, Q)]),
+    Module = module_name(Lang, Root, Src),
+    lists:filtermap(
+        fun(Attr) -> external_doc_fact(Attr, Src, Path, PathAtom, Module) end,
+        Attrs).
+
+module_name(Lang, Root, Src) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?MODULE_ATTR_QUERY),
+    case lists:usort([N || {"m", N} <- symbolic_ts:query_capture(Root, Q)]) of
+        [Attr | _] ->
+            %% module_attribute's ONE named child is the module atom
+            %% itself (confirmed by dumping the tree — no paren_expr
+            %% wrapper, unlike wild_attribute).
+            case symbolic_ts:node_named_child(Attr, 0) of
+                Atom when Atom =/= undefined ->
+                    to_atom(symbolic_ts:node_text(Atom, Src));
+                undefined ->
+                    undefined
+            end;
+        [] ->
+            undefined
+    end.
+
+external_doc_fact(Attr, Src, Path, PathAtom, Module) ->
+    case attr_file_ref(Attr, Src) of
+        {ok, RelPath} ->
+            case read_doc_file(Path, RelPath) of
+                {ok, Text} ->
+                    case attr_kind(Attr, Src) of
+                        moduledoc ->
+                            {true, {module_doc, Module, PathAtom, line(Attr), Text}};
+                        doc ->
+                            case symbolic_ts:node_next_sibling(Attr) of
+                                undefined -> false;
+                                Target ->
+                                    case definition_name(Target, Src) of
+                                        {Name, Arity} ->
+                                            {true, {doc, Name, Arity, PathAtom,
+                                                line(Attr), Text}};
+                                        false ->
+                                            false
+                                    end
+                            end;
+                        other ->
+                            false
+                    end;
+                error ->
+                    false
+            end;
+        error ->
+            false
+    end.
+
+attr_kind(Attr, Src) ->
+    NameNode = symbolic_ts:node_named_child(Attr, 0),
+    case symbolic_ts:node_text(NameNode, Src) of
+        "-moduledoc" -> moduledoc;
+        "-doc" -> doc;
+        _ -> other
+    end.
+
+%% The {file, Path} tuple: wild_attribute -> paren_expr -> tuple, whose
+%% named children are exactly [atom, string] (confirmed by dumping the
+%% tree). Anything else — an inline -doc "string", a metadata map, a
+%% -moduledoc false — is not an external reference; skip it.
+attr_file_ref(Attr, Src) ->
+    case symbolic_ts:node_named_child(Attr, 1) of
+        Paren when Paren =/= undefined ->
+            case symbolic_ts:node_named_child(Paren, 0) of
+                Tuple when Tuple =/= undefined ->
+                    case symbolic_ts:node_type(Tuple) of
+                        "tuple" ->
+                            case {symbolic_ts:node_named_child(Tuple, 0),
+                                  symbolic_ts:node_named_child(Tuple, 1)} of
+                                {Kind, PathNode} when Kind =/= undefined,
+                                                       PathNode =/= undefined ->
+                                    case {symbolic_ts:node_type(Kind),
+                                          symbolic_ts:node_text(Kind, Src),
+                                          symbolic_ts:node_type(PathNode)} of
+                                        {"atom", "file", "string"} ->
+                                            {ok, unquote_string(
+                                                symbolic_ts:node_text(PathNode, Src))};
+                                        _ ->
+                                            error
+                                    end;
+                                _ ->
+                                    error
+                            end;
+                        _ ->
+                            error
+                    end;
+                undefined ->
+                    error
+            end;
+        undefined ->
+            error
+    end.
+
+%% The grammar's `string` node text includes its delimiting double
+%% quotes — strip exactly one leading and one trailing one, leaving any
+%% escaped quote inside the path alone (rare, and the compiler has the
+%% same limitation reading it back).
+unquote_string(Text) ->
+    S = to_text(Text),
+    Size = byte_size(S),
+    case Size >= 2 andalso binary:at(S, 0) =:= $" andalso
+        binary:at(S, Size - 1) =:= $" of
+        true -> binary:part(S, 1, Size - 2);
+        false -> S
+    end.
+
+%% The path in a {file, ...} reference is relative to the .erl file the
+%% attribute lives in (the compiler's own rule), so resolve against this
+%% source's directory. text/2 also runs against Markdown-embedded snippets
+%% where Path is the enclosing .md — a reference there simply resolves or
+%% doesn't; a miss emits nothing rather than failing the whole file.
+read_doc_file(Path, RelPath) ->
+    AbsPath = filename:join(filename:dirname(Path), binary_to_list(RelPath)),
+    case file:read_file(AbsPath) of
+        {ok, Bin} -> {ok, string:trim(to_text(Bin))};
+        {error, _Reason} -> error
     end.
 
 %% Walk up to the nearest enclosing function_clause to attribute a call

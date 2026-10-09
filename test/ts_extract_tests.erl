@@ -2,6 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(FIXTURE, "test/fixtures/sample.erl.fixture").
+-define(EXTERNAL_DOC_FIXTURE, "test/fixtures/external_docs_fixture.erl.fixture").
 
 extracts_defines_test() ->
     Facts = ts_extract_erlang:file(?FIXTURE),
@@ -151,6 +152,46 @@ extracts_doc_test() ->
     Facts = ts_extract_erlang:file(?FIXTURE),
     Path = list_to_atom(?FIXTURE),
     ?assert(lists:member({doc, double, 1, Path, 12, <<"Doubles a number.">>}, Facts)).
+
+external_doc_attributes_compile_test() ->
+    OutDir = "_build/external_docs_fixture",
+    Module = external_docs_fixture,
+    _ = file:del_dir_r(OutDir),
+    %% compile:file refuses a non-.erl extension outright (plain
+    %% `error`, verified), so the .fixture-named source and its
+    %% referenced .md files are copied to a real scratch path first —
+    %% the {file, ...} reference resolves relative to the source's own
+    %% directory, so external_docs/ has to come along.
+    SrcPath = filename:join(OutDir, "external_docs_fixture.erl"),
+    ok = filelib:ensure_dir(SrcPath),
+    {ok, _} = file:copy(?EXTERNAL_DOC_FIXTURE, SrcPath),
+    ok = filelib:ensure_dir(filename:join([OutDir, "external_docs", "placeholder"])),
+    {ok, _} = file:copy("test/fixtures/external_docs/module.md",
+        filename:join([OutDir, "external_docs", "module.md"])),
+    {ok, _} = file:copy("test/fixtures/external_docs/add.md",
+        filename:join([OutDir, "external_docs", "add.md"])),
+    try
+        {ok, Module} = compile:file(SrcPath, [docs, {outdir, OutDir}]),
+        true = code:add_patha(OutDir),
+        {module, Module} = code:load_file(Module),
+        {ok, {docs_v1, _, erlang, <<"text/markdown">>, #{<<"en">> := ModuleDoc}, _, Entries}} =
+            code:get_doc(Module),
+        ?assertEqual(<<"# External fixture module\n\nAdds values for extractor tests.">>, ModuleDoc),
+        [{{function, add, 2}, _, _, #{<<"en">> := AddDoc}, _}] = Entries,
+        ?assertEqual(<<"Adds two integers.">>, AddDoc)
+    after
+        code:purge(Module),
+        code:delete(Module),
+        code:del_path(OutDir),
+        _ = file:del_dir_r(OutDir)
+    end.
+
+external_doc_attributes_extract_facts_test() ->
+    Facts = ts_extract_erlang:file(?EXTERNAL_DOC_FIXTURE),
+    Path = list_to_atom(?EXTERNAL_DOC_FIXTURE),
+    ?assert(lists:member({module_doc, external_docs_fixture, Path, 2,
+        <<"# External fixture module\n\nAdds values for extractor tests.">>}, Facts)),
+    ?assert(lists:member({doc, add, 2, Path, 7, <<"Adds two integers.">>}, Facts)).
 
 standalone_comment_has_no_doc_test() ->
     Facts = ts_extract_erlang:file(?FIXTURE),
