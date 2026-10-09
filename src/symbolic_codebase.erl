@@ -48,7 +48,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -export([start_link/0, parse/1, parse/2, query/1, query/2, query/3,
-    ask/2, overview/0, overview/1]).
+    ask/2, facts/1, overview/0, overview/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
 
 -define(DEFAULT_LIMIT, 50).
@@ -149,6 +149,11 @@ query(Goal, Limit, Path) ->
 ask(Question, Path) ->
     gen_server:call(?MODULE, {ask, Question, Path}, ?QUERY_TIMEOUT_MS + 1000).
 
+%% Raw facts for read-only cache consumers such as MCP full-text search.
+-spec facts(file:name() | undefined) -> {ok, [tuple()]} | {error, term()}.
+facts(Path) ->
+    gen_server:call(?MODULE, {facts, Path}).
+
 -type query_result() ::
     {ok, [Solutions :: [{atom(), term()}]]}
     | {truncated, [Solutions :: [{atom(), term()}]]}
@@ -242,6 +247,12 @@ handle_call({ask, Question, Path}, _From, State) ->
             {reply, {error, Reason}, State};
         {ok, #{facts := Facts}} ->
             {reply, symbolic_ask:ask(Facts, Question), State}
+    end;
+
+handle_call({facts, Path}, _From, State) ->
+    case resolve_cache_entry(Path, State) of
+        {error, Reason} -> {reply, {error, Reason}, State};
+        {ok, #{facts := Facts}} -> {reply, {ok, Facts}, State}
     end;
 
 handle_call({overview, Path}, _From, State) ->

@@ -36,7 +36,8 @@
 %% starting the erlmcp application) that a unit test shouldn't mutate;
 %% verified instead by the manual stdio smoke tests (see
 %% docs/erlang-mcp-design.md).
--export([handle_parse/1, handle_query/1, handle_ask/1, handle_overview/1]).
+-export([handle_parse/1, handle_query/1, handle_ask/1, handle_overview/1,
+    handle_extract/1, handle_check/1, handle_search/1]).
 
 %% Start the MCP server over stdio: logging first (so early failures
 %% are visible), then the erlmcp application, the symbolic_codebase
@@ -50,7 +51,7 @@ run() ->
     {ok, _CachePid} = symbolic_codebase:start_link(),
     ok = erlmcp_stdio:start(),
     ok = register_tools(),
-    ?LOG_INFO("symbolic serve ready: tools parse, query, ask, overview registered"),
+    ?LOG_INFO("symbolic serve ready: tools parse, query, ask, overview, extract, check, search registered"),
     receive after infinity -> ok end.
 
 %% A file under the platform's standard log directory (e.g. ~/Library/Logs
@@ -310,12 +311,59 @@ register_tools() ->
                                    "the same path passed to `parse`. Omit "
                                    "to use whichever directory was most "
                                    "recently parsed.">>}}}),
-    ok.
+    register_parity_tools().
+
+register_parity_tools() ->
+    ok = erlmcp_stdio:add_tool(<<"extract">>, <<"Extract a bounded claim from a sentence.">>, fun handle_extract/1,
+        #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
+    ok = erlmcp_stdio:add_tool(<<"check">>, <<"Extract and check a claim against cached facts.">>, fun handle_check/1,
+        #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
+    erlmcp_stdio:add_tool(<<"search">>, <<"Search cached prose facts.">>, fun handle_search/1,
+        #{<<"type">> => <<"object">>, <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"limit">> => #{<<"type">> => <<"integer">>}}, <<"required">> => [<<"query">>]}).
 
 %% Tool handlers — each returns a JSON binary and never crashes.
 
-handle_parse(Params) ->
-    try
+handle_extract(Params) ->
+    Sentence = to_list(maps:get(<<"sentence">>, Params)),
+    Model = optional_string(Params, <<"model">>),
+    case symbolic_extract:run_result(Sentence, Model) of
+        {ok, Fact} -> json(#{ok => symbolic_term_json:encode_term(Fact)});
+        unrecognized -> json(#{error => <<"unrecognized sentence">>});
+        {error, Reason} -> json(#{error => error_str(Reason)})
+    end.
+
+handle_check(Params) ->
+    Sentence = to_list(maps:get(<<"sentence">>, Params)),
+    Model = optional_string(Params, <<"model">>),
+    Path = optional_path(Params),
+    case symbolic_extract:run_result(Sentence, Model) of
+        {ok, Fact} ->
+            Goal = "check_claim(" ++ erlog_io:writeq1(Fact) ++ ", Verdict)",
+            case symbolic_codebase:query(Goal, 1, Path) of
+                {Status, [[{'Verdict', Verdict}]]} when Status =:= ok; Status =:= truncated ->
+                    json(#{ok => #{fact => symbolic_term_json:encode_term(Fact), verdict => symbolic_term_json:encode_term(Verdict)}});
+                {error, Reason} -> json(#{error => error_str(Reason)});
+                _ -> json(#{error => <<"check claim returned no verdict">>})
+            end;
+        unrecognized -> json(#{error => <<"unrecognized sentence">>});
+        {error, Reason} -> json(#{error => error_str(Reason)})
+    end.
+
+handle_search(Params) ->
+    Query = to_list(maps:get(<<"query">>, Params)),
+    case symbolic_codebase:facts(optional_path(Params)) of
+        {ok, Facts} ->
+            case symbolic_search:run_facts(Facts, Query, limit_of(Params)) of
+                {ok, Results} -> json(#{ok => Results});
+                {error, Reason} -> json(#{error => error_str(Reason)})
+            end;
+        {error, Reason} -> json(#{error => error_str(Reason)})
+    end.
+
+optional_string(Params, Key) ->
+    case maps:find(Key, Params) of {ok, Value} -> to_list(Value); error -> undefined end.
+
+handle_parse(Params) ->    try
         %% PathStr is where project discovery STARTS, not necessarily
         %% what gets scanned — see symbolic_codebase:parse/2's own doc
         %% comment. `undefined` (no `path` given) means "start from this

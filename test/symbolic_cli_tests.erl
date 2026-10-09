@@ -13,7 +13,7 @@
 
 cli_structure_test() ->
     #{commands := Commands} = symbolic_cli:cli(),
-    ?assertEqual(["ask", "check", "extract", "parse", "query", "search", "serve"],
+    ?assertEqual(["ask", "check", "extract", "overview", "parse", "query", "search", "serve"],
         lists:sort(maps:keys(Commands))).
 
 query_cmd_requires_db_and_goal_test() ->
@@ -67,6 +67,14 @@ query_handler_forwards_no_rules_test() ->
     ?assert(meck:called(symbolic_query, run,
         ["facts.dets", undefined, true, "foo(X)"])),
     meck:unload(symbolic_query).
+
+overview_handler_forwards_db_test() ->
+    meck:new(symbolic_overview),
+    meck:expect(symbolic_overview, run, fun(_Db) -> ok end),
+    #{commands := #{"overview" := #{handler := Handler}}} = symbolic_cli:cli(),
+    Handler(#{db => "facts.dets"}),
+    ?assert(meck:called(symbolic_overview, run, ["facts.dets"])),
+    meck:unload(symbolic_overview).
 
 parse_handler_forwards_dir_and_db_test() ->
     meck:new(symbolic_parse),

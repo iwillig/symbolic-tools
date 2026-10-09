@@ -65,8 +65,31 @@ serve_test_() ->
         fun ask_wrong_arity_is_unverifiable_not_wrong/1,
         fun ask_prose_returns_evidence/1,
         fun ask_unrecognized_shape_is_friendly_error/1,
-        fun ask_with_unknown_path_is_friendly_error/1
+        fun ask_with_unknown_path_is_friendly_error/1,
+        fun extract_returns_a_claim/1,
+        fun search_returns_cached_prose/1,
+        fun check_returns_a_verdict/1
     ]}.
+
+extract_returns_a_claim(_Setup) ->
+    fun() ->
+        Json = decode(symbolic_serve:handle_extract(#{<<"sentence">> => <<"foo/1 calls bar/2">>})),
+        ?assertMatch(#{<<"ok">> := _}, Json)
+    end.
+
+search_returns_cached_prose(_Setup) ->
+    fun() ->
+        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        Json = decode(symbolic_serve:handle_search(#{<<"query">> => <<"exclamation">>})),
+        ?assertMatch(#{<<"ok">> := [_ | _]}, Json)
+    end.
+
+check_returns_a_verdict(_Setup) ->
+    fun() ->
+        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        Json = decode(symbolic_serve:handle_check(#{<<"sentence">> => <<"shout/1 calls capitalize/1">>})),
+        ?assertMatch(#{<<"ok">> := #{<<"verdict">> := <<"true">>}}, Json)
+    end.
 
 ask_before_parse_is_friendly_error(_Setup) ->
     fun() ->

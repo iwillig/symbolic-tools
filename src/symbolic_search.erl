@@ -27,7 +27,7 @@
 %% Exported for symbolic_search_tests.erl — run_result/3 is the
 %% halt-free core — and for symbolic_parse:maybe_store/2, which writes
 %% the sidecar alongside the DETS store on every `symbolic parse --db`.
--export([run_result/3, write_index_cache/2]).
+-export([run_result/3, run_facts/3, write_index_cache/2]).
 
 %% The prose-fact kinds this tier indexes, with their argument shapes
 %% (the extraction layer's own contracts — see ts_extract.erl's and
@@ -117,6 +117,12 @@ cached_index_decode(Bin) ->
     end.
 
 sidecar_path(DbPath) -> DbPath ++ ".text_idx".
+
+%% MCP keeps facts in memory rather than in a DETS file. Reuse the same
+%% document selection and BM25 search without a sidecar.
+-spec run_facts([tuple()], string(), pos_integer()) -> {ok, [map()]} | {error, term()}.
+run_facts(Facts, Query, Limit) ->
+    search_docs(text_docs(Facts), Query, Limit).
 
 search_docs([], _Query, _Limit) ->
     %% An empty corpus is a valid answer, not an error — the same stance

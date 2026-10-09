@@ -30,7 +30,8 @@ cli() ->
             "extract" => extract_cmd(),
             "check" => check_cmd(),
             "search" => search_cmd(),
-            "ask" => ask_cmd()
+            "ask" => ask_cmd(),
+            "overview" => overview_cmd()
         }
     }.
 
@@ -57,7 +58,7 @@ query_cmd() ->
 
 parse_cmd() ->
     #{
-        help => "Walk a folder, extract Prolog facts, and print them as JSON",
+        help => "Walk a folder, extract Prolog facts, and print a JSON summary",
         arguments => [
             #{name => dir, nargs => 'maybe', required => false, default => undefined,
               help => "Directory to walk. Omit to scan every path listed in the project's "
@@ -118,6 +119,14 @@ search_cmd() ->
             #{db := Db, query := Query} = Args,
             symbolic_search:run(Db, Query, maps:get(limit, Args, 10))
         end
+    }.
+
+overview_cmd() ->
+    #{
+        help => "Report fact counts in a persisted fact database",
+        arguments => [#{name => db, long => "db", required => true,
+                       help => "Path to a fact database (.dets), written by `symbolic parse --db`"}],
+        handler => fun(#{db := Db}) -> symbolic_overview:run(Db) end
     }.
 
 ask_cmd() ->

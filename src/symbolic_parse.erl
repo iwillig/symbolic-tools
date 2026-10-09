@@ -1,24 +1,14 @@
 %%% `symbolic parse <dir> [--db <path>]` — walk a folder, run tree-sitter
-%%% extraction, print facts as JSON to stdout (one JSON array per line —
-%%% JSON Lines, still greppable/pipeable like the old one-fact-per-line
-%%% Prolog text was), and optionally persist the fact set into a DETS
-%%% database for `symbolic query --db` to read back. See
+%%% extraction, optionally persist the fact set into a DETS database for
+%%% `symbolic query --db`, and print a JSON summary. See
 %%% docs/tree-sitter-erlang.md, docs/prolog-store.md.
-%%%
-%%% Facts used to print as raw Prolog text via `erlog_io:writeq1/1` —
-%%% replaced because that printer doesn't escape an atom's embedded
-%%% single quotes at all (real prose, including this project's own
-%%% comments, breaks it) and because free-text fields could only be
-%%% truncated-at-200-chars atoms, not arbitrary-length values. See
-%%% symbolic_term_json.erl and ts_extract_text.erl.
 -module(symbolic_parse).
 -include_lib("kernel/include/logger.hrl").
 -export([run/1, run/2, run_config/2, scan/1, scan_paths/1]).
 %% Exported for symbolic_parse_tests.erl only — run/1,2 halt() on every
-%% path and can't be called directly from EUnit; maybe_store/2 and
-%% print_fact/1 are the halt-free parts of that same code worth testing
-%% in isolation.
--export([maybe_store/2, print_fact/1, error_message/1, resolve_config/1, parallel_map/2]).
+%% path and can't be called directly from EUnit; summary/2 and maybe_store/2
+%% are the halt-free parts of that same code worth testing in isolation.
+-export([summary/2, maybe_store/2, error_message/1, resolve_config/1, parallel_map/2]).
 
 %% Scan a directory and extract facts with NO side effects — no printing,
 %% no DETS write, no halt. Returns the scanned file list alongside the
@@ -242,9 +232,9 @@ run(Dir) ->
 %% the exact text printed, so both are directly testable without it.
 run(Dir, DbPath) ->
     case scan(Dir) of
-        {ok, {_Files, Facts}} ->
+        {ok, {Files, Facts}} ->
             maybe_store(DbPath, Facts),
-            lists:foreach(fun print_fact/1, Facts),
+            print_summary(Files, Facts),
             halt(0);
         {error, Reason} ->
             io:put_chars(standard_error, error_message(Reason)),
@@ -290,9 +280,9 @@ resolve_config(undefined) ->
 
 run_paths(Paths, DbPath) ->
     case scan_paths(Paths) of
-        {ok, {_Files, Facts}} ->
+        {ok, {Files, Facts}} ->
             maybe_store(DbPath, Facts),
-            lists:foreach(fun print_fact/1, Facts),
+            print_summary(Files, Facts),
             halt(0);
         {error, Reason} -> halt_error(Reason)
     end.
@@ -352,12 +342,26 @@ maybe_store(DbPath, Facts) ->
         _:_ -> ok
     end.
 
-%% ~ts, not ~s: jsx:encode/1 returns a binary that's already-encoded
-%% UTF-8 bytes (e.g. free text from ts_extract_text:to_text/1). ~s
-%% treats a binary argument as a flat list of Latin-1 codepoints and
-%% re-encodes each one — for any byte above 127 (part of a multi-byte
-%% UTF-8 sequence, like an em dash) that doubly UTF-8-encodes it into
-%% mojibake. Confirmed by hitting it for real: dogfooding `symbolic
-%% parse` against this project's own em-dash-heavy comments.
-print_fact(Fact) ->
-    io:format("~ts~n", [jsx:encode(symbolic_term_json:encode_term(Fact))]).
+%% The CLI response matches the documented `Parse a project` response.
+summary(Files, Facts) ->
+    #{
+        files => length(Files),
+        languages => languages_from_files(Files),
+        total_facts => length(Facts)
+    }.
+
+print_summary(Files, Facts) ->
+    io:format("~ts~n", [jsx:encode(summary(Files, Facts))]).
+
+languages_from_files(Files) ->
+    lists:usort([language_from_ext(filename:extension(File)) || File <- Files]).
+
+language_from_ext(".erl") -> <<"erlang">>;
+language_from_ext(".rs") -> <<"rust">>;
+language_from_ext(".ts") -> <<"typescript">>;
+language_from_ext(".md") -> <<"markdown">>;
+language_from_ext(".toml") -> <<"toml">>;
+language_from_ext(".json") -> <<"json">>;
+language_from_ext(".sh") -> <<"bash">>;
+language_from_ext(".bash") -> <<"bash">>;
+language_from_ext(_Other) -> <<"unknown">>.

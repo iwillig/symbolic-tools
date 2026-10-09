@@ -164,13 +164,15 @@ maybe_store_writes_to_dets_test() ->
     ?assertEqual(Facts, symbolic_fact_store:read(Path)),
     ok = file:delete(Path).
 
-%% Execution-only (see symbolic_query_tests.erl's print_bindings/1 note)
-%% — print_fact/1 is a pure io:format wrapper with no branching logic to
-%% assert on beyond "it doesn't crash on a real fact term".
-print_fact_does_not_crash_test() ->
+summary_reports_documented_parse_fields_test() ->
+    Files = ["src/main.ts", "README.md", "config.toml", "script.sh", "lib.erl"],
+    Facts = [{defines, main, 0, <<"()">>, 'src/main.ts', 1},
+             {heading, 'README.md', 1, <<"Title">>}],
     ?assertEqual(
-        ok,
-        begin symbolic_parse:print_fact({defines, foo, 0, <<"()">>, 'f.erl', 1}), ok end).
+        #{files => 5,
+          languages => [<<"bash">>, <<"erlang">>, <<"markdown">>, <<"toml">>, <<"typescript">>],
+          total_facts => 2},
+        symbolic_parse:summary(Files, Facts)).
 
 %% --- scan/1's directory walk: node_modules/.git always pruned,
 %% .gitignore honored — the matching logic itself (globs, anchoring,
