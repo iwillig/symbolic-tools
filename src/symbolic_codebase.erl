@@ -470,6 +470,7 @@ languages_from_files(Files) ->
     lists:usort([language_from_ext(filename:extension(F)) || F <- Files]).
 
 language_from_ext(".erl") -> "erlang";
+language_from_ext(".rs") -> "rust";
 language_from_ext(".ts") -> "typescript";
 language_from_ext(".md") -> "markdown";
 language_from_ext(".toml") -> "toml";

@@ -129,8 +129,8 @@ parallel_collect(Pid, Ref) ->
     end.
 
 %% Extensions matcher below to a language ts_extract:file/1 knows how to
-%% handle. Kept as a list (not a set) — 7 entries, checked once per file.
--define(SCAN_EXTENSIONS, [".erl", ".ts", ".md", ".toml", ".json", ".sh", ".bash"]).
+%% handle. Kept as a list (not a set) — 8 entries, checked once per file.
+-define(SCAN_EXTENSIONS, [".erl", ".rs", ".ts", ".md", ".toml", ".json", ".sh", ".bash"]).
 
 %% scan_paths(Paths) -> {ok, {Files, Facts}} | {error, term()}.
 %%  Like scan/1, but over a LIST of paths — each entry may be a
@@ -308,7 +308,7 @@ error_message({no_such_path, Path}) ->
 error_message({unsupported_file, Path}) ->
     io_lib:format(
         "parse: ~s has no extension symbolic knows how to extract "
-        "(expected one of .erl/.ts/.md/.toml/.json/.sh/.bash)~n", [Path]);
+        "(expected one of .erl/.rs/.ts/.md/.toml/.json/.sh/.bash)~n", [Path]);
 error_message({no_such_config, ConfigPath}) ->
     io_lib:format("parse: no such config file: ~s~n", [ConfigPath]);
 error_message({no_config_found, StartDir}) ->
@@ -346,8 +346,11 @@ maybe_store(DbPath, Facts) ->
     %% re-tokenizing the whole corpus per query (docs/full-text-search.md).
     %% Best-effort: a failed sidecar write never fails the parse, it
     %% only costs `symbolic search` its fast path.
-    _ = catch symbolic_search:write_index_cache(DbPath, Facts),
-    ok.
+    try symbolic_search:write_index_cache(DbPath, Facts) of
+        _ -> ok
+    catch
+        _:_ -> ok
+    end.
 
 %% ~ts, not ~s: jsx:encode/1 returns a binary that's already-encoded
 %% UTF-8 bytes (e.g. free text from ts_extract_text:to_text/1). ~s

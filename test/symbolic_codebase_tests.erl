@@ -56,6 +56,7 @@ codebase_test_() ->
         fun query_already_terminated_goal_works/1,
         fun query_non_integer_limit_falls_back_to_default/1,
         fun parse_reports_bash_by_extension/1,
+        fun parse_reports_rust_by_extension/1,
         fun parse_reports_erlang_by_extension/1,
         fun parse_discovers_and_consults_scratch_rules/1,
         fun parse_rules_override_takes_precedence_over_discovery/1,
@@ -194,6 +195,19 @@ parse_reports_bash_by_extension(_Setup) ->
         {ok, Meta} = symbolic_codebase:parse(?FIXTURES),
         Languages = maps:get(languages, Meta),
         ?assert(lists:member("bash", Languages))
+    end.
+
+%% Rust needs both scanner admission and language reporting. The existing
+%% fixture also proves the scan stores facts, rather than only reporting a
+%% language label for an ignored or failed file.
+parse_reports_rust_by_extension(_Setup) ->
+    fun() ->
+        {ok, Meta} = symbolic_codebase:parse(?FIXTURES),
+        Languages = maps:get(languages, Meta),
+        ?assert(lists:member("rust", Languages)),
+        {ok, Facts} = symbolic_codebase:query(
+            "defines(dispatch_fixture, 0, _, 'test/fixtures/rust_sample.rs', _)"),
+        ?assert(Facts =/= [])
     end.
 
 %% language_from_ext/1's ".erl" clause. A real .erl fixture can't live
