@@ -248,7 +248,7 @@ register_tools() ->
           <<"properties">> => #{
               <<"goal">> => #{<<"type">> => <<"string">>,
                              <<"description">> =>
-                                 <<"Prolog goal, e.g. calls(X, local(foo), _, _)">>},
+                                 <<"Prolog goal, e.g. calls(X, _, local(foo, 2), _, _)">>},
               <<"limit">> => #{<<"type">> => <<"integer">>,
                               <<"description">> =>
                                   <<"Max solutions to return (default 50)">>},

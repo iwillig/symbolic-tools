@@ -30,6 +30,9 @@ promptfoo eval -c promptfooconfig.yaml --no-cache --output mcp-output.json
 ## Layout
 
 - `promptfooconfig.yaml` — the eval (two scenario prompts x 7 test cases)
+- `promptfooconfig-iterate.yaml` — A/B/C/D experiment over the query tool's doc
+  string (no schema / fixed example only / condensed schema / server text);
+  run with `--repeat 3` for signal
 - `prompts/symbolic_mcp_cached.json` — system prompt: codebase already cached
 - `prompts/symbolic_mcp_fresh.json` — system prompt: fresh session, load first
 

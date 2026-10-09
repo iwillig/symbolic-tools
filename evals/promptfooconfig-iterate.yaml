@@ -1,0 +1,262 @@
+# A/B/C/D experiment: does the query tool's doc string steer correct Prolog goals?
+# Only the query description and its goal param differ between providers.
+prompts:
+  - id: file://prompts/symbolic_mcp_cached.json
+    label: cached
+
+providers:
+  - id: huggingface:chat:Qwen/Qwen3.8-27B
+    label: "A no-schema bad-example"
+    config:
+      inferenceProvider: novita
+      temperature: 0
+      max_new_tokens: 2048
+      showThinking: false
+      tools:
+        - type: function
+          function:
+            name: mcp__symbolic__parse
+            description: 'Parse a directory and cache its codebase facts in memory. Call before any query in a new session.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Project root or plain source directory to scan'
+        - type: function
+          function:
+            name: mcp__symbolic__query
+            description: "Prove a Prolog goal against a cached codebase and return all solutions (capped)."
+            parameters:
+              type: object
+              required: [goal]
+              properties:
+                goal:
+                  type: string
+                  description: "Prolog goal, e.g. calls(X, local(foo), _, _)"
+                limit:
+                  type: integer
+                  description: 'Max solutions to return (default 50)'
+        - type: function
+          function:
+            name: mcp__symbolic__overview
+            description: 'Report the current state of a cached fact base: whether a codebase is loaded, how many files/languages, and fact counts by predicate.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Which cached directory to report on'
+        - type: function
+          function:
+            name: mcp__symbolic__ask
+            description: 'Answer a bounded English question against a cached codebase.'
+            parameters:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: 'The question'
+  - id: huggingface:chat:Qwen/Qwen3.8-27B
+    label: "B no-schema fixed-example"
+    config:
+      inferenceProvider: novita
+      temperature: 0
+      max_new_tokens: 2048
+      showThinking: false
+      tools:
+        - type: function
+          function:
+            name: mcp__symbolic__parse
+            description: 'Parse a directory and cache its codebase facts in memory. Call before any query in a new session.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Project root or plain source directory to scan'
+        - type: function
+          function:
+            name: mcp__symbolic__query
+            description: "Prove a Prolog goal against a cached codebase and return all solutions (capped)."
+            parameters:
+              type: object
+              required: [goal]
+              properties:
+                goal:
+                  type: string
+                  description: "Prolog goal, e.g. calls(X, _, local(foo, 2), _, _)"
+                limit:
+                  type: integer
+                  description: 'Max solutions to return (default 50)'
+        - type: function
+          function:
+            name: mcp__symbolic__overview
+            description: 'Report the current state of a cached fact base: whether a codebase is loaded, how many files/languages, and fact counts by predicate.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Which cached directory to report on'
+        - type: function
+          function:
+            name: mcp__symbolic__ask
+            description: 'Answer a bounded English question against a cached codebase.'
+            parameters:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: 'The question'
+  - id: huggingface:chat:Qwen/Qwen3.8-27B
+    label: "C schema plus examples"
+    config:
+      inferenceProvider: novita
+      temperature: 0
+      max_new_tokens: 2048
+      showThinking: false
+      tools:
+        - type: function
+          function:
+            name: mcp__symbolic__parse
+            description: 'Parse a directory and cache its codebase facts in memory. Call before any query in a new session.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Project root or plain source directory to scan'
+        - type: function
+          function:
+            name: mcp__symbolic__query
+            description: "Prove a Prolog goal against a cached codebase and return all solutions (capped). Raw facts: defines(Function, Arity, Params, File, Line); calls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Function, Arity); export(Function, Arity, File, Line); branch(Function, Arity, Kind, File, Line); doc(Function, Arity, File, Line, Text); comment(File, Line, Text). When parse reported a rules_file, a derived-predicate library is loaded (callees/2, callers/3, reaches/2, truly_uncalled/3, undocumented/4, ...) - prefer it over reinventing a rule inline."
+            parameters:
+              type: object
+              required: [goal]
+              properties:
+                goal:
+                  type: string
+                  description: "One Prolog goal over those facts, e.g. calls(X, _, local(parse, 2), File, Line), callers(parse, 2, File), or defines(scan_one, 1, Params, File, Line)"
+                limit:
+                  type: integer
+                  description: 'Max solutions to return (default 50)'
+        - type: function
+          function:
+            name: mcp__symbolic__overview
+            description: 'Report the current state of a cached fact base: whether a codebase is loaded, how many files/languages, and fact counts by predicate.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Which cached directory to report on'
+        - type: function
+          function:
+            name: mcp__symbolic__ask
+            description: 'Answer a bounded English question against a cached codebase.'
+            parameters:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: 'The question'
+  - id: huggingface:chat:Qwen/Qwen3.8-27B
+    label: "D server production text"
+    config:
+      inferenceProvider: novita
+      temperature: 0
+      max_new_tokens: 2048
+      showThinking: false
+      tools:
+        - type: function
+          function:
+            name: mcp__symbolic__parse
+            description: 'Parse a directory and cache its codebase facts in memory. Call before any query in a new session.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Project root or plain source directory to scan'
+        - type: function
+          function:
+            name: mcp__symbolic__query
+            description: "Prove a Prolog goal against a cached codebase and return all solutions (capped). More than one directory can be cached at once (see `parse`); pass `path` to pick which one, or omit it to use whichever was most recently parsed. Raw facts, from `overview`: defines(Function, Arity, Params, File, Line), export(Function, Arity, File, Line) - an Erlang -export list element (Erlang only; one fact per entry, keyed Fun+Arity like defines), calls(Caller, CallerArity, CallSpec, File, Line) where CallSpec is local(Callee, ArgCount)/remote(Module, Function, ArgCount)/member(Object, Method, ArgCount), doc(Function, Arity, File, Line, Text), branch(Function, Arity, Kind, File, Line) - a decision point, for real complexity, expr(Id, Function, Arity, Kind, File, Line)/expr_operator(Id, Op)/expr_operand(Id, Role, ChildId)/object_key(Function, Arity, Key, File, Line)/literal(Id, Function, Arity, LitKind, Value, File, Line, Raw)/expr_ref(Id, Function, Arity, Name, File, Line) - what a decision point actually compares (Erlang/TypeScript only; Id is a byte span, not Function/Arity/File/Line), scope(ScopeId, Kind, ParentScopeId, File)/var_decl(Id, Name, Kind, ScopeId, File, Line)/var_ref(Id, Name, ScopeId, RefKind, File, Line)/resolves_to(RefId, DeclId) - variables and scope (TypeScript only; var_decl's Kind is var/let/const/param/import; resolves_to(_, undefined) means not declared in anything tracked, not necessarily a bug - no globals allowlist), import_decl(Module, File, Line)/export_decl(Name, Kind, File, Line) - imports/exports (TypeScript only), stmt_block(BlockId, Function, Arity, Kind, File, Line)/stmt(Id, BlockId, Index, Kind, File, Line)/last_switch_case(BlockId)/braceless_body(Function, Arity, Kind, File, Line)/return_stmt(Function, Arity, HasValue, File, Line) - statement/block structure (TypeScript only; stmt_block's Kind is block/switch_case/switch_default; stmt's Index is the child's raw position among ALL a block's named children, not renumbered after excluding comments/a switch_case's own value), comment/3, heading/4, paragraph/3, code_block/3, config_value/4, config_section/3. Prefer an existing derived predicate over reinventing it inline, when `parse`'s `rules_file` shows a library was consulted: callees/2, callers/3, undocumented/4, calls_object/2, stale_doc_example/4, duplicate_name/3 (+all_duplicate_names/1), self_recursive/3, fan_out/3, fan_in/3, top_fan_out/2, top_fan_in/2, no_local_callers/3 (+all_no_local_callers/1), undocumented_comment/3, risky_call/3 (+all_risky_calls/1), module_dependency/2 (+all_module_dependencies/1), reaches/2, take/3, plus ESLint-style checks: too_many_params/4, too_complex/3, mutual_recursion/2 (+all_mutual_recursion/1 - bind at least one side, both unbound can time out), truly_uncalled/3 (+all_truly_uncalled/1 - excludes entry_point/3, so exported API and OTP callbacks are not dead code; edit runtime_entry_point/2 for an entry point with no -export behind it, like an -on_load hook), entry_point/3 (export/4 facts + runtime_entry_point/2), banned_call/4 (+all_banned_calls/1 - edit banned_target/2 for this project), god_file/2 (+all_god_files/1), real_complexity/4 (+too_complex_real/4, +all_too_complex_real/1 - real McCabe-style branch counting on branch/5, more accurate than too_complex/3's fan-out proxy), short_name/4 (+all_short_names/1 - edit allow_short_name/1 for names like ok/id that should stay unflagged), self_compare/4 (+all_self_compares/1) and yoda_condition/5 (+all_yoda_conditions/1) - both on top of expr/6, unused_var/4 (+all_unused_vars/1) and shadowed_var/5 (+all_shadowed_vars/1) - both on top of scope/4, plus prefer_const/4 (+all_prefer_const/1), redeclared_var/5 (+all_redeclared_vars/1), shadows_restricted_name/4 (+all_restricted_name_shadows/1 - edit restricted_name/1), use_before_define/5 (+all_use_before_define/1), and undeclared_var/4 (+all_undeclared_vars/1 - edit known_global/1 for this runtime's own globals; that's what makes it a real no-undef check). `new X(...)` is calls/5's new(Constructor, ArgCount) shape (TypeScript only), plus bare_new/5 (Caller, Arity, Constructor, File, Line - a `new X()` whose value is discarded outright) for no_new/4 (+all_no_new/1) specifically; also no_new_wrapper/5 (+all_no_new_wrappers/1), no_new_func/4 (+all_no_new_func/1), no_object_constructor/4 (+all_no_object_constructors/1 - checks new Object() and bare Object()), prefer_regex_literal/4 (+all_prefer_regex_literals/1 - checks new RegExp(...) and bare RegExp(...)), and lowercase_constructor/5 (+all_lowercase_constructors/1). An import binding is itself a var_decl/6 (Kind=import, TypeScript only) so unused_var/4/shadowed_var/5 apply for free; plus import_decl(Module, File, Line)/export_decl(Name, Kind, File, Line) for duplicate_import/4 (+all_duplicate_imports/1), restricted_import/3 (+all_restricted_imports/1 - edit restricted_module/1, no universal default exists), and restricted_export/4 (+all_restricted_exports/1 - edit restricted_export_name/1). On top of stmt_block/6+stmt/6+last_switch_case/1+braceless_body/5+return_stmt/5 (TypeScript only): no_empty_block/5 (+all_no_empty_blocks/1 - {} blocks only, not a function's own empty body), unreachable_stmt/4 (+all_unreachable_stmts/1 - anything after a return/throw/break/continue in the same block), no_fallthrough_case/5 (+all_no_fallthrough_cases/1 - a non-empty switch_case/switch_default whose last statement isn't a terminator and isn't the last clause; an empty case stacking into the next, e.g. `case 1: case 2: ...`, is exempt), curly_violation/5 (+all_curly_violations/1 - an if/else/for/while body that isn't a real {} block), and inconsistent_return/3 (+all_inconsistent_returns/1 - one function with both a valued and a bare return; no control-flow-path analysis, just whole-function agreement). Docs: docs/lint-queries.md."
+            parameters:
+              type: object
+              required: [goal]
+              properties:
+                goal:
+                  type: string
+                  description: "Prolog goal, e.g. calls(X, _, local(foo, 2), _, _)"
+                limit:
+                  type: integer
+                  description: 'Max solutions to return (default 50)'
+        - type: function
+          function:
+            name: mcp__symbolic__overview
+            description: 'Report the current state of a cached fact base: whether a codebase is loaded, how many files/languages, and fact counts by predicate.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Which cached directory to report on'
+        - type: function
+          function:
+            name: mcp__symbolic__ask
+            description: 'Answer a bounded English question against a cached codebase.'
+            parameters:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: 'The question'
+
+tests:
+  - description: 'call-graph question produces a well-formed goal'
+    vars:
+      query: 'Which functions call parse/2 in this codebase?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\b(calls|callers)\s*\(/.test(goal) && /parse/.test(goal);
+
+  - description: 'definition lookup produces a well-formed goal'
+    vars:
+      query: 'In which file is the function scan_one/1 defined?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query, mcp__symbolic__ask]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          const a = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__ask');
+          if (q) {
+            let goal = '';
+            try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
+            return /\bdefines\s*\(/.test(goal) && /scan_one/.test(goal);
+          }
+          if (a) {
+            let question = '';
+            try { question = JSON.parse(a.function.arguments).question || ''; } catch (e) { return false; }
+            return /scan_one/.test(question);
+          }
+          return false;

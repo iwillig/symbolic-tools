@@ -49,3 +49,4 @@ docs/presentations/*.html
 # promptfoo eval output (evals/README.md regenerates it on every run) —
 # per-run JSON tables, never meant to be committed.
 evals/mcp-output.json
+evals/iterate-output.json

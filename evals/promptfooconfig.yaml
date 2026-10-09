@@ -34,14 +34,14 @@ providers:
         - type: function
           function:
             name: mcp__symbolic__query
-            description: 'Prove a Prolog goal against a cached codebase and return all solutions (capped). Raw facts: defines(Function, Arity, Params, File, Line); calls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Function, Arity); export(Function, Arity, File, Line); branch(Function, Arity, Kind, File, Line); doc(Function, Arity, File, Line, Text); comment(File, Line, Text).'
+            description: 'Prove a Prolog goal against a cached codebase and return all solutions (capped). Raw facts: defines(Function, Arity, Params, File, Line); calls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Function, Arity); export(Function, Arity, File, Line); branch(Function, Arity, Kind, File, Line); doc(Function, Arity, File, Line, Text); comment(File, Line, Text). When parse reported a rules_file, a derived-predicate library is loaded (callees/2, callers/3, reaches/2, truly_uncalled/3, undocumented/4, ...) - prefer it over reinventing a rule inline.'
             parameters:
               type: object
               required: [goal]
               properties:
                 goal:
                   type: string
-                  description: 'One Prolog goal over those facts, e.g. calls(X, _, local(parse, 2), File, Line) or defines(scan_one, 1, Params, File, Line)'
+                  description: 'One Prolog goal over those facts, e.g. calls(X, _, local(parse, 2), File, Line), callers(parse, 2, File), or defines(scan_one, 1, Params, File, Line)'
                 limit:
                   type: integer
                   description: 'Max solutions to return (default 50)'
@@ -61,7 +61,7 @@ providers:
         - type: function
           function:
             name: mcp__symbolic__ask
-            description: 'Answer a bounded English question against a cached codebase: does X/N call Y/M, which functions call X/N, how many functions call X/N, is X/N defined, where is X discussed.'
+            description: 'Answer a bounded English question against a cached codebase: does X/N call Y/M, which functions call X/N, how many functions call X/N, is X/N defined, where is X documented. Unverifiable questions come back as {type: unverifiable, reason}; phrasings outside the grammar are an unrecognized error. Callers that need anything the grammar does not cover should write a query goal instead.'
             parameters:
               type: object
               required: [question]
@@ -93,7 +93,7 @@ tests:
           if (!tc) return false;
           let goal = '';
           try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
-          return /\bcalls\s*\(/.test(goal) && /parse/.test(goal);
+          return /\b(calls|callers)\s*\(/.test(goal) && /parse/.test(goal);
 
   - description: 'definition lookup routes to mcp__symbolic__query (or ask)'
     prompts: [cached]
