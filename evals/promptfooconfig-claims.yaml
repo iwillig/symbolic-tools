@@ -94,7 +94,7 @@ providers:
         - type: function
           function:
             name: mcp__symbolic__analyze_text
-            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks. Does not correct text.'
+            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks, plus bounded query_frames candidates for mapping claims to schema-valid queries. Frames are candidates, not proof. Does not correct text.'
             parameters:
               type: object
               required: [text]
@@ -275,11 +275,13 @@ tests:
       - type: javascript
         value: |
           const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
-          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
-          if (!tc) return false;
-          let goal = '';
-          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
-          return /real_complexity/.test(goal) && /walk_scope/.test(goal);
+          const calls = list.filter(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          return calls.some(tc => {
+            try {
+              const goal = JSON.parse(tc.function.arguments).goal || '';
+              return /real_complexity/.test(goal) && /walk_scope/.test(goal);
+            } catch (e) { return false; }
+          });
 
   - description: 'trace 6adb995a L124 (Oct 8) - claim TRUE - judge doc sections 5 and 9'
     vars:

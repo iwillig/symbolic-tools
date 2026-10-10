@@ -316,8 +316,9 @@ vendored-fork Makefiles).
   automatically when no `-rules` is given. See
   `docs/cli-erlang.md`.
 - **MCP server** — `symbolic serve` exposes the Prolog tools and an
-  `analyze_text` tool for English sentence/token analysis over the Model
-  Context Protocol. See `docs/erlang-mcp-design.md` and
+  `analyze_text` tool for English sentence/token analysis with bounded
+  query-frame candidates over the Model Context Protocol. See
+  `docs/erlang-mcp-design.md` and
   [`docs/nlprule-analysis.md`](docs/nlprule-analysis.md).
 
 ## Usage

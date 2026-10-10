@@ -5,7 +5,7 @@
   },
   {
     "role": "system",
-    "content": "<session>\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview.\n</session>\n\n<task>\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Verify it: translate the claim into one Prolog goal and call mcp__symbolic__query with it.\n</task>"
+    "content": "<session>\nThe symbolic-tools repository is already parsed and cached in this session. Do not call mcp__symbolic__parse or mcp__symbolic__overview. This is the second stage of the claim workflow: analyze_text was already called on the exact claim. For this isolated stage-two eval, assume its response had no bounded query_frames candidate (query_frames: []); raw token details are omitted.\n</session>\n\n<task>\nThe user gives you a claim about this codebase that an LLM made in a past session. The claim may be true, stale, or false. Map it to the known fact schema, construct one schema-bounded Prolog goal, and call mcp__symbolic__query to validate it. Do not repeat analyze_text. Do not use legacy ask.\n</task>"
   },
   {
     "role": "user",

@@ -86,7 +86,7 @@ providers:
         - type: function
           function:
             name: mcp__symbolic__analyze_text
-            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks. Does not correct text.'
+            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks, plus bounded query_frames candidates for mapping claims to schema-valid queries. Frames are candidates, not proof. Does not correct text.'
             parameters:
               type: object
               required: [text]
@@ -249,13 +249,7 @@ tests:
         value: |
           const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
           const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
-          const a = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__ask');
-          if (!q && !a) return false;
-          if (a) {
-            let question = '';
-            try { question = JSON.parse(a.function.arguments).question || ''; } catch (e) { return false; }
-            return /scan_one\/\d/.test(question);  // ask grammar requires arity
-          }
+          if (!q) return false;
           let goal = '';
           try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
           const m = goal.match(/\bdefines\s*\(([^()]*)\)/);
@@ -330,12 +324,11 @@ tests:
           if (goal.includes(`sub_text(${fileVar}`) || goal.includes(`sub_atom(${fileVar}, _, _, _, 'Cache`)) return false;
           return /Cache design/.test(goal);
 
-  # --- traces: ask grammar violations (missing arities) --------------------
-  # "does render_query call error_str/1?" without arities -> unrecognized.
-  # The grammar needs X/N for every function; unknown arity means: write a
-  # query goal instead.
+  # --- traces: unknown arities require a schema-driven query ---------------
+  # "does render_query call error_str/1?" omits arities, so the LLM must
+  # inspect schema/evidence rather than send the question to legacy ask.
 
-  - description: 'trace: call question with unknown arities falls back to a query goal naming both functions'
+  - description: 'trace: call question with unknown arities uses a query goal naming both functions'
     prompts: [cached, cached_root]
     vars:
       query: 'does render_query call parse_facts?'
@@ -345,13 +338,6 @@ tests:
         value: |
           const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
           const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
-          const a = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__ask');
-          if (a) {
-            // ask is only acceptable when the question carries both arities
-            let question = '';
-            try { question = JSON.parse(a.function.arguments).question || ''; } catch (e) { return false; }
-            return /render_query\/\d/.test(question) && /parse_facts\/\d/.test(question);
-          }
           if (!q) return false;
           let goal = '';
           try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }

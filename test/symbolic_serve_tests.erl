@@ -95,14 +95,42 @@ check_returns_a_verdict(_Setup) ->
 analyze_text_returns_sentence_components(_Setup) ->
     fun() ->
         meck:new(symbolic_analyze),
-        meck:expect(symbolic_analyze, run_result, fun(<<"Caf", 195, 169, ".">>) ->
-            {ok, #{<<"sentences">> => [#{<<"text">> => <<"Caf", 195, 169, ".">>,
-                <<"tokens">> => [#{<<"text">> => <<"Caf", 195, 169>>}]}]}}
+        meck:expect(symbolic_analyze, run_result, fun(<<"Does foo/2 call bar/1?">>) ->
+            {ok, #{<<"sentences">> => [#{
+                <<"text">> => <<"Does foo/2 call bar/1?">>,
+                <<"tokens">> => [
+                    analysis_token(<<"Does">>, <<"do">>, <<"VBZ">>, 0, 4),
+                    analysis_token(<<"foo">>, <<"foo">>, <<"NN">>, 5, 8),
+                    analysis_token(<<"/">>, <<"/">>, <<"UNKNOWN">>, 8, 9),
+                    analysis_token(<<"2">>, <<"2">>, <<"CD">>, 9, 10),
+                    analysis_token(<<"call">>, <<"call">>, <<"VBP">>, 11, 15),
+                    analysis_token(<<"bar">>, <<"bar">>, <<"NN">>, 16, 19),
+                    analysis_token(<<"/">>, <<"/">>, <<"UNKNOWN">>, 19, 20),
+                    analysis_token(<<"1">>, <<"1">>, <<"CD">>, 20, 21),
+                    analysis_token(<<"?">>, <<"?">>, <<"PCT">>, 21, 22)
+                ]}]}}
         end),
-        Json = decode(symbolic_serve:handle_analyze_text(#{<<"text">> => <<"Caf", 195, 169, ".">>})),
+        Json = decode(symbolic_serve:handle_analyze_text(#{
+            <<"text">> => <<"Does foo/2 call bar/1?">>})),
         ?assertMatch(#{<<"ok">> := #{<<"sentences">> := [_]}}, Json),
+        #{<<"ok">> := #{<<"query_frames">> := [Frame]}} = Json,
+        ?assertEqual(<<"yes_no">>, maps:get(<<"answer_type">>, Frame)),
+        ?assertEqual(<<"calls">>, maps:get(<<"relation">>, Frame)),
+        ?assertEqual(<<"foo/2">>, maps:get(<<"text">>, maps:get(<<"subject">>,
+            maps:get(<<"arguments">>, Frame)))),
         meck:unload(symbolic_analyze)
     end.
+
+analysis_token(Text, Lemma, Pos, Start, End) ->
+    #{
+        <<"text">> => Text,
+        <<"tags">> => [#{<<"lemma">> => Lemma, <<"pos">> => Pos}],
+        <<"chunks">> => [],
+        <<"span">> => #{
+            <<"byte">> => #{<<"start">> => Start, <<"end">> => End},
+            <<"char">> => #{<<"start">> => Start, <<"end">> => End}
+        }
+    }.
 
 ask_before_parse_is_friendly_error(_Setup) ->
     fun() ->

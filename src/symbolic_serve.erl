@@ -323,7 +323,7 @@ register_parity_tools() ->
     ok = erlmcp_stdio:add_tool(<<"search">>, <<"Search cached prose facts.">>, fun handle_search/1,
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"limit">> => #{<<"type">> => <<"integer">>}}, <<"required">> => [<<"query">>]}),
     erlmcp_stdio:add_tool(<<"analyze_text">>,
-        <<"Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks. Requires English nlprule tokenizer data in SYMBOLIC_NLPRULE_DATA. Does not correct text.">>,
+        <<"Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks, plus bounded query-frame candidates for an LLM to map to a schema-valid query. Frames are suggestions, not verified claims. Requires English nlprule tokenizer data in SYMBOLIC_NLPRULE_DATA. Does not correct text.">>,
         fun handle_analyze_text/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{<<"text">> => #{<<"type">> => <<"string">>,
@@ -362,7 +362,9 @@ handle_analyze_text(Params) ->
     try
         Text = maps:get(<<"text">>, Params),
         case symbolic_analyze:run_result(Text) of
-            {ok, Analysis} -> json(#{ok => Analysis});
+            {ok, Analysis} ->
+                Frames = symbolic_ask_nlprule:extract_json_frames(Analysis),
+                json(#{ok => Analysis#{<<"query_frames">> => Frames}});
             {error, Reason} -> json(#{error => error_str(Reason)})
         end
     catch

@@ -1,15 +1,17 @@
 # Symbolic MCP promptfoo evals
 
 Evaluates whether an LLM routes requests correctly to the `symbolic` MCP
-server. Core tests cover `parse`, `query`, `overview`, and `ask`; the routing
-eval also verifies `analyze_text` for English linguistic analysis.
+server. Core tests cover `parse`, `query`, and `overview`; they also verify
+`analyze_text` as stage one for an LLM-generated claim. `ask` remains available
+for compatibility but is no longer recommended in the claim workflow.
 
 The tools are never executed. The eval checks, in a single turn, which tool
 the model *requests* and whether its arguments are well-formed:
 
 - codebase questions must produce a symbolic tool call; call-graph and
   definition questions must use the real `calls/5` or `defines/5` schemas,
-- English sentence/token analysis requests must produce `analyze_text`,
+- English sentence/token analysis requests and stage-one LLM claim validation
+  must produce `analyze_text`,
 - cache-state questions must produce `overview`,
 - a fresh session must load the codebase with `parse` before querying,
 - general knowledge questions must produce no tool call at all.
@@ -87,8 +89,8 @@ promptfoo eval -c promptfooconfig.yaml --no-cache --output mcp-output.json
     parse reported no `rules_file` → `no such predicate`
   - a fact family with zero facts in the cache errors as `no such
     predicate`, not `count: 0` (verified: `defines/5` on a docs-only cache)
-  - `ask` grammar violations: 7 unrecognized questions, all missing `/N`
-    arities
+  - historical `ask` grammar failures: 7 unrecognized questions, all missing
+    `/N` arities; the new workflow no longer routes claims through `ask`
 
   Scenario prompts: `cached`, `cached_root` (states the project root),
   `cached_norules` (no rules_file), `cached_markdown` (only prose facts), and
@@ -103,27 +105,27 @@ promptfoo eval -c promptfooconfig.yaml --no-cache --output mcp-output.json
   against a deterministic fixture cache and compare returned JSON solutions to
   expected results. This is needed to catch goals with valid syntax/schema but
   wrong argument bindings or false results.
-- `promptfooconfig-claims.yaml` — claim-verification eval: 10 codebase claims
-  mined from real Claude Code session traces, each with provenance (trace file
-  + line) and ground truth proven against the current fact base before the
-  config was written; run the same way, output `claims-output.json`
+- `promptfooconfig-claims.yaml` — stage-two goal-construction eval: 10
+  codebase claims mined from real Claude Code session traces, each with
+  provenance (trace file + line) and ground truth proven against the current
+  fact base. It assumes `analyze_text` already ran; run the same way, output
+  `claims-output.json`
 - `../SYSTEM.md` — the shared system prompt under iteration
 - `prompts/symbolic_mcp_cached.json` — scenario: codebase already cached
 - `prompts/symbolic_mcp_fresh.json` — scenario: fresh session, load first
-- `prompts/symbolic_mcp_claims.json` — scenario: verify a past-session claim
-  by translating it into one goal
+- `prompts/symbolic_mcp_claims.json` — stage two: translate an analyzed
+  past-session claim into one schema-bounded goal
 
 ## Claim-verification eval
 
-`promptfooconfig-claims.yaml` replays claims an LLM made about this repository
-in past sessions (`~/.claude/projects/<slug>/*.jsonl`), several of which have
-gone stale or were wrong when re-proved today (the ground-truth ledger is in
-the config's header comments). The eval checks that the model picks the
-predicate that could decide each claim - `defines`, `callers`,
-`truly_uncalled`, `duplicate_name`, `real_complexity`, `heading` - and names
-the claim's entities in the goal. It does not yet execute the goals; the next
-tier is to run them against the live cache and compare the bound answers to
-the ledger.
+`promptfooconfig.yaml` checks stage one: an LLM-generated code claim must go
+to `analyze_text` before a query is issued. `promptfooconfig-claims.yaml` checks
+stage two: after a simulated analyzer response, the model maps the claim to a
+schema-bounded query and names its entities. The ten claims are from past
+sessions (`~/.claude/projects/<slug>/*.jsonl`); the ground-truth ledger is in
+the config's header comments. Neither eval executes tools or generated goals;
+a later tier should run the goals against a fixture cache and compare bound
+answers to the ledger.
 
 ## First-run findings (Qwen 3.8-27B, 2026-10-09: 9/10)
 

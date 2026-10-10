@@ -79,7 +79,7 @@ providers:
         - type: function
           function:
             name: mcp__symbolic__analyze_text
-            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks. Does not correct text.'
+            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks, plus bounded query_frames candidates for mapping claims to schema-valid queries. Frames are candidates, not proof. Does not correct text.'
             parameters:
               type: object
               required: [text]
@@ -110,31 +110,23 @@ tests:
           try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
           return /\b(calls|callers)\s*\(/.test(goal) && /parse/.test(goal);
 
-  - description: 'definition lookup routes to mcp__symbolic__query (or ask)'
+  - description: 'definition lookup routes to mcp__symbolic__query, not legacy ask'
     prompts: [cached]
     vars:
       query: 'In which file is the function scan_one/1 defined?'
     assert:
       - type: is-valid-openai-tools-call
       - type: tool-call-f1
-        value: [mcp__symbolic__query, mcp__symbolic__ask]
+        value: [mcp__symbolic__query]
         threshold: 0.5
       - type: javascript
         value: |
           const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
           const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
-          const a = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__ask');
-          if (q) {
-            let goal = '';
-            try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
-            return /\bdefines\s*\(/.test(goal) && /scan_one/.test(goal);
-          }
-          if (a) {
-            let question = '';
-            try { question = JSON.parse(a.function.arguments).question || ''; } catch (e) { return false; }
-            return /scan_one/.test(question);
-          }
-          return false;
+          if (!q) return false;
+          let goal = '';
+          try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
+          return /\bdefines\s*\(/.test(goal) && /scan_one/.test(goal);
 
   - description: 'English linguistic analysis routes to mcp__symbolic__analyze_text'
     prompts: [cached]
@@ -151,6 +143,18 @@ tests:
           const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__analyze_text');
           if (!tc) return false;
           try { return JSON.parse(tc.function.arguments).text.includes('The fox runs.'); } catch (e) { return false; }
+
+  - description: 'LLM-generated code claim enters the analyze_text stage before any query'
+    prompts: [cached]
+    vars:
+      query: 'Fact-check this LLM-generated claim: symbolic_ask/2 calls symbolic_nlp:tag/1.'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          if (list.length !== 1 || !list[0] || !list[0].function || list[0].function.name !== 'mcp__symbolic__analyze_text') return false;
+          try { return JSON.parse(list[0].function.arguments).text.includes('symbolic_ask/2 calls symbolic_nlp:tag/1'); } catch (e) { return false; }
 
   - description: 'cache-state question routes to mcp__symbolic__overview'
     prompts: [cached]

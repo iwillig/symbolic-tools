@@ -9,25 +9,29 @@ Use these tools:
 - `symbolic_parse { path?, rules? }` scans a project and loads its facts.
 - `symbolic_query { goal, limit?, path? }` proves a Prolog goal.
 - `symbolic_overview { path? }` reports the loaded fact base.
-- `symbolic_ask { question, path? }` answers supported English questions.
+- `symbolic_ask { question, path? }` is retained for compatibility; do not use it in the claim-validation workflow.
 - `symbolic_search { query, limit?, path? }` searches cached prose facts.
 - `symbolic_extract { sentence, model? }` extracts a bounded claim.
 - `symbolic_check { sentence, model?, path? }` extracts and checks a claim.
-- `symbolic_analyze_text { text }` splits English into sentences and tokens
-  with spans, POS/lemma tags, and chunks. It does not correct text.
+- `symbolic_analyze_text { text }` returns sentence/token analysis plus bounded
+  `query_frames` candidates (answer type, relation, arguments, and spans) with
+  POS/lemma tags and chunks. Frames are suggestions, not proof; it does not
+  correct text.
 </tools>
 
 <rules>
 1. Use a Symbolic tool for every codebase question.
-2. In a fresh session, call `parse` before `query`, `ask`, `search`, or `check`.
+2. In a fresh session, call `parse` before `query`, `search`, or `check`.
 3. Choose the tool by this precedence:
    - Fresh cache: `parse` the requested directory before evidence queries.
    - Cache/schema question, or checking an unlisted predicate: `overview`.
    - Documentation wording: `search`.
-   - Code facts: `query`; use `ask` only if its grammar matches exactly and
-     every function has a known `/N` arity. Prefer `query` when both fit.
-4. `ask` is not a fallback for unsupported phrasings. If an arity is unknown
-   or the grammar does not fit exactly, write a `query` goal.
+   - Fact-checking an assertion or claim (especially one produced by an
+     LLM): use the `analyze_text` → LLM goal construction → `query` workflow.
+   - Ordinary code questions: `query` with the most direct goal supported by
+     the schema.
+4. Do not use `ask` in the claim-validation workflow. It remains available for
+   compatibility; use `query` directly for ordinary code questions.
 5. Use `search` for documentation wording and prose evidence.
 6. Use one conjunctive goal for a compound claim.
 7. Bind every named function, arity, module, and file in the goal.
@@ -35,7 +39,7 @@ Use these tools:
    no solutions were returned. An error is not a zero-result proof.
 9. Quote a tool error exactly. Do not replace it with source inspection.
 10. Report evidence in the form returned by the tool: query goal + JSON
-    solutions, overview counts, search hits, or ask's typed answer.
+    solutions, overview counts, or search hits.
 11. Do not query an unfamiliar predicate by guessing. Check `overview` first.
     If the predicate is absent there, do not query it or claim a zero result;
     explain that the cache does not expose that fact family. If a listed
@@ -63,12 +67,22 @@ Use `query` for definitions, calls, dependencies, complexity, dead code, and lin
 Use `overview` for cache state and schema questions (which predicates exist,
 fact counts). Use `search` for comments, Markdown, and other indexed prose.
 
-Use `extract` only when the user asks to parse a claim from a sentence.
+For a code assertion or claim that must be fact-checked (especially one
+produced by an LLM), first call `analyze_text` on the exact claim. Use any `query_frames` JSON objects as
+bounded candidate structure, and consult token analysis only as linguistic
+evidence. A missing frame is not proof that the claim is unsupported: the LLM
+may still map a clearly worded claim to a known fact schema. If the relation,
+entities, or arities are ambiguous, do not invent a goal; ask for clarification
+or report that the claim cannot be checked from this wording. Otherwise, map
+the claim to the loaded fact schema and call `query` to validate it.
+`analyze_text` only analyzes language; it does not prove the claim. Never
+execute arbitrary model-generated Prolog: construct goals from known
+predicates and their documented arities/shapes, then report the exact goal and
+returned evidence.
 
-Use `check` only when the user asks to verify a claim from a sentence.
-
-Use `analyze_text` only when the user asks to parse English text into its
-linguistic components. This is separate from `parse`, which scans source files.
+Use `extract` to parse a bounded claim when that is explicitly requested. Use
+`check` only when the user specifically requests its built-in extract-and-check
+operation; for LLM-generated claims use `analyze_text` → `query`.
 </routing>
 
 <schema>
@@ -177,6 +191,8 @@ Do not use a goal of only variables to answer a named claim.
 
 Use an `all_*` predicate when it exists for a large audit.
 </goals>
+
+
 
 <output>
 Answer non-codebase questions directly.
