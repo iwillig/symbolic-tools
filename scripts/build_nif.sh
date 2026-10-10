@@ -5,6 +5,7 @@
 #   native/symbolic_ts   -> priv/symbolic_ts.so    (tree-sitter binding)
 #   native/symbolic_text -> priv/symbolic_text.so   (full-text search)
 #   native/symbolic_nlp  -> priv/symbolic_nlp.so   (statistical NL tier)
+#   native/symbolic_nlprule -> priv/symbolic_nlprule.so (English NLP)
 #
 # Called by rebar3's {pre_hooks, compile} (see rebar.config), so every
 # rebar3 compile, eunit, shell, release, and cover run picks up freshly
@@ -26,7 +27,7 @@ cd "$(dirname "$0")/.."
 # packaged builds skip it until libtorch is packaged properly.
 SKIP_NLP="${SYMBOLIC_SKIP_NLP:-}"
 
-crates="symbolic_ts symbolic_text"
+crates="symbolic_ts symbolic_text symbolic_nlprule"
 if [ -z "$SKIP_NLP" ]; then
     crates="$crates symbolic_nlp"
 fi

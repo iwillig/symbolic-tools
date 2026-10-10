@@ -68,7 +68,8 @@ serve_test_() ->
         fun ask_with_unknown_path_is_friendly_error/1,
         fun extract_returns_a_claim/1,
         fun search_returns_cached_prose/1,
-        fun check_returns_a_verdict/1
+        fun check_returns_a_verdict/1,
+        fun analyze_text_returns_sentence_components/1
     ]}.
 
 extract_returns_a_claim(_Setup) ->
@@ -89,6 +90,18 @@ check_returns_a_verdict(_Setup) ->
         _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
         Json = decode(symbolic_serve:handle_check(#{<<"sentence">> => <<"shout/1 calls capitalize/1">>})),
         ?assertMatch(#{<<"ok">> := #{<<"verdict">> := <<"true">>}}, Json)
+    end.
+
+analyze_text_returns_sentence_components(_Setup) ->
+    fun() ->
+        meck:new(symbolic_analyze),
+        meck:expect(symbolic_analyze, run_result, fun(<<"Caf", 195, 169, ".">>) ->
+            {ok, #{<<"sentences">> => [#{<<"text">> => <<"Caf", 195, 169, ".">>,
+                <<"tokens">> => [#{<<"text">> => <<"Caf", 195, 169>>}]}]}}
+        end),
+        Json = decode(symbolic_serve:handle_analyze_text(#{<<"text">> => <<"Caf", 195, 169, ".">>})),
+        ?assertMatch(#{<<"ok">> := #{<<"sentences">> := [_]}}, Json),
+        meck:unload(symbolic_analyze)
     end.
 
 ask_before_parse_is_friendly_error(_Setup) ->

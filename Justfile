@@ -103,6 +103,34 @@ clean:
 serve PORT="4000":
     python3 -m http.server {{PORT}}
 
+# Install nlprule's separately distributed English tokenizer data. The NIF
+# checks SYMBOLIC_NLPRULE_DATA first, then this same XDG user-data location.
+install-nlprule-data:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    url='https://github.com/bminixhofer/nlprule/releases/download/0.6.4/en_tokenizer.bin.gz'
+    expected='b500dd208ace9ba218f6b52f8cdab63d4c09d6f2967e9bd8f917bf5984d4468a'
+    data_dir="${SYMBOLIC_NLPRULE_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/symbolic/nlprule}"
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' EXIT
+    curl --fail --location --silent --show-error "$url" -o "$tmp_dir/en_tokenizer.bin.gz"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$tmp_dir/en_tokenizer.bin.gz" | cut -d ' ' -f 1)"
+    else
+        actual="$(shasum -a 256 "$tmp_dir/en_tokenizer.bin.gz" | cut -d ' ' -f 1)"
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo "nlprule tokenizer checksum mismatch: $actual" >&2
+        exit 1
+    fi
+    gzip -t "$tmp_dir/en_tokenizer.bin.gz"
+    gzip -dc "$tmp_dir/en_tokenizer.bin.gz" > "$tmp_dir/en_tokenizer.bin"
+    test -s "$tmp_dir/en_tokenizer.bin"
+    install -d "$data_dir"
+    install -m 0644 "$tmp_dir/en_tokenizer.bin" "$data_dir/en_tokenizer.bin.tmp"
+    mv "$data_dir/en_tokenizer.bin.tmp" "$data_dir/en_tokenizer.bin"
+    printf 'Installed English tokenizer to %s\n' "$data_dir/en_tokenizer.bin"
+
 # Rebuild just the symbolic_ts Rustler NIF (native/symbolic_ts -> priv/
 # symbolic_ts.so). rebar3's compile pre-hook already does this on every
 # compile; this target exists for iterating on the Rust side alone.

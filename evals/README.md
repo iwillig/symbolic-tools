@@ -1,15 +1,15 @@
 # Symbolic MCP promptfoo evals
 
-Evaluates whether an LLM routes questions correctly to the `symbolic` MCP
-server's four tools (`mcp__symbolic__parse`, `mcp__symbolic__query`,
-`mcp__symbolic__overview`, `mcp__symbolic__ask`).
+Evaluates whether an LLM routes requests correctly to the `symbolic` MCP
+server. Core tests cover `parse`, `query`, `overview`, and `ask`; the routing
+eval also verifies `analyze_text` for English linguistic analysis.
 
 The tools are never executed. The eval checks, in a single turn, which tool
 the model *requests* and whether its arguments are well-formed:
 
-- codebase questions must produce a symbolic tool call
-  (call-graph and definition questions must carry a Prolog goal over the
-  real fact schemas — `calls/5`, `defines/5` — not a hallucinated predicate),
+- codebase questions must produce a symbolic tool call; call-graph and
+  definition questions must use the real `calls/5` or `defines/5` schemas,
+- English sentence/token analysis requests must produce `analyze_text`,
 - cache-state questions must produce `overview`,
 - a fresh session must load the codebase with `parse` before querying,
 - general knowledge questions must produce no tool call at all.

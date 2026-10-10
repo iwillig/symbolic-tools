@@ -83,6 +83,17 @@ providers:
                 path:
                   type: string
                   description: 'Which cached directory to query; omit for the most recently parsed'
+        - type: function
+          function:
+            name: mcp__symbolic__analyze_text
+            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks. Does not correct text.'
+            parameters:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  description: 'English text to analyze'
 
 # Harness: pull the first mcp__symbolic__query call's goal out of the output.
 tests:

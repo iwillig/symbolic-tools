@@ -91,6 +91,18 @@ providers:
                   type: string
                   description: 'Which cached directory to ask about; omit for the most recently parsed'
 
+        - type: function
+          function:
+            name: mcp__symbolic__analyze_text
+            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks. Does not correct text.'
+            parameters:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  description: 'English text to analyze'
+
 tests:
   - description: 'trace 19148384 L936 (Sep 24) - claim TRUE - parse_number/1 in both extractors'
     vars:

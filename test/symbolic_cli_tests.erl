@@ -13,7 +13,7 @@
 
 cli_structure_test() ->
     #{commands := Commands} = symbolic_cli:cli(),
-    ?assertEqual(["ask", "check", "extract", "overview", "parse", "query", "search", "serve"],
+    ?assertEqual(["analyze", "ask", "check", "extract", "overview", "parse", "query", "search", "serve"],
         lists:sort(maps:keys(Commands))).
 
 query_cmd_requires_db_and_goal_test() ->
@@ -164,6 +164,20 @@ check_handler_defaults_missing_rules_and_model_test() ->
     ?assert(meck:called(symbolic_check, run,
         ["facts.dets", undefined, false, "foo/2 calls bar/1", undefined])),
     meck:unload(symbolic_check).
+
+analyze_cmd_requires_text_test() ->
+    #{commands := #{"analyze" := #{arguments := Args}}} = symbolic_cli:cli(),
+    #{text := Text} = args_by_name(Args),
+    ?assertEqual(text, maps:get(name, Text)),
+    ?assertEqual(false, maps:is_key(required, Text)).
+
+analyze_handler_forwards_text_test() ->
+    meck:new(symbolic_analyze),
+    meck:expect(symbolic_analyze, run, fun(_Text) -> ok end),
+    #{commands := #{"analyze" := #{handler := Handler}}} = symbolic_cli:cli(),
+    Handler(#{text => "Hello world."}),
+    ?assert(meck:called(symbolic_analyze, run, ["Hello world."])),
+    meck:unload(symbolic_analyze).
 
 args_by_name(Args) ->
     maps:from_list([{maps:get(name, A), A} || A <- Args]).

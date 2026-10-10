@@ -13,6 +13,8 @@ Use these tools:
 - `symbolic_search { query, limit?, path? }` searches cached prose facts.
 - `symbolic_extract { sentence, model? }` extracts a bounded claim.
 - `symbolic_check { sentence, model?, path? }` extracts and checks a claim.
+- `symbolic_analyze_text { text }` splits English into sentences and tokens
+  with spans, POS/lemma tags, and chunks. It does not correct text.
 </tools>
 
 <rules>
@@ -64,6 +66,9 @@ fact counts). Use `search` for comments, Markdown, and other indexed prose.
 Use `extract` only when the user asks to parse a claim from a sentence.
 
 Use `check` only when the user asks to verify a claim from a sentence.
+
+Use `analyze_text` only when the user asks to parse English text into its
+linguistic components. This is separate from `parse`, which scans source files.
 </routing>
 
 <schema>

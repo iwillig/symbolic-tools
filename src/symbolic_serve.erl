@@ -2,10 +2,12 @@
 %%% cache (symbolic_codebase) over the Model Context Protocol via `erlmcp`.
 %%% See docs/erlang-mcp-design.md.
 %%%
-%%% Three tools, refocused on "an LLM asks about a codebase":
-%%%   parse     scan a directory, extract facts, cache them in memory
-%%%   query     prove a Prolog goal against the cache, all solutions (capped)
-%%%   overview  report the current state of the cached fact base
+%%% Codebase tools:
+%%%   parse         scan a directory, extract facts, cache them in memory
+%%%   query         prove a Prolog goal against the cache, all solutions (capped)
+%%%   overview      report the current state of the cached fact base
+%%%   ask/extract/check/search provide bounded question, claim, and prose tools
+%%%   analyze_text  split English into sentences and annotated tokens
 %%%
 %%% Uses `erlmcp_stdio` (not the lower-level `erlmcp_server:start_link/2`
 %%% from erlmcp's README) — confirmed by testing: the README's API starts a
@@ -37,7 +39,7 @@
 %% verified instead by the manual stdio smoke tests (see
 %% docs/erlang-mcp-design.md).
 -export([handle_parse/1, handle_query/1, handle_ask/1, handle_overview/1,
-    handle_extract/1, handle_check/1, handle_search/1]).
+    handle_extract/1, handle_check/1, handle_search/1, handle_analyze_text/1]).
 
 %% Start the MCP server over stdio: logging first (so early failures
 %% are visible), then the erlmcp application, the symbolic_codebase
@@ -51,7 +53,7 @@ run() ->
     {ok, _CachePid} = symbolic_codebase:start_link(),
     ok = erlmcp_stdio:start(),
     ok = register_tools(),
-    ?LOG_INFO("symbolic serve ready: tools parse, query, ask, overview, extract, check, search registered"),
+    ?LOG_INFO("symbolic serve ready: tools parse, query, ask, overview, extract, check, search, analyze_text registered"),
     receive after infinity -> ok end.
 
 %% A file under the platform's standard log directory (e.g. ~/Library/Logs
@@ -318,8 +320,15 @@ register_parity_tools() ->
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
     ok = erlmcp_stdio:add_tool(<<"check">>, <<"Extract and check a claim against cached facts.">>, fun handle_check/1,
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
-    erlmcp_stdio:add_tool(<<"search">>, <<"Search cached prose facts.">>, fun handle_search/1,
-        #{<<"type">> => <<"object">>, <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"limit">> => #{<<"type">> => <<"integer">>}}, <<"required">> => [<<"query">>]}).
+    ok = erlmcp_stdio:add_tool(<<"search">>, <<"Search cached prose facts.">>, fun handle_search/1,
+        #{<<"type">> => <<"object">>, <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"limit">> => #{<<"type">> => <<"integer">>}}, <<"required">> => [<<"query">>]}),
+    erlmcp_stdio:add_tool(<<"analyze_text">>,
+        <<"Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks. Requires English nlprule tokenizer data in SYMBOLIC_NLPRULE_DATA. Does not correct text.">>,
+        fun handle_analyze_text/1,
+        #{<<"type">> => <<"object">>,
+          <<"properties">> => #{<<"text">> => #{<<"type">> => <<"string">>,
+              <<"description">> => <<"English text to analyze">>}},
+          <<"required">> => [<<"text">>]}).
 
 %% Tool handlers — each returns a JSON binary and never crashes.
 
@@ -347,6 +356,19 @@ handle_check(Params) ->
             end;
         unrecognized -> json(#{error => <<"unrecognized sentence">>});
         {error, Reason} -> json(#{error => error_str(Reason)})
+    end.
+
+handle_analyze_text(Params) ->
+    try
+        Text = maps:get(<<"text">>, Params),
+        case symbolic_analyze:run_result(Text) of
+            {ok, Analysis} -> json(#{ok => Analysis});
+            {error, Reason} -> json(#{error => error_str(Reason)})
+        end
+    catch
+        Class:Crash:ST ->
+            ?LOG_ERROR("analyze_text: crashed ~p:~p~n~p", [Class, Crash, ST]),
+            json(#{error => caught_str(Class, Crash, ST)})
     end.
 
 handle_search(Params) ->

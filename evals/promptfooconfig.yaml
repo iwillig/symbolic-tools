@@ -76,6 +76,17 @@ providers:
                 path:
                   type: string
                   description: 'Which cached directory to ask about; omit for the most recently parsed'
+        - type: function
+          function:
+            name: mcp__symbolic__analyze_text
+            description: 'Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks. Does not correct text.'
+            parameters:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  description: 'English text to analyze'
 
 tests:
   # ---- cached scenario: codebase already loaded, answer with query ----
@@ -125,6 +136,22 @@ tests:
           }
           return false;
 
+  - description: 'English linguistic analysis routes to mcp__symbolic__analyze_text'
+    prompts: [cached]
+    vars:
+      query: 'Analyze this English text into sentences and token components: The fox runs. It is quick.'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__analyze_text]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__analyze_text');
+          if (!tc) return false;
+          try { return JSON.parse(tc.function.arguments).text.includes('The fox runs.'); } catch (e) { return false; }
+
   - description: 'cache-state question routes to mcp__symbolic__overview'
     prompts: [cached]
     vars:
@@ -146,6 +173,7 @@ tests:
           - mcp__symbolic__query
           - mcp__symbolic__overview
           - mcp__symbolic__ask
+          - mcp__symbolic__analyze_text
         threshold: 0.5
 
   - description: 'general knowledge (person) does NOT trigger a symbolic MCP tool call'
@@ -159,6 +187,7 @@ tests:
           - mcp__symbolic__query
           - mcp__symbolic__overview
           - mcp__symbolic__ask
+          - mcp__symbolic__analyze_text
         threshold: 0.5
 
   # ---- fresh scenario: nothing cached yet, load first ----
@@ -192,4 +221,5 @@ tests:
           - mcp__symbolic__query
           - mcp__symbolic__overview
           - mcp__symbolic__ask
+          - mcp__symbolic__analyze_text
         threshold: 0.5

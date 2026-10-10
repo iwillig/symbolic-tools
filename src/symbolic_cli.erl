@@ -24,6 +24,7 @@ main(Argv) ->
 cli() ->
     #{
         commands => #{
+            "analyze" => analyze_cmd(),
             "query" => query_cmd(),
             "parse" => parse_cmd(),
             "serve" => serve_cmd(),
@@ -33,6 +34,13 @@ cli() ->
             "ask" => ask_cmd(),
             "overview" => overview_cmd()
         }
+    }.
+
+analyze_cmd() ->
+    #{
+        help => "Split English text into sentences and annotated tokens",
+        arguments => [#{name => text, help => "English text to analyze"}],
+        handler => fun(#{text := Text}) -> symbolic_analyze:run(Text) end
     }.
 
 query_cmd() ->

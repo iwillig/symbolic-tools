@@ -20,9 +20,10 @@ function," "what does this module depend on") and get an answer produced
 by unification and resolution, not by pattern-matching over text.
 
 **Status: early implementation.** The core Prolog engine (`prolog_session`,
-over `erlog`), both CLI commands (`query`, `parse` — tree-sitter
-extraction for Erlang and TypeScript), and the MCP server (`serve`, over
-`erlmcp`) all work end-to-end, via `rebar3 release` (see Install) —
+over `erlog`), the CLI (`query`, `parse` — tree-sitter extraction for
+Erlang and TypeScript — and `analyze` for English via nlprule), and the MCP
+server (`serve`, over `erlmcp`) work end-to-end, via `rebar3 release` (see
+Install) —
 verified for `serve` with a real stdio JSON-RPC round trip: start a
 session, consult a program, query it, get bindings back.
 
@@ -306,15 +307,18 @@ vendored-fork Makefiles).
 ## Tools
 
 - **CLI** — `symbolic parse` walks a folder, prints facts as JSON, and
-  optionally writes them into a fact database (`-db`); `symbolic query`
+  optionally writes them into a fact database (`-db`); `symbolic analyze`
+  tokenizes and segments English using nlprule (see
+  [`docs/nlprule-analysis.md`](docs/nlprule-analysis.md)); `symbolic query`
   loads that database and runs a query against it, consulting hand-written
   Prolog rules alongside the facts: `-rules <file>` for a one-off, or the
   project's shared rule library at `.symbolic/rules.pl`, which is found
   automatically when no `-rules` is given. See
   `docs/cli-erlang.md`.
-- **MCP server** — `symbolic serve` exposes the same Prolog session and
-  fact base over the Model Context Protocol, so an LLM agent can consult
-  and query it directly. See `docs/erlang-mcp-design.md`.
+- **MCP server** — `symbolic serve` exposes the Prolog tools and an
+  `analyze_text` tool for English sentence/token analysis over the Model
+  Context Protocol. See `docs/erlang-mcp-design.md` and
+  [`docs/nlprule-analysis.md`](docs/nlprule-analysis.md).
 
 ## Usage
 
@@ -324,6 +328,7 @@ symbolic parse ./src -db facts.dets                   # extract facts, print JSO
 symbolic parse -db facts.dets                         # no dir: merge every path in .symbolic/config.json instead
 symbolic query -db facts.dets 'depends_on(X, Y)'      # ask a question about the codebase
 symbolic query -db facts.dets 'top_fan_in(5, Ranked)' # derived rules, no -rules flag needed
+symbolic analyze 'The quick fox jumps.'              # English sentence/token analysis
 symbolic serve                                        # start the MCP server (stdio transport)
 ```
 
@@ -335,10 +340,10 @@ uses (`-config <file>` overrides it, the same way `-rules` overrides
 rules discovery). This project's own [`.symbolic/config.json`](.symbolic/config.json)
 is exactly `{"paths": ["src", "test"]}` — see `docs/prolog-store.md` §8.
 
-All three work end-to-end, run via a `rebar3 release` (see Install)
-rather than `rebar3 escriptize` — `parse` and `serve` both need real
-files on disk at runtime (`parse` for `symbolic_ts`'s NIF, `serve` for
-`erlmcp`'s supervision tree), and neither works from inside an escript's
+These commands run via a `rebar3 release` (see Install) rather than
+`rebar3 escriptize` — `parse`, `analyze`, and `serve` need real
+files on disk at runtime (`parse`/`analyze` for their NIFs, `serve` for
+`erlmcp`'s supervision tree), and they do not work from inside an escript's
 zip archive (a real limitation found while building this, not a bug; see
 `docs/cli-erlang.md` §1/§1.1). Flags use a single dash (`-db`, `-rules`,
 `-no-rules`, not `--db`/`--rules`) — that's [stdlib

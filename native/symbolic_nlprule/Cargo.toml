@@ -1,0 +1,15 @@
+[package]
+name = "symbolic_nlprule"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Rustler NIF for English sentence and token analysis with nlprule"
+
+[lib]
+name = "symbolic_nlprule"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.38"
+nlprule = "0.6.4"
+serde_json = "1"
