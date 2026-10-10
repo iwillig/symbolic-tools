@@ -1,0 +1,424 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'Symbolic MCP goal-shaping eval: tests mined from real pi-agent session traces (2026-10-09) where the model called the right tool but wrote a goal that errored or proved nothing. Tools are never executed; assertions check goal shape only.'
+# Each test reproduces a failure observed in ~/.pi/agent/sessions for this
+# repo. The correct behavior is defined by the real fact schema (see
+# docs/prolog-schema.md) and the current SYSTEM.md rules.
+
+prompts:
+  - id: file://prompts/symbolic_mcp_cached.json
+    label: cached
+  - id: file://prompts/symbolic_mcp_cached_root.json
+    label: cached_root
+  - id: file://prompts/symbolic_mcp_cached_norules.json
+    label: cached_norules
+  - id: file://prompts/symbolic_mcp_cached_markdown.json
+    label: cached_markdown
+  - id: file://prompts/symbolic_mcp_fresh.json
+    label: fresh
+
+defaultTest:
+  vars:
+    system: file://../SYSTEM.md
+
+providers:
+  - id: openai:chat:local
+    label: 'Qwen 3.8 27B (local llama-server)'
+    config:
+      apiBaseUrl: http://localhost:8080/v1
+      apiKeyRequired: false
+      temperature: 0
+      max_tokens: 2048
+      tools:
+        - type: function
+          function:
+            name: mcp__symbolic__parse
+            description: 'Parse a PROJECT and cache its codebase facts in memory, keyed by that project''s own root. A previously cached project is untouched by parsing a different one. Re-parsing the SAME project rescans it and replaces just that entry.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Project root (must have .symbolic/config.json inside) or any plain directory to scan literally'
+                rules:
+                  type: string
+                  description: 'Prolog rules file to consult instead of auto-discovering .symbolic/rules.pl'
+        - type: function
+          function:
+            name: mcp__symbolic__query
+            description: 'Prove a Prolog goal against a cached codebase and return all solutions (capped). Raw facts: defines(Function, Arity, Params, File, Line); calls(Caller, CallerArity, CallSpec, File, Line) with CallSpec = local(Callee, Arity) or remote(Module, Function, Arity); export(Function, Arity, File, Line); branch(Function, Arity, Kind, File, Line); doc(Function, Arity, File, Line, Text); comment(File, Line, Text); heading(File, Level, Title, Line); paragraph(File, Line, Text). File paths are absolute atoms; text arguments are binaries. When parse reported a rules_file, a derived-predicate library is loaded: callees/2, callers/3, reaches/2, truly_uncalled/3, undocumented/4, duplicate_name/3, real_complexity/4, and one-argument audit forms all_truly_uncalled/1, all_too_complex_real/1, all_god_files/1, all_duplicate_names/1 - each all_* form takes a single variable and binds it to the full result list in one solution.'
+            parameters:
+              type: object
+              required: [goal]
+              properties:
+                goal:
+                  type: string
+                  description: 'One Prolog goal over those facts, e.g. calls(X, _, local(parse, 2), File, Line), callers(parse, 2, File), or defines(scan_one, 1, Params, File, Line)'
+                limit:
+                  type: integer
+                  description: 'Max solutions to return (default 50)'
+                path:
+                  type: string
+                  description: 'Which cached directory to query, by the same path passed to parse'
+        - type: function
+          function:
+            name: mcp__symbolic__overview
+            description: 'Report the current state of a cached fact base: whether a codebase is loaded, how many files/languages, and fact counts by predicate. This is also the way to check whether a predicate exists in the fact base or what its arity is.'
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: 'Which cached directory to report on; omit for the most recently parsed'
+        - type: function
+          function:
+            name: mcp__symbolic__ask
+            description: 'Answer a bounded English question against a cached codebase: does X/N call Y/M, which functions call X/N, how many functions call X/N, is X/N defined, where is X documented. Unverifiable questions come back as {type: unverifiable, reason}; phrasings outside the grammar are an unrecognized error. Callers that need anything the grammar does not cover should write a query goal instead.'
+            parameters:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: 'The question, e.g. "how many functions call query_binary/2?"'
+                path:
+                  type: string
+                  description: 'Which cached directory to query; omit for the most recently parsed'
+
+# Harness: pull the first mcp__symbolic__query call's goal out of the output.
+tests:
+
+  # --- trace 2026-10-09T23-49: all_* arity guessing ------------------------
+  # Model emitted all_truly_uncalled(F, A, File) -> "no such predicate:
+  # all_truly_uncalled/3", then all_too_complex_real/4, all_god_files/2,
+  # all_undocumented/4 - four consecutive arity errors. The audit form always
+  # takes ONE argument (a list); the per-row form is the plain name.
+
+  - description: 'trace 23-49 L: dead-code audit uses all_* with ONE list arg or the per-row form'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'Find every truly uncalled function in the cached codebase.'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          // audit form must be single-argument: all_truly_uncalled(T)
+          if (/all_truly_uncalled\s*\(/.test(goal)) {
+            return /all_truly_uncalled\s*\(\s*[A-Z_][A-Za-z0-9_]*\s*\)/.test(goal);
+          }
+          // per-row form truly_uncalled(F, A, File) is fine
+          return /truly_uncalled\s*\(/.test(goal);
+
+  - description: 'trace 23-49 L: complexity audit does not copy real_complexity/4 arity onto the all_ form'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'Which functions in the cached codebase have the worst branch complexity?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          if (/all_too_complex_real\s*\(/.test(goal)) {
+            return /all_too_complex_real\s*\(\s*[A-Z_][A-Za-z0-9_]*\s*\)/.test(goal);
+          }
+          return /real_complexity\s*\(/.test(goal) || /too_complex\s*\(/.test(goal);
+
+  # --- trace 2026-10-09T22-36: current_predicate schema probes -------------
+  # Model burned four queries on current_predicate(defines/5) /
+  # current_predicate(heading/4) to ask "does this predicate exist / how
+  # many facts". overview answers both directly.
+
+  - description: 'trace 22-36 L: predicate-existence question routes to overview, not a probe query'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'Before I write goals - does the fact base have heading facts, and how many?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__overview]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!q) return true;  // overview-only is the ideal routing
+          let goal = '';
+          try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
+          return !/current_predicate/.test(goal);
+
+  - description: 'trace 22-36 L: schema question routes to overview, never current_predicate'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'What fact predicates are available in the cached fact base?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__overview]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!q) return true;
+          let goal = '';
+          try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
+          return !/current_predicate/.test(goal);
+
+  # --- trace 2026-10-09T22-36: hallucinated predicate ----------------------
+  # Model queried module_doc(Module, File, Line, Text) - a predicate that
+  # does not exist in the schema - and got "no such predicate". Checking
+  # existence first via overview is the correct move for an unfamiliar
+  # predicate name.
+
+  - description: 'trace 22-36 L: unfamiliar predicate name is checked against overview before querying'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'List the module_doc facts for the cached codebase.'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__overview]
+        threshold: 0.5
+
+  # --- trace 2026-10-09T22-36: relative-path sub_atom filter ---------------
+  # Model wrote sub_atom(File, _, _, 0, 'src/') to keep src/ files - fact
+  # paths are ABSOLUTE atoms, so a relative suffix binds nothing. The fix
+  # (observed in the same trace) anchors the absolute prefix:
+  # sub_atom(File, 0, _, _, '/abs/path/src/').
+
+  - description: 'trace 22-36 L: directory filter anchors the absolute path prefix, not a relative suffix'
+    prompts: [cached_root]
+    vars:
+      query: 'Which functions defined under src/ have no doc comment? The project root is /Users/iwillig/dev/symbolic-tools.'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          // any quoted path-like literal in the goal must be absolute
+          const quoted = goal.match(/['"]([^'"]*\/[^'"]*)['"]/g) || [];
+          for (const s of quoted) {
+            const inner = s.slice(1, -1);
+            if (!inner.startsWith('/')) return false;  // relative path literal = the trace bug
+          }
+          return /undocumented|doc\s*\(/.test(goal);
+
+  # --- traces: core-fact arity errors (defines/4, example_defines/4) -------
+  # defines/5 takes Params as its third argument; the model repeatedly wrote
+  # defines(F, A, File, Line) -> "no such predicate: defines/4".
+
+  - description: 'trace: definition lookup uses defines/5 with all five arguments'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'In which file is scan_one/1 defined?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          const a = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__ask');
+          if (!q && !a) return false;
+          if (a) {
+            let question = '';
+            try { question = JSON.parse(a.function.arguments).question || ''; } catch (e) { return false; }
+            return /scan_one\/\d/.test(question);  // ask grammar requires arity
+          }
+          let goal = '';
+          try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
+          const m = goal.match(/\bdefines\s*\(([^()]*)\)/);
+          if (!m) return false;
+          if (!/scan_one/.test(goal)) return false;
+          // count top-level commas: 5 args -> 4 commas (args are simple vars/wildcards)
+          const depth = { '(': 0 };
+          let commas = 0;
+          for (const ch of m[1]) {
+            if (ch === '(') depth['(']++;
+            else if (ch === ')') depth['(']--;
+            else if (ch === ',' && depth['('] === 0) commas++;
+          }
+          return commas === 4;
+
+  # --- traces: sub_atom/sub_text used as generators (instantiation_error) --
+  # Model wrote sub_atom(X, _, _, _, 'src') with X unbound ->
+  # {"error":"instantiation_error"}. Both predicates match inside an
+  # ALREADY-BOUND value; the fact selection must come first.
+
+  - description: 'trace: comment-text match runs on a bound variable via sub_text, never a literal haystack'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'Find comments that mention extract_file_safely.'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query, mcp__symbolic__overview]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          const ov = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__overview');
+          // an overview-first strategy is acceptable; goal shape applies when query ran
+          if (!tc) return !!ov;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          if (!/comment\s*\(/.test(goal)) return false;
+          if (!/extract_file_safely|extract_file/.test(goal)) return false;
+          // a quoted literal as the sub_text/sub_atom HAYSTACK is the trace bug
+          if (/sub_(text|atom)\s*\(\s*['"]/.test(goal)) return false;
+          // text facts are binaries: matching inside them uses sub_text
+          return /sub_text\s*\(/.test(goal);
+
+  # --- traces: heading argument-order swap ---------------------------------
+  # Model wrote heading(H, L, File, Title) - File and Title swapped - then
+  # sub_atom'ed over the Title binary: {type_error,atom,<<"Level Two">>}.
+
+  - description: 'trace: heading lookup binds File/Title in schema order and matches Title with sub_text'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'In which markdown file is there a heading titled "Cache design", and at what line?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          const m = goal.match(/\bheading\s*\(\s*([A-Z_]\w*)\s*,\s*([A-Z_]\w*)\s*,\s*([A-Z_]\w*)\s*,\s*([A-Z_]\w*)\s*\)/);
+          if (!m) return false;
+          const [, fileVar, , titleVar] = m;
+          // the TITLE (position 3) is matched with sub_text (it is a binary)...
+          if (!goal.includes(`sub_text(${titleVar}`) && !goal.includes(`${titleVar} =`)) return false;
+          // ...and the text matcher is never applied to the FILE variable (the swap bug)
+          if (goal.includes(`sub_text(${fileVar}`) || goal.includes(`sub_atom(${fileVar}, _, _, _, 'Cache`)) return false;
+          return /Cache design/.test(goal);
+
+  # --- traces: ask grammar violations (missing arities) --------------------
+  # "does render_query call error_str/1?" without arities -> unrecognized.
+  # The grammar needs X/N for every function; unknown arity means: write a
+  # query goal instead.
+
+  - description: 'trace: call question with unknown arities falls back to a query goal naming both functions'
+    prompts: [cached, cached_root]
+    vars:
+      query: 'does render_query call parse_facts?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const q = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          const a = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__ask');
+          if (a) {
+            // ask is only acceptable when the question carries both arities
+            let question = '';
+            try { question = JSON.parse(a.function.arguments).question || ''; } catch (e) { return false; }
+            return /render_query\/\d/.test(question) && /parse_facts\/\d/.test(question);
+          }
+          if (!q) return false;
+          let goal = '';
+          try { goal = JSON.parse(q.function.arguments).goal || ''; } catch (e) { return false; }
+          return /render_query/.test(goal) && /parse_facts/.test(goal) && /\b(calls|callers|callees)\b/.test(goal);
+
+  # --- traces: derived predicates without a rules_file ---------------------
+  # In a cache whose parse reported no rules_file, undocumented/4 does not
+  # exist: querying it surfaced "no such predicate: doc/5". Without the
+  # library, the rule must be written inline from raw facts.
+
+  - description: 'trace: without a rules_file the undocumented rule is written inline, not queried as a derived predicate'
+    prompts: [cached_norules]
+    vars:
+      query: 'Which exported functions in the cached codebase have no doc comment?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__query]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+          if (!tc) return false;
+          let goal = '';
+          try { goal = JSON.parse(tc.function.arguments).goal || ''; } catch (e) { return false; }
+          // derived predicates do not exist in this cache
+          if (/undocumented|all_undocumented/.test(goal)) return false;
+          // the inline rule uses raw facts and negation
+          return /export\s*\(/.test(goal) && /doc\s*\(/.test(goal) && /\\\+/.test(goal);
+
+  # --- precedence and evidence semantics -----------------------------------
+  # Guard the tool-order contract and distinguish an absent family from a
+  # successful query with zero solutions.
+
+  - description: 'precedence: cached unknown predicate checks overview; never issues guessed query'
+    prompts: [cached]
+    vars:
+      query: 'Does this cache contain module_doc facts?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__overview]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          return !list.some(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+
+  - description: 'precedence: fresh named subdirectory is parsed before evidence queries'
+    prompts: [fresh]
+    vars:
+      query: 'Which functions call parse/2 in the code under ./src?'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__parse]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          const tc = list.find(c => c && c.function && c.function.name === 'mcp__symbolic__parse');
+          if (!tc) return false;
+          let args = {};
+          try { args = JSON.parse(tc.function.arguments); } catch (e) { return false; }
+          return typeof args.path === 'string' && /src/.test(args.path);
+
+  - description: 'evidence: markdown-only cache is not queried for code definitions'
+    prompts: [cached_markdown]
+    vars:
+      query: 'List the functions defined in this cache.'
+    assert:
+      - type: is-valid-openai-tools-call
+      - type: tool-call-f1
+        value: [mcp__symbolic__overview]
+        threshold: 0.5
+      - type: javascript
+        value: |
+          const list = Array.isArray(output) ? output : (output && Array.isArray(output.tool_calls) ? output.tool_calls : []);
+          return !list.some(c => c && c.function && c.function.name === 'mcp__symbolic__query');
+

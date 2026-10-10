@@ -1,0 +1,14 @@
+[
+  {
+    "role": "system",
+    "content": "{{system}}"
+  },
+  {
+    "role": "system",
+    "content": "<session>\nA codebase is already parsed and cached in this session. The cache state is verified. The cache is already loaded - parse is never needed again, but overview remains available for schema questions.\nThe parse result reported the project root /Users/iwillig/dev/symbolic-tools, and it did NOT report a rules_file: no derived-predicate library is loaded in this cache.\n</session>"
+  },
+  {
+    "role": "user",
+    "content": "{{query}}"
+  }
+]

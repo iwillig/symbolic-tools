@@ -1,0 +1,9 @@
+-module(external_docs_fixture).
+-moduledoc({file, "external_docs/module.md"}).
+
+-export([add/2]).
+
+-spec add(integer(), integer()) -> integer().
+-doc({file, "external_docs/add.md"}).
+add(X, Y) ->
+    X + Y.

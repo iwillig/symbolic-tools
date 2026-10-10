@@ -38,9 +38,14 @@ files reference it as `{{system}}`). Each prompt file adds a second system
 message with the scenario state (`<session>`: cached or fresh; `<task>` for
 claims). The eval loop:
 
-1. Run an eval. Read the failing row's tool call.
-2. Add or change one rule in `SYSTEM.md`.
-3. Rerun. Keep the rule if the row passes and nothing else regresses.
+1. Run focused evals and inspect the failing tool call and scenario text.
+2. Fix a test-harness ambiguity before changing the prompt.
+3. Change one prompt rule or example; rerun the focused eval.
+4. Run routing, claims, and traces for regression; use `--repeat 3` for
+   local-model variability. Keep the change only if it improves the target
+   without regressing the other suites.
+5. Treat green shape checks as routing/goal-shape evidence only; they do not
+   prove the generated goal's result until the executable-goal tier exists.
 
 ## Run
 
@@ -55,6 +60,49 @@ promptfoo eval -c promptfooconfig.yaml --no-cache --output mcp-output.json
 - `promptfooconfig-iterate.yaml` — A/B/C/D experiment over the query tool's doc
   string (no schema / fixed example only / condensed schema / server text);
   run with `--repeat 3` for signal
+- `promptfooconfig-traces.yaml` — goal-shaping and routing-precedence eval:
+  14 tests mined from pi-agent session traces (396 symbolic calls, 60 tool
+  errors) where routing was right but the goal errored or proved nothing, plus
+  cases for fresh-path selection and unknown/absent fact families. Failure
+  classes, each verified against the live server before being ruled on:
+
+  - `all_*` audit predicates called with the base predicate's arity (4
+    consecutive `no such predicate` errors) — the audit form takes exactly
+    one list argument
+  - `current_predicate/1` schema probes (4 wasted queries) — `overview`
+    answers existence and fact counts
+  - a hallucinated predicate (`module_doc/4`) queried blind
+  - a relative-path `sub_atom/5` filter matching nothing against absolute
+    file atoms
+  - core-fact arity errors: `defines(F, A, File, Line)` (defines/4),
+    `example_defines/4`
+  - argument-order swaps observed in the wild: `heading(H, L, File, Title)`
+    then matching the Title binary as a path → `{type_error,atom,...}`
+  - `sub_atom`/`sub_text` used as generators on unbound variables →
+    `instantiation_error` (both match inside an already-bound value only)
+  - atom/binary confusion: `sub_atom` over comment text →
+    `{type_error,atom,...}`; a literal as `sub_text`'s haystack →
+    `{type_error,binary,...}`
+  - derived predicates (`undocumented/4`, `all_*`) queried in a cache whose
+    parse reported no `rules_file` → `no such predicate`
+  - a fact family with zero facts in the cache errors as `no such
+    predicate`, not `count: 0` (verified: `defines/5` on a docs-only cache)
+  - `ask` grammar violations: 7 unrecognized questions, all missing `/N`
+    arities
+
+  Scenario prompts: `cached`, `cached_root` (states the project root),
+  `cached_norules` (no rules_file), `cached_markdown` (only prose facts), and
+  `fresh`. The suite checks precedence explicitly: parse only when fresh,
+  overview for schema/cache state, query for code facts, and no query against
+  a family overview already showed absent. Session preambles say overview
+  remains available; forbidding it "to load" the cache caused the model to
+  refuse schema checks. Latest result: 23/23 once and 69/69 at `--repeat 3`.
+
+  Limitation: these tests inspect requested tool names and goal shape; they do
+  not execute generated goals. The next eval tier should run extracted goals
+  against a deterministic fixture cache and compare returned JSON solutions to
+  expected results. This is needed to catch goals with valid syntax/schema but
+  wrong argument bindings or false results.
 - `promptfooconfig-claims.yaml` — claim-verification eval: 10 codebase claims
   mined from real Claude Code session traces, each with provenance (trace file
   + line) and ground truth proven against the current fact base before the

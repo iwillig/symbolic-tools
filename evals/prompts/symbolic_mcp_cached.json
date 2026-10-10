@@ -5,7 +5,7 @@
   },
   {
     "role": "system",
-    "content": "<session>\nA codebase is already parsed and cached in this session. The cache state is verified. Do not call mcp__symbolic__parse or mcp__symbolic__overview to load it again.\n</session>"
+    "content": "<session>\nA codebase is already parsed and cached in this session. The cache state is verified. The cache is already loaded - parse is never needed again, but overview remains available for schema questions.\n</session>"
   },
   {
     "role": "user",

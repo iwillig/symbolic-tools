@@ -1,5 +1,5 @@
 {
-  "defaultProvider": "hf-qwen3-8-27b",
-  "defaultModel": "unsloth/Qwen3.8-27B-GGUF:Q8_0",
-  "enabledModels": ["hf-qwen3-8-27b/unsloth/Qwen3.8-27B-GGUF:Q8_0"]
+  "defaultProvider": "huggingface",
+  "defaultModel": "zai-org/GLM-5.3-Flash",
+  "enabledModels": ["huggingface/zai-org/GLM-5.3-Flash"]
 }
