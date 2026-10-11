@@ -16,11 +16,11 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 
 | Predicate | Produced by | Meaning |
 |---|---|---|
-| `defines/5` | Erlang, TypeScript, Bash, Rust | A named function/definition exists |
+| `defines/5` | Erlang, TypeScript, Bash, Rust, Ruby | A named function/definition exists |
 | `function_decl/7` | Erlang, TypeScript, Rust | Normalized syntax-level function declaration/clause with parse-local identity and language kind |
 | `export/4` | Erlang | A function an `-export` list makes callable from outside the file |
-| `calls/5` | Erlang, TypeScript, Bash, Rust | A call site, shape varies per language |
-| `comment/3` | Erlang, TypeScript, Bash, Clojure | Every comment, unconditionally |
+| `calls/5` | Erlang, TypeScript, Bash, Rust, Ruby | A call site, shape varies per language |
+| `comment/3` | Erlang, TypeScript, Bash, Clojure, Ruby | Every comment, unconditionally |
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
 | `doc_tag/8` | TypeScript | One structured `@`-tag from inside a `doc/5` comment |
 | `branch/5` | Erlang, TypeScript, Bash | A decision point inside a definition, for real complexity |
@@ -77,7 +77,7 @@ itself.
 
 Produced by `src/ts_extract_erlang.erl`, `src/ts_extract_typescript.erl`,
 `src/ts_extract_bash.erl`, `src/ts_extract_rust.erl`, and
-`src/ts_extract_clojure.erl` — one query set
+`src/ts_extract_clojure.erl`, and `src/ts_extract_ruby.erl` — one query set
 per language (no shared extraction code between them, a deliberate choice
 explained in each module's own header). The common predicate names provide
 useful shared entry points, but do not erase language-specific semantics.
@@ -242,14 +242,18 @@ shape. TypeScript only.
 Every comment node, unconditionally — whether or not it documents
 anything. `Text` is the comment's content with its language's own
 comment-marker syntax stripped (`%`/`%%` for Erlang, `//`/`/** */` for
-TypeScript, `#` for Bash; Clojure retains its `;` marker) and, for a multi-line run (consecutive `//`
+TypeScript, `#` for Bash; Clojure retains its `;` marker and Ruby its `#` marker) and, for a multi-line run (consecutive `//`
 lines, or a multi-line `/** ... */` block), joined into a single space-
 separated line — legally a JSON string (and a quoted Prolog atom) *can*
 contain a raw newline, but nothing else this project emits does, and
 there's no benefit to being the exception. Clojure support is currently
 `.clj` only and emits comments only; `tree-sitter-clojure` recognizes
 reader-level primitives, not semantic forms such as `defn`, so this
-extractor deliberately emits no Clojure `defines/5` or `calls/5` facts.
+extractor deliberately emits no Clojure `defines/5` or `calls/5` facts. Ruby
+emits method definitions, syntactically nested calls, and comments. Its
+`defines/5` arity counts declared parameter nodes (including optional or
+rest parameters as one each), not Ruby's runtime `Method#arity` value;
+receiver calls use the shared `{member, Receiver, Method, Arity}` shape.
 
 `Text` is an Erlang **binary**, not an atom — see the shared caveat
 below.
@@ -778,7 +782,7 @@ full worked scenario).
 
 Produced by `src/ts_extract_toml.erl` and `src/ts_extract_json.erl` —
 **shared predicate names on purpose**, the config-format analogue of
-`defines`/`calls` being shared across three programming languages: "a
+`defines`/`calls` being shared across five programming languages: "a
 dotted key path resolves to this value" is the same question regardless
 of whether the file is a `Cargo.toml` or a `package.json`.
 

@@ -77,6 +77,7 @@ atoms! {
     unable_to_create_language_jsdoc,
     unable_to_create_language_rust,
     unable_to_create_language_clojure,
+    unable_to_create_language_ruby,
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +302,15 @@ fn tree_sitter_clojure(env: Env) -> Term {
         env,
         unsafe { ffi::tree_sitter_clojure() },
         unable_to_create_language_clojure(),
+    )
+}
+
+#[rustler::nif]
+fn tree_sitter_ruby(env: Env) -> Term {
+    make_language(
+        env,
+        unsafe { ffi::tree_sitter_ruby() },
+        unable_to_create_language_ruby(),
     )
 }
 

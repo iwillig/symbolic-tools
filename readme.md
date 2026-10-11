@@ -279,6 +279,9 @@ extension. What each one produces:
   keeps an exported API function or an OTP callback from reading as dead
   code (see `docs/lint-queries.md`'s `entry_point/3`). Dogfooded against
   this repo's own source and a real-world-style `.ts` file.
+- **Ruby (`.rb`)** — `defines`, `calls`, and `comment` facts. Method arity
+  counts declared parameter nodes, not Ruby runtime arity; calls outside a
+  method are not assigned an enclosing caller.
 - **Clojure (`.clj`)** — reader-level `comment` facts only. The bundled
   `sogaiu/tree-sitter-clojure` grammar intentionally does not recognize
   higher-level forms such as `defn`; this project therefore does not infer

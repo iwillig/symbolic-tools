@@ -211,6 +211,12 @@ supports reader-level primitives, not higher-level forms such as `defn`.
 See [`tree-sitter-clojure.md`](tree-sitter-clojure.md) for scope and
 limitations.
 
+The Ruby grammar is vendored under `c_src/grammars/ruby/` from
+`tree-sitter/tree-sitter-ruby` commit `ad907a69da0c8a4f7a943a7fe012712208da6dee`
+(ABI 14, MIT). Its external scanner and grammar headers are included. `.rb`
+dispatches to `ts_extract_ruby`, which emits syntax-level method, call, and
+comment facts; see [`tree-sitter-ruby.md`](tree-sitter-ruby.md) for semantics.
+
 Once loaded, the language's own public query names
 (`function_declaration`, `call_expression`, `member_expression` for
 TypeScript vs. `function_clause`, `call`, `remote` for Erlang, vs.
