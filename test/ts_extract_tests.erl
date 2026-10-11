@@ -193,6 +193,32 @@ external_doc_attributes_extract_facts_test() ->
         <<"# External fixture module\n\nAdds values for extractor tests.">>}, Facts)),
     ?assert(lists:member({doc, add, 2, Path, 7, <<"Adds two integers.">>}, Facts)).
 
+inline_doc_attribute_extracts_function_doc_fact_test() ->
+    Src =
+        "-module(inline_doc_fixture).\n"
+        "-export([add/2]).\n"
+        "-doc \"\"\"\n"
+        "Adds two numbers.\n"
+        "\"\"\".\n"
+        "-spec add(integer(), integer()) -> integer().\n"
+        "add(X, Y) -> X + Y.\n",
+    Facts = ts_extract_erlang:text("inline_doc_fixture.erl", Src),
+    Path = 'inline_doc_fixture.erl',
+    [{doc, add, 2, Path, DocLine, DocText}] =
+        [Fact || {doc, add, 2, Path0, _, _} = Fact <- Facts, Path0 =:= Path],
+    ?assertEqual(3, DocLine),
+    ?assertNotEqual(nomatch, binary:match(DocText, <<"Adds two numbers.">>)).
+
+inline_doc_attribute_decodes_escaped_string_test() ->
+    Src =
+        "-module(inline_doc_escape_fixture).\n"
+        "-export([value/0]).\n"
+        "-doc(\"Line one\\nLine two\").\n"
+        "value() -> ok.\n",
+    Facts = ts_extract_erlang:text("inline_doc_escape_fixture.erl", Src),
+    ?assert(lists:member({doc, value, 0, 'inline_doc_escape_fixture.erl', 3,
+        <<"Line one\nLine two">>}, Facts)).
+
 standalone_comment_has_no_doc_test() ->
     Facts = ts_extract_erlang:file(?FIXTURE),
     ?assertEqual(

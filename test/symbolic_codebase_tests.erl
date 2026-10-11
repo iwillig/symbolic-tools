@@ -46,6 +46,7 @@ codebase_test_() ->
         fun overview_before_parse/1,
         fun query_before_parse_is_error/1,
         fun parse_then_overview_reports_state/1,
+        fun inline_doc_attribute_is_queryable/1,
         fun cache_matches_side_effect_free_scan/1,
         fun query_all_solutions_match_scan/1,
         fun query_limit_caps_results/1,
@@ -101,6 +102,33 @@ parse_then_overview_reports_state(_Setup) ->
         {ok, OV} = symbolic_codebase:overview(),
         ?assertEqual(maps:get(total_facts, Meta), maps:get(total_facts, OV)),
         ?assertEqual(maps:get(files, Meta), maps:get(files, OV))
+    end.
+
+inline_doc_attribute_is_queryable(_Setup) ->
+    fun() ->
+        Root = filename:join(["_build", "inline_doc_attribute_scratch"]),
+        _ = file:del_dir_r(Root),
+        Source = filename:join(Root, "inline_doc.erl"),
+        ok = filelib:ensure_dir(Source),
+        ok = file:write_file(Source,
+            <<"-module(inline_doc).\n"
+              "-export([add/2]).\n"
+              "-doc \"\"\"\n"
+              "Adds two numbers.\n"
+              "\"\"\".\n"
+              "-spec add(integer(), integer()) -> integer().\n"
+              "add(X, Y) -> X + Y.\n">>),
+        try
+            {ok, _Meta} = symbolic_codebase:parse(Root),
+            {ok, [Solution]} = symbolic_codebase:query(
+                "doc(add, 2, File, Line, Text)"),
+            ?assertEqual(3, proplists:get_value('Line', Solution)),
+            Text = proplists:get_value('Text', Solution),
+            ?assertNotEqual(nomatch,
+                binary:match(Text, <<"Adds two numbers.">>))
+        after
+            _ = file:del_dir_r(Root)
+        end
     end.
 
 cache_matches_side_effect_free_scan(_Setup) ->

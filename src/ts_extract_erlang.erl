@@ -12,8 +12,8 @@
 %%%   calls(Caller, CallerArity, local(Callee, ArgCount), File, Line)
 %%%   calls(Caller, CallerArity, remote(Module, Function, ArgCount), File, Line)
 %%%   comment(File, Line, Text)                       — every comment, unconditionally
-%%%   doc(Function, Arity, File, Line, Text)           — a comment run immediately
-%%%                                                       preceding a fun_decl
+%%%   doc(Function, Arity, File, Line, Text)           — a preceding comment run or
+%%%                                                       an Erlang `-doc` attribute
 %%%   branch(Function, Arity, Kind, File, Line)        — a decision point (cr_clause/
 %%%                                                       if_clause/receive_after) inside
 %%%                                                       Function; see ?BRANCH_QUERIES and
@@ -223,7 +223,7 @@ text(Path, Src0) ->
         fun_refs(Lang, Root, Src, PathAtom) ++
         comments(Lang, Root, Src, PathAtom) ++
         docs(Lang, Root, Src, PathAtom) ++
-        external_docs(Lang, Root, Src, Path, PathAtom) ++
+        doc_attributes(Lang, Root, Src, Path, PathAtom) ++
         branches(Lang, Root, Src, PathAtom) ++
         exprs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
@@ -600,24 +600,18 @@ definition_name(Node, Src) ->
             false
     end.
 
-%% -moduledoc({file, "..."}) / -doc({file, "..."}) — external Markdown
-%% documentation attributes (OTP 27+; see the Erlang docs' "External
-%% documentation files"). A -doc's resolved text becomes a regular doc/5
-%% fact anchored at the attribute's own line, targeted at the next
-%% sibling fun_decl — the exact attribution a preceding comment run gets,
-%% so existing consumers (undocumented/4, search) need no changes. A
-%% -moduledoc becomes module_doc/5: there is no Function/Arity to key a
-%% doc/5 on, and the module name (from -module, one attribute earlier)
-%% is the natural anchor. Unresolvable references (missing file, path
-%% outside the source dir's reach, inline rather than {file, ...} form)
-%% emit nothing — a broken link is the compiler's warning to raise, not
-%% this extractor's guess to fill in.
-external_docs(Lang, Root, Src, Path, PathAtom) ->
+%% Inline `-moduledoc`/`-doc` strings and external `{file, Path}` references
+%% (OTP 27+). A function `-doc` becomes a regular doc/5 fact, anchored at
+%% the attribute line and attached to the next sibling fun_decl. A
+%% `-moduledoc` becomes module_doc/5 because it has no function/arity key.
+%% Resolve external paths relative to the source file; decode inline values
+%% with the Erlang scanner so triple-quoted strings follow OTP semantics.
+doc_attributes(Lang, Root, Src, Path, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?WILD_ATTR_QUERY),
     Attrs = lists:usort([N || {"a", N} <- symbolic_ts:query_capture(Root, Q)]),
     Module = module_name(Lang, Root, Src),
     lists:filtermap(
-        fun(Attr) -> external_doc_fact(Attr, Src, Path, PathAtom, Module) end,
+        fun(Attr) -> doc_attribute_fact(Attr, Src, Path, PathAtom, Module) end,
         Attrs).
 
 module_name(Lang, Root, Src) ->
@@ -637,34 +631,95 @@ module_name(Lang, Root, Src) ->
             undefined
     end.
 
-external_doc_fact(Attr, Src, Path, PathAtom, Module) ->
-    case attr_file_ref(Attr, Src) of
-        {ok, RelPath} ->
-            case read_doc_file(Path, RelPath) of
+doc_attribute_fact(Attr, Src, Path, PathAtom, Module) ->
+    case attr_kind(Attr, Src) of
+        other ->
+            false;
+        Kind ->
+            case doc_attribute_text(Attr, Src, Path) of
                 {ok, Text} ->
-                    case attr_kind(Attr, Src) of
-                        moduledoc ->
-                            {true, {module_doc, Module, PathAtom, line(Attr), Text}};
-                        doc ->
-                            case symbolic_ts:node_next_sibling(Attr) of
-                                undefined -> false;
-                                Target ->
-                                    case definition_name(Target, Src) of
-                                        {Name, Arity} ->
-                                            {true, {doc, Name, Arity, PathAtom,
-                                                line(Attr), Text}};
-                                        false ->
-                                            false
-                                    end
-                            end;
-                        other ->
-                            false
-                    end;
+                    doc_attribute_fact(Kind, Attr, Src, PathAtom, Module, Text);
                 error ->
                     false
-            end;
-        error ->
-            false
+            end
+    end.
+
+doc_attribute_fact(moduledoc, Attr, _Src, PathAtom, Module, Text) ->
+    {true, {module_doc, Module, PathAtom, line(Attr), Text}};
+doc_attribute_fact(doc, Attr, Src, PathAtom, _Module, Text) ->
+    case next_fun_decl(Attr) of
+        undefined -> false;
+        Target ->
+            case definition_name(Target, Src) of
+                {Name, Arity} ->
+                    {true, {doc, Name, Arity, PathAtom, line(Attr), Text}};
+                false ->
+                    false
+            end
+    end.
+
+%% Erlang code commonly places `-spec` between `-doc` and the function.
+%% Skip those specification forms, but don't attach documentation across
+%% any other intervening declaration.
+next_fun_decl(Node) ->
+    case symbolic_ts:node_next_sibling(Node) of
+        undefined ->
+            undefined;
+        Next ->
+            case symbolic_ts:node_type(Next) of
+                "spec" -> next_fun_decl(Next);
+                _ -> Next
+            end
+    end.
+
+doc_attribute_text(Attr, Src, Path) ->
+    case attr_file_ref(Attr, Src) of
+        {ok, RelPath} -> read_doc_file(Path, RelPath);
+        error -> inline_doc_text(Attr, Src)
+    end.
+
+inline_doc_text(Attr, Src) ->
+    case inline_doc_value(Attr) of
+        undefined ->
+            error;
+        ValueNode ->
+            Raw = unicode:characters_to_list(symbolic_ts:node_text(ValueNode, Src)),
+            case erl_scan:string(Raw ++ ".") of
+                {ok, Tokens, _EndLocation} ->
+                    case erl_parse:parse_term(Tokens) of
+                        {ok, Text} when is_list(Text) ->
+                            case unicode:characters_to_binary(Text) of
+                                Bin when is_binary(Bin) -> {ok, Bin};
+                                _ -> error
+                            end;
+                        _ ->
+                            error
+                    end;
+                _ ->
+                    error
+            end
+    end.
+
+inline_doc_value(Attr) ->
+    case symbolic_ts:node_named_child(Attr, 1) of
+        undefined ->
+            undefined;
+        Value ->
+            case symbolic_ts:node_type(Value) of
+                "string" -> Value;
+                "paren_expr" ->
+                    case symbolic_ts:node_named_child(Value, 0) of
+                        String when String =/= undefined ->
+                            case symbolic_ts:node_type(String) of
+                                "string" -> String;
+                                _ -> undefined
+                            end;
+                        undefined ->
+                            undefined
+                    end;
+                _ ->
+                    undefined
+            end
     end.
 
 attr_kind(Attr, Src) ->
@@ -677,8 +732,8 @@ attr_kind(Attr, Src) ->
 
 %% The {file, Path} tuple: wild_attribute -> paren_expr -> tuple, whose
 %% named children are exactly [atom, string] (confirmed by dumping the
-%% tree). Anything else — an inline -doc "string", a metadata map, a
-%% -moduledoc false — is not an external reference; skip it.
+%% tree). Inline strings, metadata maps, and `-moduledoc false` are not
+%% external references; inline strings are handled separately below.
 attr_file_ref(Attr, Src) ->
     case symbolic_ts:node_named_child(Attr, 1) of
         Paren when Paren =/= undefined ->
