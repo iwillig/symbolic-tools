@@ -279,6 +279,10 @@ extension. What each one produces:
   keeps an exported API function or an OTP callback from reading as dead
   code (see `docs/lint-queries.md`'s `entry_point/3`). Dogfooded against
   this repo's own source and a real-world-style `.ts` file.
+- **Clojure (`.clj`)** — reader-level `comment` facts only. The bundled
+  `sogaiu/tree-sitter-clojure` grammar intentionally does not recognize
+  higher-level forms such as `defn`; this project therefore does not infer
+  Clojure `defines` or `calls`. `.cljs` and `.cljc` are not yet dispatched.
 - **Markdown** — `heading`, `code_block`, and `paragraph` facts for
   `.md` files, so `readme.md`/`docs/*.md` become queryable the same way
   as code. A fenced `erlang`/`ts`/`typescript`/`sh`/`bash` block also gets

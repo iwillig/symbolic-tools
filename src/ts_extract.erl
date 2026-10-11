@@ -8,6 +8,7 @@ file(Path) ->
     case filename:extension(Path) of
         ".erl" -> ts_extract_erlang:file(Path);
         ".rs" -> ts_extract_rust:file(Path);
+        ".clj" -> ts_extract_clojure:file(Path);
         ".ts" -> ts_extract_typescript:file(Path);
         ".md" -> ts_extract_markdown:file(Path);
         ".toml" -> ts_extract_toml:file(Path);

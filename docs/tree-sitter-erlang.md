@@ -171,8 +171,8 @@ erlog / Prolog    -->  relational queries over the graph     (the MCP tools)
    and its own `src/tree_sitter/*.h` — into
    `c_src/grammars/<name>/{parser.c,scanner.c,tree_sitter/*.h}`. Skip
    `grammar.json`/`node-types.json`/bindings/tests; none of that is
-   needed to compile. Confirm the grammar's license (MIT for all three
-   in use today) and that it's plain C, not C++, before vendoring.
+   needed to compile. Confirm the grammar's license and that its parser
+   and any scanner sources are supported by the plain-C build before vendoring.
 2. `native/symbolic_ts/src/ffi.rs` — add the `extern "C"` declaration
    `pub fn tree_sitter_<name>() -> *const TSLanguage;` alongside the
    existing ones (it binds the grammar's own real C symbol).
@@ -202,6 +202,14 @@ external modules. See [`prolog-schema.md`](prolog-schema.md)'s Rust
 section for the exact fact contracts and
 [`rust-schema-audit.md`](rust-schema-audit.md) for the broader schema
 work plan.
+
+The Clojure grammar is vendored under `c_src/grammars/clojure/` from
+`sogaiu/tree-sitter-clojure` commit `e43eff80d17cf34852dcd92ca5e6986d23a7040f`
+(ABI 14, CC0-1.0). It has no external scanner. `.clj` dispatches to
+`ts_extract_clojure`, which emits comments only: the grammar intentionally
+supports reader-level primitives, not higher-level forms such as `defn`.
+See [`tree-sitter-clojure.md`](tree-sitter-clojure.md) for scope and
+limitations.
 
 Once loaded, the language's own public query names
 (`function_declaration`, `call_expression`, `member_expression` for

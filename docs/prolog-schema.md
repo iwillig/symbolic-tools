@@ -20,7 +20,7 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `function_decl/7` | Erlang, TypeScript, Rust | Normalized syntax-level function declaration/clause with parse-local identity and language kind |
 | `export/4` | Erlang | A function an `-export` list makes callable from outside the file |
 | `calls/5` | Erlang, TypeScript, Bash, Rust | A call site, shape varies per language |
-| `comment/3` | Erlang, TypeScript, Bash | Every comment, unconditionally |
+| `comment/3` | Erlang, TypeScript, Bash, Clojure | Every comment, unconditionally |
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
 | `doc_tag/8` | TypeScript | One structured `@`-tag from inside a `doc/5` comment |
 | `branch/5` | Erlang, TypeScript, Bash | A decision point inside a definition, for real complexity |
@@ -76,7 +76,8 @@ itself.
 ## Code facts: `defines/5`, `calls/5`, `comment/3`, `doc/5`
 
 Produced by `src/ts_extract_erlang.erl`, `src/ts_extract_typescript.erl`,
-`src/ts_extract_bash.erl`, and `src/ts_extract_rust.erl` — one query set
+`src/ts_extract_bash.erl`, `src/ts_extract_rust.erl`, and
+`src/ts_extract_clojure.erl` — one query set
 per language (no shared extraction code between them, a deliberate choice
 explained in each module's own header). The common predicate names provide
 useful shared entry points, but do not erase language-specific semantics.
@@ -241,11 +242,14 @@ shape. TypeScript only.
 Every comment node, unconditionally — whether or not it documents
 anything. `Text` is the comment's content with its language's own
 comment-marker syntax stripped (`%`/`%%` for Erlang, `//`/`/** */` for
-TypeScript, `#` for Bash) and, for a multi-line run (consecutive `//`
+TypeScript, `#` for Bash; Clojure retains its `;` marker) and, for a multi-line run (consecutive `//`
 lines, or a multi-line `/** ... */` block), joined into a single space-
 separated line — legally a JSON string (and a quoted Prolog atom) *can*
 contain a raw newline, but nothing else this project emits does, and
-there's no benefit to being the exception.
+there's no benefit to being the exception. Clojure support is currently
+`.clj` only and emits comments only; `tree-sitter-clojure` recognizes
+reader-level primitives, not semantic forms such as `defn`, so this
+extractor deliberately emits no Clojure `defines/5` or `calls/5` facts.
 
 `Text` is an Erlang **binary**, not an atom — see the shared caveat
 below.

@@ -120,7 +120,7 @@ parallel_collect(Pid, Ref) ->
 
 %% Extensions matcher below to a language ts_extract:file/1 knows how to
 %% handle. Kept as a list (not a set) — 8 entries, checked once per file.
--define(SCAN_EXTENSIONS, [".erl", ".rs", ".ts", ".md", ".toml", ".json", ".sh", ".bash"]).
+-define(SCAN_EXTENSIONS, [".erl", ".rs", ".ts", ".clj", ".md", ".toml", ".json", ".sh", ".bash"]).
 
 %% scan_paths(Paths) -> {ok, {Files, Facts}} | {error, term()}.
 %%  Like scan/1, but over a LIST of paths — each entry may be a
@@ -298,7 +298,7 @@ error_message({no_such_path, Path}) ->
 error_message({unsupported_file, Path}) ->
     io_lib:format(
         "parse: ~s has no extension symbolic knows how to extract "
-        "(expected one of .erl/.rs/.ts/.md/.toml/.json/.sh/.bash)~n", [Path]);
+        "(expected one of .erl/.rs/.ts/.clj/.md/.toml/.json/.sh/.bash)~n", [Path]);
 error_message({no_such_config, ConfigPath}) ->
     io_lib:format("parse: no such config file: ~s~n", [ConfigPath]);
 error_message({no_config_found, StartDir}) ->
@@ -359,6 +359,7 @@ languages_from_files(Files) ->
 language_from_ext(".erl") -> <<"erlang">>;
 language_from_ext(".rs") -> <<"rust">>;
 language_from_ext(".ts") -> <<"typescript">>;
+language_from_ext(".clj") -> <<"clojure">>;
 language_from_ext(".md") -> <<"markdown">>;
 language_from_ext(".toml") -> <<"toml">>;
 language_from_ext(".json") -> <<"json">>;

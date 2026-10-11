@@ -11,6 +11,18 @@
 %% committed test/fixtures/*.erl file — rebar3's eunit provider compiles
 %% every .erl file under test/ as a project module, so a real one there
 %% collides with the build (confirmed: "Module `sample' not found").
+dispatches_clojure_test() ->
+    Source = <<"; file comment\n(defn not-a-real-function [] (println name))\n">>,
+    Facts = ts_extract_clojure:text("sample.clj", Source),
+    ?assert(lists:member({comment, 'sample.clj', 1, <<"; file comment">>}, Facts)),
+    ?assertEqual([], [F || F = {defines, _, _, _, _, _} <- Facts]),
+    ?assertEqual([], [F || F = {calls, _, _, _, _, _} <- Facts]).
+
+dispatches_clj_test() ->
+    ?assertEqual(
+        ts_extract_clojure:file("test/fixtures/clojure_sample.clj"),
+        ts_extract:file("test/fixtures/clojure_sample.clj")).
+
 dispatches_erl_test() ->
     Path = filename:join(["_build", "erl_dispatch_test_scratch.erl"]),
     ok = file:write_file(Path, <<"-module(erl_dispatch_test_scratch).\n"
