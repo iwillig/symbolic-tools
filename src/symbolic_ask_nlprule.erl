@@ -1,14 +1,58 @@
-%%% Offline adapter from symbolic_analyze's nlprule result to bounded
-%%% question frames. It does not build Prolog text or execute a query.
 -module(symbolic_ask_nlprule).
+-moduledoc """
+Convert nlprule sentence analysis into bounded question-frame candidates.
+
+This module accepts the analysis map returned by `symbolic_analyze` and
+reuses the closed frame mapper in `symbolic_ask`. Its results are candidate
+interpretations only. It does not resolve code entities, construct Prolog
+goals, or prove claims.
+""".
 -export([extract_frames/1, extract_json_frames/1]).
 
+-doc """
+Extract bounded Erlang frame candidates from an nlprule analysis map.
+
+The input map must contain a `sentences` list. For each recognized sentence,
+the result contains a 1-based `sentence_index`, the mapped `frame` term, and
+the original valid `analysis_tokens`. The `frame` uses the existing bounded
+Erlang term shapes from `symbolic_ask:map_tags/1`.
+
+Malformed input and sentences that do not match a supported frame produce no
+candidate. An empty result is not a proof that the natural-language claim is
+false.
+
+Example:
+
+    {ok, Analysis} = symbolic_analyze:run_result("Does foo/2 call bar/1?"),
+    [#{frame := {yes_no, {calls, _, _}}}] =
+        symbolic_ask_nlprule:extract_frames(Analysis).
+""".
 -spec extract_frames(map()) -> [map()].
 extract_frames(#{<<"sentences">> := Sentences}) when is_list(Sentences) ->
     extract_sentences(Sentences, 1, []);
 extract_frames(_) ->
     [].
 
+-doc """
+Return recognized frame candidates as JSON-ready maps.
+
+Each result includes `answer_type`, `relation`, and `arguments`, together
+with `sentence_index`, source `sentence`, and annotated `tokens`. Some answer
+types also include `answer_slot`. Entity arguments include their reconstructed
+`text`, source `tokens`, and combined byte and character `span`. The maps use
+binary keys and can be passed to `jsx:encode/1`.
+
+Unsupported frame shapes are omitted. These maps remain unverified candidate
+interpretations; callers must map them to the codebase schema and use a query
+to validate a claim.
+
+Example:
+
+    {ok, Analysis} = symbolic_analyze:run_result("Does foo/2 call bar/1?"),
+    [#{<<"answer_type">> := <<"yes_no">>,
+       <<"relation">> := <<"calls">>}] =
+        symbolic_ask_nlprule:extract_json_frames(Analysis).
+""".
 -spec extract_json_frames(map()) -> [map()].
 extract_json_frames(Analysis) ->
     [JsonFrame || Candidate <- extract_frames(Analysis),

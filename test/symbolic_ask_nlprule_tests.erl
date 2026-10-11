@@ -1,6 +1,21 @@
 -module(symbolic_ask_nlprule_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+erlang_doc_attributes_are_present_in_the_beam_test() ->
+    {ok, {docs_v1, _, _, _, ModuleDocs, _, FunctionDocs}} =
+        code:get_doc(symbolic_ask_nlprule),
+    ?assertMatch(#{<<"en">> := _}, ModuleDocs),
+    DocsByFunction = maps:from_list([
+        {Key, maps:get(<<"en">>, Docs)}
+     || {Key, _, _, Docs, _} <- FunctionDocs
+    ]),
+    ModuleDoc = maps:get(<<"en">>, ModuleDocs),
+    ExtractDoc = maps:get({function, extract_frames, 1}, DocsByFunction),
+    JsonDoc = maps:get({function, extract_json_frames, 1}, DocsByFunction),
+    ?assertNotEqual(nomatch, binary:match(ModuleDoc, <<"candidate">>)),
+    ?assertNotEqual(nomatch, binary:match(ExtractDoc, <<"Malformed input">>)),
+    ?assertNotEqual(nomatch, binary:match(JsonDoc, <<"answer_type">>)).
+
 nlprule_analysis_generates_a_bounded_call_frame_test() ->
     Analysis = #{<<"sentences">> => [#{<<"tokens">> => [
         token(<<"Does">>, <<"do">>, <<"VBZ">>, [<<"O">>], 0, 4),
