@@ -74,7 +74,7 @@ interfaces do not have identical command sets.
 ### Parse a project
 
 ```sh
-symbolic parse . -db facts.dets
+symbolic parse .
 ```
 
 The CLI and MCP `parse` return a summary.
@@ -92,7 +92,7 @@ The CLI and MCP `parse` return a summary.
 ### Prove a code relationship
 
 ```sh
-symbolic query -db facts.dets "calls(shout, 1, local(capitalize, 1), File, Line)"
+symbolic query "calls(shout, 1, local(capitalize, 1), File, Line)"
 ```
 
 The CLI prints `Yes.` when the goal succeeds. MCP `query` returns bindings.
@@ -114,7 +114,7 @@ The CLI prints `Yes.` when the goal succeeds. MCP `query` returns bindings.
 ### Search code and documentation text
 
 ```sh
-symbolic search -db facts.dets "exclamation"
+symbolic search "exclamation"
 ```
 
 The command returns ranked JSON results.
@@ -136,7 +136,7 @@ MCP `search` uses the same query after MCP `parse`.
 ### Ask without writing Prolog
 
 ```sh
-symbolic ask -db facts.dets "who calls capitalize/1?"
+symbolic ask "who calls capitalize/1?"
 ```
 
 MCP `ask` returns shaped JSON for the same question.

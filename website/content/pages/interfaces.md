@@ -30,7 +30,7 @@ not an MCP tool.
 ## Parse
 
 ```sh
-symbolic parse . -db facts.dets
+symbolic parse .
 ```
 
 MCP: call `parse` with `path: "."`.
@@ -38,7 +38,7 @@ MCP: call `parse` with `path: "."`.
 ## Query
 
 ```sh
-symbolic query -db facts.dets "defines(F, A, _, _, _)"
+symbolic query "defines(F, A, _, _, _)"
 ```
 
 MCP: call `query` with the same `goal`.
@@ -46,7 +46,7 @@ MCP: call `query` with the same `goal`.
 ## Ask
 
 ```sh
-symbolic ask -db facts.dets "who calls capitalize/1?"
+symbolic ask "who calls capitalize/1?"
 ```
 
 MCP: call `ask` with the same `question`.
@@ -54,7 +54,7 @@ MCP: call `ask` with the same `question`.
 ## Overview
 
 ```sh
-symbolic overview -db facts.dets
+symbolic overview
 ```
 
 MCP: call `overview` after `parse`.
@@ -72,7 +72,7 @@ MCP: call `extract` with the same `sentence`.
 ## Check
 
 ```sh
-symbolic check -db facts.dets "foo/1 calls bar/2"
+symbolic check "foo/1 calls bar/2"
 ```
 
 MCP: call `check` with the same `sentence` after `parse`.
@@ -80,7 +80,7 @@ MCP: call `check` with the same `sentence` after `parse`.
 ## Search
 
 ```sh
-symbolic search -db facts.dets "error handling"
+symbolic search "error handling"
 ```
 
 MCP: call `search` with the same `query` after `parse`.

@@ -132,9 +132,9 @@ claims about this codebase, turned on a plan for *this* codebase's own
 next change:
 
 ```sh
-$ symbolic check "atom_from_binary_2/3 calls unify/3" -db facts.dets
+$ symbolic check "atom_from_binary_2/3 calls unify/3"
 {"fact":["svo",["/","atom_from_binary_2",3],"calls",["/","unify",3]],"verdict":"true"}
-$ symbolic check "atom_from_binary_2/3 calls binary_to_atom/2" -db facts.dets
+$ symbolic check "atom_from_binary_2/3 calls binary_to_atom/2"
 {"fact":["svo",["/","atom_from_binary_2",3],"calls",["/","binary_to_atom",2]],"verdict":"false"}
 ```
 
@@ -321,13 +321,13 @@ term parses back). Verified end-to-end against this project's own real
 source, through the released binary:
 
 ```sh
-$ symbolic check "info/0 calls git_sha/0" -db facts.dets
+$ symbolic check "info/0 calls git_sha/0"
 {"fact":["svo",["/","info",0],"calls",["/","git_sha",0]],"verdict":"true"}
-$ symbolic check "info/0 calls nonexistent_helper/3" -db facts.dets
+$ symbolic check "info/0 calls nonexistent_helper/3"
 {"fact":["svo",["/","info",0],"calls",["/","nonexistent_helper",3]],"verdict":"false"}
-$ symbolic check "info/0 makes a call to git_sha/0" -db facts.dets
+$ symbolic check "info/0 makes a call to git_sha/0"
 Unrecognized.
-$ symbolic check "info/0 makes a call to git_sha/0" -db facts.dets -model <path>
+$ symbolic check "info/0 makes a call to git_sha/0" -model <path>
 {"fact":["svo",["/","info",0],"calls",["/","git_sha",0]],"verdict":"true"}
 ```
 

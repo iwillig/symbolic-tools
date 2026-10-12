@@ -89,8 +89,7 @@ argv, `argparse` (§2) dispatches — except it runs against the release's
 real on-disk `ebin`/`priv` directories instead of a zip, so `symbolic_ts`'s
 NIF loads correctly. `symbolic parse` now works from the built binary
 (`_build/default/rel/symbolic_tools/bin/symbolic`), verified end-to-end
-including composing with `query` (parse -db facts.dets → query -db
-facts.dets).
+including composing `parse` and `query` against the configured database.
 
 ## 2. Entry point, subcommands, and argument parsing
 

@@ -60,7 +60,7 @@ reading either file in isolation; it only shows up once both are facts
 in the same base.
 
 ```sh
-$ symbolic parse . -db facts.dets
+$ symbolic parse .
 ["code_block","guide.md","ts",5]
 ["code_block","guide.md","ts",14]
 ["comment","payments.ts",1,"Charges a card for the given amount, delegating to the Stripe API."]
@@ -132,13 +132,13 @@ An agent dropped into an unfamiliar codebase and asked to change
 what it *does* underneath. Both are one query each, no file open needed:
 
 ```sh
-$ symbolic query -db facts.dets 'doc(charge, Arity, File, Line, Text)'
+$ symbolic query 'doc(charge, Arity, File, Line, Text)'
 Arity = 2
 File = "payments.ts"
 Line = 2
 Text = "Charges a card for the given amount, delegating to the Stripe API."
 
-$ symbolic query -db facts.dets 'callees(charge, Callees)'
+$ symbolic query 'callees(charge, Callees)'
 Callees = [["local","validateCard",1],["member","stripeClient","createCharge",2]]
 ```
 
@@ -154,7 +154,7 @@ the kind of thing a text search gets wrong the moment there's a second
 function with a similar name, or the call is qualified differently.
 
 ```sh
-$ symbolic query -db facts.dets 'callers(validateCard, 1, Callers)'
+$ symbolic query 'callers(validateCard, 1, Callers)'
 Callers = ["charge"]
 ```
 
@@ -171,7 +171,7 @@ text pattern — `member(stripeClient, _)` call sites, not any line
 containing the word "stripe":
 
 ```sh
-$ symbolic query -db facts.dets 'findall(F, calls_object(F, stripeClient), Fs)'
+$ symbolic query 'findall(F, calls_object(F, stripeClient), Fs)'
 F = [0]
 Fs = ["charge","refund"]
 ```
@@ -192,7 +192,7 @@ Useful both for an agent auditing its own generated code before a PR,
 and for a human deciding where to spend documentation effort:
 
 ```sh
-$ symbolic query -db facts.dets 'findall(F, undocumented(F, _, _, _), Fs)'
+$ symbolic query 'findall(F, undocumented(F, _, _, _), Fs)'
 F = [0]
 Fs = ["validateCard"]
 ```
@@ -209,7 +209,7 @@ The motivating example for `example_defines/5` (see
 sample was never actually added to `payments.ts`:
 
 ```sh
-$ symbolic query -db facts.dets 'stale_doc_example(Fun, Arity, DocFile, Line)'
+$ symbolic query 'stale_doc_example(Fun, Arity, DocFile, Line)'
 Arity = 2
 DocFile = "guide.md"
 Fun = "authorize"
@@ -222,7 +222,7 @@ answer instead of a wish to "please read both files carefully."
 
 ## Wiring this into an actual agent session, over MCP
 
-Everything above used the CLI (`symbolic query -db facts.dets ...`) for
+Everything above used the CLI (`symbolic query ...`) for
 readability, but an LLM agent talks to a **live,
 persistent session** over MCP (`symbolic serve`), not a fresh CLI
 process per question — see `docs/erlang-mcp-design.md`. Same facts,

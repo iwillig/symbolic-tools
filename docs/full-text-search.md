@@ -11,11 +11,11 @@ it, and the rejected alternatives.
 
 `symbolic parse --db` extracts prose as facts — `comment/3` from code,
 `paragraph/3`, `heading/5`, `blockquote/3` from markdown — alongside
-the structural facts. `symbolic search -db <facts.dets> "query"`
-indexes every prose fact and returns BM25-ranked results as JSON:
+the structural facts. `symbolic search "query"` uses the project's configured database,
+indexes every prose fact, and returns BM25-ranked results as JSON:
 
 ```
-$ symbolic search -db facts.dets -limit 3 "inverted index postings"
+$ symbolic search -limit 3 "inverted index postings"
 [{"file":".../symbolic_search_tests.erl","kind":"comment","line":33,
   "score":24.011,"text":"..."}]
 ```

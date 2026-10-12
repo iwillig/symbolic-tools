@@ -169,18 +169,18 @@ function capitalize(word: string): string {
 ```
 
 ```sh
-$ symbolic parse . -db facts.dets
+$ symbolic parse .
 
-$ symbolic query -db facts.dets 'calls(X, _, local(capitalize, _), _, _)'
+$ symbolic query 'calls(X, _, local(capitalize, _), _, _)'
 X = "formatName"                    # who calls capitalize directly
 
-$ symbolic query -db facts.dets 'calls(X, _, member(console, _, _), _, _)'
+$ symbolic query 'calls(X, _, member(console, _, _), _, _)'
 X = "greet"                         # who calls a method on console
 
-$ symbolic query -db facts.dets 'defines(F, _, _, _, _), \+ doc(F, _, _, _, _)'
+$ symbolic query 'defines(F, _, _, _, _), \+ doc(F, _, _, _, _)'
 F = "greet"                         # which functions have no doc comment
 
-$ symbolic query -db facts.dets 'calls(capitalize, _, member(_, missingMethod, _), _, _)'
+$ symbolic query 'calls(capitalize, _, member(_, missingMethod, _), _, _)'
 No.                                 # capitalize never calls a method by that name
 ```
 
@@ -209,7 +209,7 @@ function's own body, only as a property of the call graph:
 mutual_recursion(A, B) :- reaches(A, B), reaches(B, A), A @< B.
 ```
 ```sh
-$ symbolic query -db facts.dets 'mutual_recursion(walk_object, walk_pair)'
+$ symbolic query 'mutual_recursion(walk_object, walk_pair)'
 Yes.
 ```
 
@@ -224,10 +224,10 @@ hidden_risky_call(Fun, Module, Target) :-
     \+ risky_call(Fun, Module, Target).
 ```
 ```sh
-$ symbolic query -db facts.dets 'risky_call(run, M, T)'
+$ symbolic query 'risky_call(run, M, T)'
 No.
 
-$ symbolic query -db facts.dets \
+$ symbolic query \
     'findall(M-T, hidden_risky_call(run, M, T), Raw), sort(Raw, Pairs)'
 Pairs = [["-","erlang","monotonic_time"],["-","file","get_cwd"],["-","file","list_dir"]]
 ```
@@ -236,7 +236,7 @@ Pairs = [["-","erlang","monotonic_time"],["-","file","get_cwd"],["-","file","lis
 in two files a single-file linter never has open at the same time:
 
 ```sh
-$ symbolic query -db facts.dets 'duplicate_name(args_shape, 3, Files)'
+$ symbolic query 'duplicate_name(args_shape, 3, Files)'
 Files = ["ts_extract_erlang.erl","ts_extract_typescript.erl"]
 ```
 
@@ -254,7 +254,7 @@ truly_uncalled(Fun, Arity, File) :-
     \+ entry_point(Fun, Arity, File).
 ```
 ```sh
-$ symbolic query -db facts.dets 'findall(F-A-File, truly_uncalled(F, A, File), Dead)'
+$ symbolic query 'findall(F-A-File, truly_uncalled(F, A, File), Dead)'
 Dead = [["-",["-","extract_file_timed",1],".../symbolic_parse.erl"]]
 ```
 
@@ -314,8 +314,9 @@ vendored-fork Makefiles).
 ## Tools
 
 - **CLI** — `symbolic parse` walks a folder, prints facts as JSON, and
-  optionally writes them into a fact database (`-db`); `symbolic analyze`
-  tokenizes and segments English using nlprule (see
+  writes facts to the project's configured database when one is set. Use
+  `-db` to override that path. `symbolic analyze` tokenizes and segments
+  English using nlprule (see
   [`docs/nlprule-analysis.md`](docs/nlprule-analysis.md)); `symbolic query`
   loads that database and runs a query against it, consulting hand-written
   Prolog rules alongside the facts: `-rules <file>` for a one-off, or the
@@ -332,10 +333,10 @@ vendored-fork Makefiles).
 
 ```sh
 symbolic                                              # prints usage
-symbolic parse ./src -db facts.dets                   # extract facts, print JSON, write a fact database
-symbolic parse -db facts.dets                         # no dir: merge every path in .symbolic/config.json instead
-symbolic query -db facts.dets 'depends_on(X, Y)'      # ask a question about the codebase
-symbolic query -db facts.dets 'top_fan_in(5, Ranked)' # derived rules, no -rules flag needed
+symbolic parse ./src                   # extract facts, print JSON, write a fact database
+symbolic parse                         # no dir: merge every path in .symbolic/config.json instead
+symbolic query 'depends_on(X, Y)'      # ask a question about the codebase
+symbolic query 'top_fan_in(5, Ranked)' # derived rules, no -rules flag needed
 symbolic analyze 'The quick fox jumps.'              # English sentence/token analysis
 symbolic serve                                        # start the MCP server (stdio transport)
 ```
@@ -439,7 +440,7 @@ individual query — so they live in one committed file, and `symbolic
 query` finds it on its own. No flag, no path, nothing to remember:
 
 ```sh
-$ symbolic query -db facts.dets 'findall(F, undocumented(F, _, _, _), Fs)'
+$ symbolic query 'findall(F, undocumented(F, _, _, _), Fs)'
 F = [0]
 Fs = ["greet"]
 ```
@@ -467,7 +468,7 @@ isolation, or on a machine where an unrelated ancestor happens to have its
 own `.symbolic/rules.pl`:
 
 ```sh
-$ symbolic query -db facts.dets -no-rules 'top_fan_in(3, Ranked)'
+$ symbolic query -no-rules 'top_fan_in(3, Ranked)'
 query failed: {existence_error,procedure,{'/',top_fan_in,2}}
 ```
 
@@ -494,7 +495,7 @@ multi_arg(Fun, Arity, File) :-
     Arity > 1.
 EOF
 
-$ symbolic query -db facts.dets -rules rules.pl 'multi_arg(Fun, Arity, File)'
+$ symbolic query -rules rules.pl 'multi_arg(Fun, Arity, File)'
 Arity = 2
 File = "greeter.ts"
 Fun = "formatName"
@@ -539,7 +540,7 @@ No config needed yet.
 ````
 
 ```sh
-$ symbolic parse . -db facts.dets
+$ symbolic parse .
 ["code_block","notes.md","sh",8]
 ["paragraph","notes.md","A short intro paragraph that wraps onto a second line.",3]
 ["paragraph","notes.md","No config needed yet.",15]
@@ -549,17 +550,17 @@ $ symbolic parse . -db facts.dets
 ["heading","notes.md",2,"Configuration",13]
 ["heading","notes.md",2,"Installation",6]
 
-$ symbolic query -db facts.dets 'heading(File, 2, Text, Line)'
+$ symbolic query 'heading(File, 2, Text, Line)'
 File = "notes.md"
 Line = 13
 Text = "Configuration"              # one solution — ask again for the next
 
-$ symbolic query -db facts.dets 'code_block(File, Lang, Line)'
+$ symbolic query 'code_block(File, Lang, Line)'
 File = "notes.md"
 Lang = "sh"
 Line = 8
 
-$ symbolic query -db facts.dets 'paragraph(File, Text, Line)'
+$ symbolic query 'paragraph(File, Text, Line)'
 File = "notes.md"
 Line = 3
 Text = "A short intro paragraph that wraps onto a second line."
@@ -632,13 +633,13 @@ Both files produce the *same* two predicates — `config_value`/
 format it's asking about:
 
 ```sh
-$ symbolic parse . -db facts.dets
+$ symbolic parse .
 
-$ symbolic query -db facts.dets 'config_value(File, name, Value, _)'
+$ symbolic query 'config_value(File, name, Value, _)'
 File = "package.json"
 Value = "example"
 
-$ symbolic query -db facts.dets 'config_section(File, dependencies, Line)'
+$ symbolic query 'config_section(File, dependencies, Line)'
 File = "Cargo.toml"
 Line = 5
 ```
@@ -668,7 +669,7 @@ build() {
 ```
 
 ```sh
-$ symbolic parse . -db facts.dets
+$ symbolic parse .
 ["comment","deploy.sh",1,"Deploys the app to the given environment."]
 ["comment","deploy.sh",7,"Builds the release artifact."]
 ["defines","build",undefined,undefined,"deploy.sh",8]
@@ -679,7 +680,7 @@ $ symbolic parse . -db facts.dets
 ["doc","build",undefined,"deploy.sh",8,"Builds the release artifact."]
 ["doc","deploy",undefined,"deploy.sh",2,"Deploys the app to the given environment."]
 
-$ symbolic query -db facts.dets 'calls(deploy, CallerArity, X, _, Line)'
+$ symbolic query 'calls(deploy, CallerArity, X, _, Line)'
 CallerArity = undefined
 Line = 3
 X = ["local","build",0]
@@ -738,7 +739,7 @@ function shout(word: string): string {
 ````
 
 ```sh
-$ symbolic parse . -db facts.dets
+$ symbolic parse .
 ["code_block","guide.md","ts",5]
 ["defines","capitalize",1,"(word: string)","greeter.ts",5]
 ["defines","formatName",2,"(first: string, last: string)","greeter.ts",1]
@@ -755,7 +756,7 @@ added to `greeter.ts`. That check is a standing project question, not a
 one-off, so it lives in `.symbolic/rules.pl` and needs no flag of its own:
 
 ```sh
-$ symbolic query -db facts.dets 'stale_doc_example(Fun, Arity, DocFile, Line)'
+$ symbolic query 'stale_doc_example(Fun, Arity, DocFile, Line)'
 Arity = 1
 DocFile = "guide.md"
 Fun = "shout"

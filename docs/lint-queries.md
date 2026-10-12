@@ -11,8 +11,8 @@ consults it automatically (see [`cli-erlang.md`](cli-erlang.md) §2) — no
 `-rules` flag needed for anything below:
 
 ```sh
-$ symbolic parse src -db facts.dets
-$ symbolic query -db facts.dets 'all_duplicate_names(Pairs)'
+$ symbolic parse src
+$ symbolic query 'all_duplicate_names(Pairs)'
 ```
 
 The listing further down is this library explained, not a copy you have
@@ -381,7 +381,7 @@ For scale (at the time this section was captured): 222 `defines/3`, 723
 `calls` gaining `CallerArity` plus an `ArgCount` on every `local`/
 `remote`/`member` term. The query *syntax* below (`duplicate_name/3` etc., already updated above)
 still runs; the *captured output* (counts, JSON blobs) will differ from
-a fresh `symbolic parse src -db facts.dets` run today — regenerate
+a fresh `symbolic parse src` run today — regenerate
 rather than trust these numbers at face value.
 
 **A visible side effect of the JSON output format** (`prolog-store.md`
@@ -393,7 +393,7 @@ not as `Key - Value` text. Every array below whose first element is
 ### Duplicate function names across modules
 
 ```sh
-$ symbolic query -db facts.dets 'all_duplicate_names(Triples)'
+$ symbolic query 'all_duplicate_names(Triples)'
 Triples = [["-","caller_name",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","clean_join",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","clean_line",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","code_change",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","collect_run",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","comment_nodes",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","comments",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","defines",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","definition_name",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","doc_fact",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","docs",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","file",["src/ts_extract.erl","src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_json.erl","src/ts_extract_markdown.erl","src/ts_extract_toml.erl","src/ts_extract_typescript.erl"]],["-","find_named_child_by_type",["src/ts_extract_json.erl","src/ts_extract_markdown.erl"]],["-","handle_call",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","handle_cast",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","handle_query",["src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","init",["src/prolog_session.erl","src/prolog_session_registry.erl","src/prolog_session_sup.erl","src/symbolic_ts.erl"]],["-","is_run_start",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","join_path",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]],["-","leaf_value",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]],["-","line",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_json.erl","src/ts_extract_markdown.erl","src/ts_extract_toml.erl","src/ts_extract_typescript.erl"]],["-","local_calls",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","name_to_list",["src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","run",["src/symbolic_parse.erl","src/symbolic_query.erl","src/symbolic_serve.erl"]],["-","run_checked",["src/symbolic_parse.erl","src/symbolic_query.erl"]],["-","start_link",["src/prolog_session.erl","src/prolog_session_registry.erl","src/prolog_session_sup.erl"]],["-","terminate",["src/prolog_session.erl","src/prolog_session_registry.erl"]],["-","text",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","to_lines",["src/ts_extract_bash.erl","src/ts_extract_erlang.erl","src/ts_extract_typescript.erl"]],["-","walk_pair",["src/ts_extract_json.erl","src/ts_extract_toml.erl"]]]
 ```
 
@@ -415,10 +415,10 @@ part of fixing the escaping/truncation bug above.
 ### Fan-out and fan-in
 
 ```sh
-$ symbolic query -db facts.dets 'top_fan_out(5, X)'
+$ symbolic query 'top_fan_out(5, X)'
 X = [["-",["-",14,"file"],"src/ts_extract_toml.erl"],["-",["-",13,"file"],"src/ts_extract_markdown.erl"],["-",["-",12,"walk_pair"],"src/ts_extract_toml.erl"],["-",["-",12,"text"],"src/ts_extract_typescript.erl"],["-",["-",12,"text"],"src/ts_extract_erlang.erl"]]
 
-$ symbolic query -db facts.dets 'top_fan_in(5, X)'
+$ symbolic query 'top_fan_in(5, X)'
 X = [["-",11,"line"],["-",10,"to_atom"],["-",4,"walk_pair"],["-",4,"to_text"],["-",4,"render_caught"]]
 ```
 
@@ -433,7 +433,7 @@ callers); its sibling `to_text/1` already has 4.
 ### Self-recursive functions (and a limitation that used to be here)
 
 ```sh
-$ symbolic query -db facts.dets 'findall(F-A-Fl, self_recursive(F, A, Fl), Xs)'
+$ symbolic query 'findall(F-A-Fl, self_recursive(F, A, Fl), Xs)'
 F = [0]
 A = [2]
 Fl = [1]
@@ -485,7 +485,7 @@ include either `query` or `run`.
 ### Risky calls (process control, filesystem, NIF loading)
 
 ```sh
-$ symbolic query -db facts.dets 'all_risky_calls(Triples)'
+$ symbolic query 'all_risky_calls(Triples)'
 Triples = [["-",["-","file","file"],"read_file"],["-",["-","handle_call","erlang"],"monitor"],["-",["-","handle_call","file"],"delete"],["-",["-","handle_call","file"],"write_file"],["-",["-","init","erlang"],"load_nif"],["-",["-","node_child_by_field_name","erlang"],"nif_error"],["-",["-","node_end_byte","erlang"],"nif_error"],["-",["-","node_is_null","erlang"],"nif_error"],["-",["-","node_named_child","erlang"],"nif_error"],["-",["-","node_named_child_count","erlang"],"nif_error"],["-",["-","node_next_sibling","erlang"],"nif_error"],["-",["-","node_parent","erlang"],"nif_error"],["-",["-","node_prev_sibling","erlang"],"nif_error"],["-",["-","node_start_byte","erlang"],"nif_error"],["-",["-","node_start_point","erlang"],"nif_error"],["-",["-","node_type","erlang"],"nif_error"],["-",["-","parser_new","erlang"],"nif_error"],["-",["-","parser_parse_string","erlang"],"nif_error"],["-",["-","parser_set_language","erlang"],"nif_error"],["-",["-","prove_with_timeout","erlang"],"demonitor"],["-",["-","query_capture","erlang"],"nif_error"],["-",["-","query_new","erlang"],"nif_error"],["-",["-","table_name","erlang"],"phash2"],["-",["-","tmp_dir","os"],"getenv"],["-",["-","tmp_path","erlang"],"unique_integer"],["-",["-","tree_root_node","erlang"],"nif_error"],["-",["-","tree_sitter_bash","erlang"],"nif_error"],["-",["-","tree_sitter_erlang","erlang"],"nif_error"],["-",["-","tree_sitter_json","erlang"],"nif_error"],["-",["-","tree_sitter_markdown","erlang"],"nif_error"],["-",["-","tree_sitter_toml","erlang"],"nif_error"],["-",["-","tree_sitter_typescript","erlang"],"nif_error"],["-",["-","undefined","file"],"filename"]]
 ```
 
@@ -524,7 +524,7 @@ fails if the filter is removed.
 ### "No local callers" — mostly false positives, and why
 
 ```sh
-$ symbolic query -db facts.dets 'all_no_local_callers(Triples), length(Triples, N)'
+$ symbolic query 'all_no_local_callers(Triples), length(Triples, N)'
 N = 59
 ```
 
@@ -556,7 +556,7 @@ calls are deliberately excluded: those are same-file, intra-component
 detail (C4 Code/L4), not a component boundary.
 
 ```sh
-$ symbolic query -db facts.dets 'all_module_dependencies(Edges), length(Edges, N)'
+$ symbolic query 'all_module_dependencies(Edges), length(Edges, N)'
 N = 108
 Edges = [["-","src/prolog_session.erl","erlang"], ...]
 ```
@@ -593,7 +593,7 @@ component_dependency(File, Mod, Kind) :-
 ```
 
 ```sh
-$ symbolic query -db facts.dets 'all_component_dependencies(Edges), length(Edges, N)'
+$ symbolic query 'all_component_dependencies(Edges), length(Edges, N)'
 N = 42
 ```
 
@@ -643,16 +643,16 @@ pattern more heavily.
 Six more rules, added on top of the library above to cover the shapes of
 question an ESLint config typically encodes — everything here is still
 derived from `defines/5`/`calls/5` alone, no new fact type. Real output
-below, from the same `symbolic parse src -db facts.dets` run as above.
+below, from the same `symbolic parse src` run as above.
 
 ```sh
-$ symbolic query -db facts.dets 'all_too_many_params(X)'
+$ symbolic query 'all_too_many_params(X)'
 X = []
 
-$ symbolic query -db facts.dets 'all_too_complex(X)'
+$ symbolic query 'all_too_complex(X)'
 X = [["-",["-",14,"file"],"src/ts_extract_toml.erl"],["-",["-",13,"file"],"src/ts_extract_markdown.erl"],["-",["-",12,"walk_pair"],"src/ts_extract_toml.erl"],["-",["-",12,"text"],"src/ts_extract_typescript.erl"],["-",["-",12,"text"],"src/ts_extract_erlang.erl"],["-",["-",12,"file"],"src/ts_extract_json.erl"],["-",["-",11,"text"],"src/ts_extract_bash.erl"]]
 
-$ symbolic query -db facts.dets 'all_god_files(X)'
+$ symbolic query 'all_god_files(X)'
 X = [["-",37,"src/symbolic_codebase.erl"],["-",32,"src/symbolic_serve.erl"],["-",30,"src/ts_extract_markdown.erl"],["-",25,"src/ts_extract_typescript.erl"],["-",25,"src/symbolic_ts.erl"],["-",22,"src/ts_extract_erlang.erl"]]
 ```
 
@@ -680,7 +680,7 @@ left unbound, the exact shape that exposed the bug — a test that only
 ever passed a bound `File` in would not have caught it.
 
 ```sh
-$ symbolic query -db facts.dets 'all_mutual_recursion(X)'
+$ symbolic query 'all_mutual_recursion(X)'
 query failed: timeout
 ```
 
@@ -696,7 +696,7 @@ that's enough to hit the query timeout. Bind at least one side —
 of asking "is there any cycle anywhere" in one shot.
 
 ```sh
-$ symbolic query -db facts.dets 'all_truly_uncalled(X), length(X, N)'
+$ symbolic query 'all_truly_uncalled(X), length(X, N)'
 N = 30
 ```
 
@@ -752,11 +752,11 @@ already give the "+1" for free: a 3-clause function produces three
 Bash, the real clause count for Erlang.
 
 ```sh
-$ symbolic query -db facts.dets 'real_complexity(handle_call, 3, File, Count)'
+$ symbolic query 'real_complexity(handle_call, 3, File, Count)'
 Count = 16
 File = "src/prolog_session.erl"
 
-$ symbolic query -db facts.dets 'all_too_complex_real(X)'
+$ symbolic query 'all_too_complex_real(X)'
 X = [["-",["-",["-",16,"handle_call"],3],"src/symbolic_codebase.erl"],["-",["-",["-",16,"handle_call"],3],"src/prolog_session.erl"]]
 ```
 
@@ -806,7 +806,7 @@ hatch (`ok`/`id` are fine in most codebases) — edit it for this
 project's own conventions, same pattern as `banned_target/2`'s table.
 
 ```sh
-$ symbolic query -db facts.dets 'all_short_names(X)'
+$ symbolic query 'all_short_names(X)'
 X = []
 ```
 
@@ -817,7 +817,7 @@ fixture (`f`, `id`, `ok`, `process`, one function each) shows the
 positive case instead:
 
 ```sh
-$ symbolic query -db facts.dets 'all_short_names(X)'
+$ symbolic query 'all_short_names(X)'
 X = [["-",["-","f",1],"sample.ts"]]
 ```
 
@@ -834,10 +834,10 @@ only for now — see `docs/prolog-schema.md`) make that visible, and
 `self_compare/4`/`yoda_condition/5` are two small, real proofs of it:
 
 ```sh
-$ symbolic query -db facts.dets 'all_self_compares(X)'
+$ symbolic query 'all_self_compares(X)'
 X = [["-",["-","checkAccess",2],"sample.ts"]]
 
-$ symbolic query -db facts.dets 'all_yoda_conditions(X)'
+$ symbolic query 'all_yoda_conditions(X)'
 X = [["-",["-","checkAccess",2],"sample.ts"]]
 ```
 
@@ -881,10 +881,10 @@ not re-derived per query, the same design `calls/5`'s caller-attribution
 walk-up already uses.
 
 ```sh
-$ symbolic query -db facts.dets 'all_unused_vars(X)'
+$ symbolic query 'all_unused_vars(X)'
 X = [["-",["-","debug","sample.ts"],10]]
 
-$ symbolic query -db facts.dets 'all_shadowed_vars(X)'
+$ symbolic query 'all_shadowed_vars(X)'
 X = [["-",["-","sum","sample.ts"],6]]
 ```
 
@@ -931,19 +931,19 @@ already provides (plus one small additive fact, `var_decl_initialized/1`
 — whether a declarator has a `value` at all) — they're new Prolog only.
 
 ```sh
-$ symbolic query -db facts.dets 'all_prefer_const(X)'
+$ symbolic query 'all_prefer_const(X)'
 X = [["-",["-","pending","sample.ts"],6],["-",["-","ready","sample.ts"],2],["-",["-","undefined","sample.ts"],7]]
 
-$ symbolic query -db facts.dets 'all_redeclared_vars(X)'
+$ symbolic query 'all_redeclared_vars(X)'
 X = [["-",["-","retries","sample.ts"],4]]
 
-$ symbolic query -db facts.dets 'all_restricted_name_shadows(X)'
+$ symbolic query 'all_restricted_name_shadows(X)'
 X = [["-",["-","undefined","sample.ts"],7]]
 
-$ symbolic query -db facts.dets 'all_use_before_define(X)'
+$ symbolic query 'all_use_before_define(X)'
 X = [["-",["-","pending","sample.ts"],5]]
 
-$ symbolic query -db facts.dets 'all_undeclared_vars(X)'
+$ symbolic query 'all_undeclared_vars(X)'
 X = [["-",["-","unknownGlobal","sample.ts"],8]]
 ```
 
@@ -983,16 +983,16 @@ language. Only `no_new/4` needed anything extra (`bare_new/5` — see
 same shape `risky_call/3` already has.
 
 ```sh
-$ symbolic query -db facts.dets 'all_no_new(X)'
+$ symbolic query 'all_no_new(X)'
 X = [["-",["-","Logger","sample.ts"],2]]
 
-$ symbolic query -db facts.dets 'all_no_new_wrappers(X)'
+$ symbolic query 'all_no_new_wrappers(X)'
 X = [["-",["-","Boolean","sample.ts"],3]]
 
-$ symbolic query -db facts.dets 'all_prefer_regex_literals(X)'
+$ symbolic query 'all_prefer_regex_literals(X)'
 X = [["-","sample.ts",4]]
 
-$ symbolic query -db facts.dets 'all_lowercase_constructors(X)'
+$ symbolic query 'all_lowercase_constructors(X)'
 X = [["-",["-","httpClient","sample.ts"],5]]
 ```
 
@@ -1034,13 +1034,13 @@ facts answer what that alone can't: which module a name came from, and
 what a file makes public. TypeScript only.
 
 ```sh
-$ symbolic query -db facts.dets 'all_duplicate_imports(X)'
+$ symbolic query 'all_duplicate_imports(X)'
 X = [["-",["-","lodash","sample.ts"],3]]
 
-$ symbolic query -db facts.dets 'all_restricted_imports(X)'
+$ symbolic query 'all_restricted_imports(X)'
 X = [["-",["-","lodash","sample.ts"],1],["-",["-","lodash","sample.ts"],3],["-",["-","moment","sample.ts"],2]]
 
-$ symbolic query -db facts.dets 'all_restricted_exports(X)'
+$ symbolic query 'all_restricted_exports(X)'
 X = [["-",["-",["-","default","default"],"sample.ts"],6]]
 ```
 
@@ -1082,19 +1082,19 @@ Five rules, all TypeScript only, on the new fact family documented in
 (blocks only), `curly`, and `consistent-return`.
 
 ```sh
-$ symbolic query -db facts.dets 'all_no_empty_blocks(X)'
+$ symbolic query 'all_no_empty_blocks(X)'
 X = [["-",["-",["-","f",1],"sample.ts"],2]]
 
-$ symbolic query -db facts.dets 'all_unreachable_stmts(X)'
+$ symbolic query 'all_unreachable_stmts(X)'
 X = [["-","sample.ts",7]]
 
-$ symbolic query -db facts.dets 'all_no_fallthrough_cases(X)'
+$ symbolic query 'all_no_fallthrough_cases(X)'
 X = [["-",["-",["-","f",1],"sample.ts"],11]]
 
-$ symbolic query -db facts.dets 'all_curly_violations(X)'
+$ symbolic query 'all_curly_violations(X)'
 X = [["-",["-",["-",["-","f",1],"else"],"sample.ts"],21],["-",["-",["-",["-","f",1],"for"],"sample.ts"],23],["-",["-",["-",["-","f",1],"if"],"sample.ts"],20]]
 
-$ symbolic query -db facts.dets 'all_inconsistent_returns(X)'
+$ symbolic query 'all_inconsistent_returns(X)'
 X = [["-",["-","f",1],"sample.ts"]]
 ```
 
