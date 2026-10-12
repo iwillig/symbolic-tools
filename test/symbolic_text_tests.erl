@@ -25,6 +25,19 @@ tokenize_is_lowercase_uax29_words_test() ->
 tokenize_rejects_invalid_utf8_test() ->
     ?assertEqual({error, invalid_utf8}, symbolic_text:tokenize(<<16#FF>>)).
 
+tokenize_handles_unicode_and_punctuation_test() ->
+    Text = <<"Caf", 195, 169, 226, 128, 148, "na", 195, 175,
+             118, 32, 230, 157, 177, 228, 186, 172, " 42!">>,
+    ?assertEqual({ok, [<<"caf", 195, 169>>, <<"na", 195, 175, 118>>,
+                       <<230, 157, 177>>, <<228, 186, 172>>, <<"42">>]},
+        symbolic_text:tokenize(Text)).
+
+add_doc_rejects_invalid_utf8_test() ->
+    Index = symbolic_text:index_new(),
+    ?assertEqual({error, invalid_utf8},
+        symbolic_text:index_add_doc(Index, 1, <<16#FF>>)),
+    ?assertEqual({ok, {0, 0}}, symbolic_text:index_stats(Index)).
+
 higher_term_frequency_ranks_first_test() ->
     Index = setup_index([{1, <<"alpha beta">>}, {2, <<"alpha alpha alpha">>}]),
     ?assertMatch({ok, [{2, _}, {1, _}]},
@@ -38,6 +51,10 @@ rare_term_outranks_common_test() ->
 unmatched_query_returns_empty_list_test() ->
     Index = setup_index([{1, <<"alpha">>}]),
     ?assertEqual({ok, []}, symbolic_text:index_search(Index, <<"gamma">>, 10)).
+
+zero_limit_returns_no_results_test() ->
+    Index = setup_index([{1, <<"alpha">>}]),
+    ?assertEqual({ok, []}, symbolic_text:index_search(Index, <<"alpha">>, 0)).
 
 ties_break_by_doc_id_ascending_and_limit_truncates_test() ->
     Index = setup_index([{3, <<"same">>}, {1, <<"same">>}, {2, <<"same">>}]),
@@ -71,6 +88,25 @@ save_load_round_trips_exactly_test() ->
     after
         file:delete(Path)
     end.
+
+snapshot_binary_round_trips_and_matches_file_snapshot_test() ->
+    Index = setup_index([{7, <<"alpha beta beta">>}, {9, <<"gamma">>}]),
+    {ok, Snapshot} = symbolic_text:index_snapshot(Index),
+    {ok, Loaded} = symbolic_text:index_load_binary(Snapshot),
+    ?assertEqual({ok, {2, 3}}, symbolic_text:index_stats(Loaded)),
+    ?assertEqual(symbolic_text:index_search(Index, <<"beta">>, 10),
+                 symbolic_text:index_search(Loaded, <<"beta">>, 10)),
+    Path = tmp_path(),
+    try
+        ?assertEqual(ok, symbolic_text:index_save(Index, to_bin(Path))),
+        ?assertEqual({ok, Snapshot}, file:read_file(Path))
+    after
+        file:delete(Path)
+    end.
+
+load_binary_rejects_invalid_snapshot_test() ->
+    ?assertEqual({error, bad_snapshot},
+        symbolic_text:index_load_binary(<<"not an index snapshot">>)).
 
 load_rejects_a_missing_file_as_io_error_test() ->
     ?assertEqual({error, io_error},

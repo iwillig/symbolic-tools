@@ -68,6 +68,49 @@ node_text_is_undefined_for_a_null_node_test() ->
     ?assertEqual(undefined, symbolic_ts:node_text(NullNode, Source)),
     ?assertEqual(undefined, symbolic_ts:node_text(NullNode, list_to_binary(Source))).
 
+language_loaders_return_language_resources_test() ->
+    Loaders = [tree_sitter_erlang, tree_sitter_typescript, tree_sitter_markdown,
+               tree_sitter_toml, tree_sitter_json, tree_sitter_bash,
+               tree_sitter_jsdoc, tree_sitter_rust, tree_sitter_clojure,
+               tree_sitter_ruby],
+    lists:foreach(fun(Loader) ->
+        ?assertMatch({ok, _}, apply(symbolic_ts, Loader, []))
+    end, Loaders).
+
+node_navigation_and_points_test() ->
+    Root = parse("f() -> ok.\ng() -> ok.\n"),
+    ?assertEqual("source_file", symbolic_ts:node_type(Root)),
+    ?assertEqual(2, symbolic_ts:node_named_child_count(Root)),
+    First = symbolic_ts:node_named_child(Root, 0),
+    Second = symbolic_ts:node_named_child(Root, 1),
+    Parent = symbolic_ts:node_parent(First),
+    ?assertEqual(symbolic_ts:node_type(Root), symbolic_ts:node_type(Parent)),
+    Next = symbolic_ts:node_next_sibling(First),
+    Prev = symbolic_ts:node_prev_sibling(Second),
+    Source = "f() -> ok.\ng() -> ok.\n",
+    ?assertEqual("g() -> ok.", symbolic_ts:node_text(Next, Source)),
+    ?assertEqual("f() -> ok.", symbolic_ts:node_text(Prev, Source)),
+    ?assertEqual(undefined, symbolic_ts:node_prev_sibling(First)),
+    ?assertEqual(undefined, symbolic_ts:node_next_sibling(Second)),
+    ?assertEqual(#{row => 0, column => 0}, symbolic_ts:node_start_point(First)),
+    ?assertEqual(0, symbolic_ts:node_start_byte(First)),
+    ?assert(symbolic_ts:node_end_byte(First) > 0),
+    ?assertMatch(#{row := 0, column := Column} when Column > 0,
+                 symbolic_ts:node_end_point(First)).
+
+query_captures_nodes_and_names_test() ->
+    {ok, Lang} = symbolic_ts:tree_sitter_erlang(),
+    {ok, Parser} = symbolic_ts:parser_new(),
+    true = symbolic_ts:parser_set_language(Parser, Lang),
+    Tree = symbolic_ts:parser_parse_string(Parser, <<"f() -> ok.\n">>),
+    Root = symbolic_ts:tree_root_node(Tree),
+    {Query, 0, error_none} = symbolic_ts:query_new(Lang, <<"(atom) @name">>),
+    Captures = symbolic_ts:query_capture(Root, Query),
+    ?assertEqual(2, length(Captures)),
+    CapturedTexts = lists:sort([symbolic_ts:node_text(Node, <<"f() -> ok.\n">>)
+                                || {"name", Node} <- Captures]),
+    ?assertEqual(["f", "ok"], CapturedTexts).
+
 %% A null TSNode — node_named_child/2 past the last child returns one,
 %% because make_node_term_always/2 deliberately does NOT collapse it to
 %% `undefined` (native/symbolic_ts's null_guard, so callers can node_is_null/1
