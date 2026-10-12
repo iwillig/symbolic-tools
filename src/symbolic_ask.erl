@@ -767,7 +767,13 @@ lower(B) when is_binary(B) ->
 %% (a call fact is local(Name, Arity) inside a module or
 %% remote(Module, Name, Arity) across one — the question is about
 %%% "calls bar/1", not about which boundary).
-answer(Pid, yes_no, {calls, Subject, Object}) ->
+answer(Pid, Type, Rel) ->
+    case symbolic_ask_catalog:lookup(Type, Rel) of
+        {ok, _Operation} -> execute_answer(Pid, Type, Rel);
+        error -> {error, {unknown_question_shape, Type, Rel}}
+    end.
+
+execute_answer(Pid, yes_no, {calls, Subject, Object}) ->
     case gate(Pid, Subject, strict, Object, loose) of
         ok -> yes_no_calls(Pid, Subject, Object);
         Unverifiable -> Unverifiable
@@ -780,13 +786,13 @@ answer(Pid, yes_no, {calls, Subject, Object}) ->
 %% name has ANY defines fact — the honest reading of "is X defined?"
 %% when the question named no arity. MUST precede the general
 %% {defines, Ident} clause, which would otherwise swallow it.
-answer(Pid, yes_no, {defines, {'/', Name, any}}) ->
+execute_answer(Pid, yes_no, {defines, {'/', Name, any}}) ->
     case prolog_session:query(Pid, defines_goal(Name, "_")) of
         {ok, _} -> {ok, yes_no_answer(true)};
         no_solution -> {ok, yes_no_answer(false)};
         {error, Reason} -> {error, {query_failed, Reason}}
     end;
-answer(Pid, yes_no, {defines, Ident}) ->
+execute_answer(Pid, yes_no, {defines, Ident}) ->
     {'/', Name, Arity} = Ident,
     case prolog_session:query(Pid, defines_goal(Name, Arity)) of
         {ok, _} -> {ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => true}};
@@ -795,13 +801,13 @@ answer(Pid, yes_no, {defines, Ident}) ->
     end;
 %% Enumeration: gate the callee, findall both call shapes, merge, dedup,
 %% sort — stable output whatever order load_facts' asserta left.
-answer(Pid, enumerate, {callers_of, Object}) ->
+execute_answer(Pid, enumerate, {callers_of, Object}) ->
     case gate(Pid, Object, loose) of
         ok -> enumerate_callers(Pid, Object);
         Unverifiable -> Unverifiable
     end;
 %% Count: distinct functions, same merge as enumerate.
-answer(Pid, count, {callers_of, Object}) ->
+execute_answer(Pid, count, {callers_of, Object}) ->
     case gate(Pid, Object, loose) of
         ok ->
             case enumerate_callers(Pid, Object) of
@@ -818,7 +824,7 @@ answer(Pid, count, {callers_of, Object}) ->
     end;
 %% Prose: evidence, never a verdict (rule 2). No gate — there is nothing
 %% to resolve in free text.
-answer(Pid, prose, Span) ->
+execute_answer(Pid, prose, Span) ->
     QueryText = string:join([span_word(Word) || Word <- Span], " "),
     Goal = "text_search(\"" ++ QueryText ++ "\", Hits)",
     case prolog_session:query(Pid, Goal) of
@@ -838,7 +844,7 @@ answer(Pid, prose, Span) ->
 %% uses — the subject's code mentions the name (expr_ref/6). Each
 %% candidate name is tried until one proves; none does → false, which
 %% is an answer, not an error.
-answer(Pid, yes_no, {uses, Subject, Candidates}) ->
+execute_answer(Pid, yes_no, {uses, Subject, Candidates}) ->
     case
         bool_any(
             Pid,
@@ -851,7 +857,7 @@ answer(Pid, yes_no, {uses, Subject, Candidates}) ->
     end;
 %% uses with a file subject — any expr_ref of the name in a file whose
 %% basename matches the question's file name.
-answer(Pid, yes_no, {uses_file, FileBin, Candidates}) ->
+execute_answer(Pid, yes_no, {uses_file, FileBin, Candidates}) ->
     case
         bool_any(
             Pid,
@@ -875,7 +881,7 @@ answer(Pid, yes_no, {uses_file, FileBin, Candidates}) ->
 %% answer true for a logger diagnostic that happens to name the field,
 %% defeating the very true→false flip the claims check. Multi-line
 %% return expressions are the accepted v1 blind spot.
-answer(Pid, yes_no, {returns, Subject, Candidates}) ->
+execute_answer(Pid, yes_no, {returns, Subject, Candidates}) ->
     case return_lines(Pid, Subject) of
         {ok, []} ->
             {ok, yes_no_answer(false)};
@@ -906,7 +912,7 @@ answer(Pid, yes_no, {returns, Subject, Candidates}) ->
     end;
 %% handles — a branch-level literal whose value equals the name
 %% (case-insensitive), proving "maps/handles X" against literal/7.
-answer(Pid, yes_no, {handles, {'/', SName, SArity}, Candidates}) ->
+execute_answer(Pid, yes_no, {handles, {'/', SName, SArity}, Candidates}) ->
     %% literal/8: Id, Function, Arity, Kind, Value, File, Line, Raw
     %% (the tool description's literal/7 predates the Raw column).
     Goal =
@@ -933,7 +939,7 @@ answer(Pid, yes_no, {handles, {'/', SName, SArity}, Candidates}) ->
     end;
 %% sites — WHERE is X called: every call site as {caller, file, line},
 %% all three call shapes merged, deduped, sorted by file then line.
-answer(Pid, sites, {call_sites_of, {'/', OName, OArity}}) ->
+execute_answer(Pid, sites, {call_sites_of, {'/', OName, OArity}}) ->
     OArityText = arity_text(OArity),
     Goal =
         "findall(st(C, A, F, L), calls(C, A, local(" ++
@@ -961,15 +967,17 @@ answer(Pid, sites, {call_sites_of, {'/', OName, OArity}}) ->
             {error, {query_failed, Reason}}
     end;
 %% sites — WHERE is X defined: its defines/5 sites.
-answer(Pid, sites, {def_site_of, {'/', SName, _SArity}}) ->
+execute_answer(Pid, sites, {def_site_of, {'/', SName, SArity}}) ->
     Goal =
-        "findall(st(" ++ quoted_atom_name(SName) ++ ", A, F, L), defines(" ++
-            quoted_atom_name(SName) ++ ", A, _, F, L), L1)",
+        "findall(st(" ++ quoted_atom_name(SName) ++ ", " ++
+            integer_to_list(SArity) ++ ", F, L), defines(" ++
+            quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity) ++
+            ", _, F, L), L1)",
     case prolog_session:query(Pid, Goal) of
         {ok, Bindings} ->
             Sites = lists:usort(
                 [
-                    site_entry(I)
+                    definition_site_entry(I)
                  || I <- proplists:get_value('L1', Bindings, [])
                 ]
             ),
@@ -982,7 +990,7 @@ answer(Pid, sites, {def_site_of, {'/', SName, _SArity}}) ->
 %% calls with a file subject — any call site of the object whose file
 %% basename matches. Reuses the sites answer, which already merges all
 %% three call shapes.
-answer(Pid, yes_no, {calls_file, FileBin, Object}) ->
+execute_answer(Pid, yes_no, {calls_file, FileBin, Object}) ->
     case answer(Pid, sites, {call_sites_of, Object}) of
         {ok, #{<<"answer">> := Sites}} ->
             Found = lists:any(
@@ -995,17 +1003,17 @@ answer(Pid, yes_no, {calls_file, FileBin, Object}) ->
     end;
 %% is file F scanned? — the gate IS the proof: the basename appears in
 %% any fact's File field (defines, comments, paragraphs, config).
-answer(Pid, yes_no, {file_scanned, FileWords}) ->
+execute_answer(Pid, yes_no, {file_scanned, FileWords}) ->
     case file_scanned_check(Pid, FileWords) of
         {ok, Bool} -> {ok, yes_no_answer(Bool)};
         Error -> Error
     end;
 %% is config K defined? — exact dotted key against config_value/4.
-answer(Pid, yes_no, {config_defined, KeyWords}) ->
+execute_answer(Pid, yes_no, {config_defined, KeyWords}) ->
     Key = file_segment(KeyWords),
     Goal = "config_value(_, " ++ quoted_atom_name(Key) ++ ", _, _)",
     bool_answer(Pid, Goal);
-answer(_Pid, Type, Rel) ->
+execute_answer(_Pid, Type, Rel) ->
     {error, {unknown_question_shape, Type, Rel}}.
 
 %% Helpers for the stage 2b answers — kept below the catch-all so the
@@ -1028,6 +1036,15 @@ site_entry({'st', Caller, CallerArity, File, Line}) ->
         <<"line">> => Line
     };
 site_entry(_Other) ->
+    #{}.
+
+definition_site_entry({'st', Function, Arity, File, Line}) ->
+    #{
+        <<"function">> => render_ident({'-', Function, Arity}),
+        <<"file">> => to_bin(File),
+        <<"line">> => Line
+    };
+definition_site_entry(_Other) ->
     #{}.
 
 file_scanned_check(Pid, FileWords) ->

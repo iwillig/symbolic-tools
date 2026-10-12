@@ -330,6 +330,33 @@ pipeline_uses_returns_handles_sites_scanned_config_test() ->
 %% Gap 1: a returned object's field is a property KEY, not an expr_ref —
 %% the returns join must see object_key or "does X return reason?"
 %% answers a confident false about `{ reason: "expired" }`.
+catalog_declares_evidence_bearing_definition_sites_test() ->
+    {ok, Operation} = symbolic_ask_catalog:lookup(
+        sites, {def_site_of, {'/', foo, 1}}),
+    ?assertEqual(definition_sites, maps:get(id, Operation)),
+    ?assertEqual(sites, maps:get(answer, Operation)),
+    ?assertEqual(closed_world, maps:get(world, Operation)),
+    ?assertEqual(source_location, maps:get(evidence, Operation)),
+    ?assertEqual(error, symbolic_ask_catalog:lookup(arbitrary, goal)).
+
+definition_site_is_exact_arity_and_carries_function_identity_test() ->
+    Facts = [
+        {defines, foo, 1, [], 'src/foo.erl', 10},
+        {defines, foo, 2, [], 'src/foo.erl', 20},
+        {defines, foo, 1, [], 'src/other.erl', 30}
+    ],
+    Expected = {ok, #{
+        <<"type">> => <<"sites">>,
+        <<"answer">> => [
+            #{<<"function">> => <<"foo/1">>, <<"file">> => <<"src/foo.erl">>, <<"line">> => 10},
+            #{<<"function">> => <<"foo/1">>, <<"file">> => <<"src/other.erl">>, <<"line">> => 30}
+        ]
+    }},
+    with_db(Facts, fun(Db) ->
+        ?assertEqual(Expected,
+            symbolic_ask:run_result(Db, "where is foo/1 defined?"))
+    end).
+
 pipeline_returns_object_key_test() ->
     Facts = [
         {defines, verifyCode, 1, [], 'supabaseOtp.ts', 1},
