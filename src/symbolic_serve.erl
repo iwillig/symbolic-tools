@@ -33,7 +33,7 @@
 %% schemas with a mocked erlmcp_stdio boundary. run/0 and setup_logging/0
 %% remain manual-smoke-test seams because they start applications and mutate
 %% global logger state (docs/erlang-mcp-design.md).
--export([handle_parse/1, handle_query/1, handle_ask/1, handle_overview/1,
+-export([handle_parse/1, handle_query/1, handle_ask/1, handle_ask_catalog/1, handle_overview/1,
     handle_extract/1, handle_check/1, handle_search/1, handle_analyze_text/1]).
 
 %% Start the MCP server over stdio: logging first (so early failures
@@ -252,6 +252,15 @@ register_tools() ->
                                    "to use whichever directory was most "
                                    "recently parsed.">>}},
           <<"required">> => [<<"question">>]}),
+    ok = erlmcp_stdio:add_tool(<<"ask_catalog">>,
+        <<"List supported ASK operations, required input slots, answer shapes, "
+          "world assumptions, evidence behavior, limits, and example questions. "
+          "Use this before composing a question for the `ask` tool.">>,
+        fun handle_ask_catalog/1,
+        #{<<"type">> => <<"object">>,
+          <<"properties">> => #{},
+          <<"required">> => [],
+          <<"additionalProperties">> => false}),
     ok = erlmcp_stdio:add_tool(<<"overview">>,
         <<"Report the current state of a cached fact base: whether a "
           "codebase is loaded, how many files/languages, and fact counts by "
@@ -383,6 +392,12 @@ handle_query(Params) ->
             ?LOG_ERROR("query: crashed ~p:~p~n~p", [Class, Crash, ST]),
             json(#{error => caught_str(Class, Crash, ST)})
     end.
+
+%% The `ask_catalog` MCP tool exposes the same catalog used by the CLI.
+handle_ask_catalog(Params) when is_map(Params), map_size(Params) =:= 0 ->
+    json(#{ok => symbolic_ask_catalog:describe()});
+handle_ask_catalog(_Params) ->
+    json(#{error => <<"ask_catalog accepts no arguments">>}).
 
 %% The `ask` MCP tool: answer a bounded English question against a
 %% cached fact base — the same pipeline the `symbolic ask` CLI runs

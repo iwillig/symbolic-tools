@@ -66,6 +66,31 @@ parse_rejects_arguments_test() ->
         <<"rules">> => <<"custom.pl">>})),
     ?assertMatch(#{<<"error">> := <<"parse accepts no arguments", _/binary>>}, Json).
 
+ask_catalog_tool_is_discoverable_and_returns_shared_catalog_test() ->
+    meck:new(erlmcp_stdio, [non_strict]),
+    meck:expect(erlmcp_stdio, add_tool,
+        fun(Name, _Description, Handler, Schema) ->
+            put({registered_tool_schema, Name}, Schema),
+            put({registered_tool_handler, Name}, Handler),
+            ok
+        end),
+    try
+        ok = symbolic_serve:register_tools(),
+        Schema = get({registered_tool_schema, <<"ask_catalog">>}),
+        ?assertEqual(#{}, maps:get(<<"properties">>, Schema)),
+        ?assertEqual([], maps:get(<<"required">>, Schema)),
+        ?assertEqual(false, maps:get(<<"additionalProperties">>, Schema)),
+        Handler = get({registered_tool_handler, <<"ask_catalog">>}),
+        Json = decode(Handler(#{})),
+        ?assertEqual(#{<<"ok">> => symbolic_ask_catalog:describe()}, Json),
+        ?assertMatch(#{<<"error">> := <<"ask_catalog accepts no arguments">>},
+            decode(Handler(#{<<"unexpected">> => true})))
+    after
+        erase({registered_tool_schema, <<"ask_catalog">>}),
+        erase({registered_tool_handler, <<"ask_catalog">>}),
+        meck:unload(erlmcp_stdio)
+    end.
+
 serve_test_() ->
     {foreach, fun setup/0, fun teardown/1, [
         fun overview_before_parse/1,

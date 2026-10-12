@@ -194,5 +194,12 @@ query_handler_uses_configured_database_when_db_is_omitted_test() ->
         _ = file:del_dir_r(Root)
     end.
 
+ask_command_offers_catalog_without_requiring_a_question_test() ->
+    #{commands := #{"ask" := #{arguments := Args}}} = symbolic_cli:cli(),
+    #{catalog := Catalog, question := Question} = args_by_name(Args),
+    ?assertEqual(boolean, maps:get(type, Catalog)),
+    ?assertEqual(false, maps:get(default, Catalog)),
+    ?assertEqual(false, maps:get(required, Question)).
+
 args_by_name(Args) ->
     maps:from_list([{maps:get(name, A), A} || A <- Args]).

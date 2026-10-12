@@ -76,6 +76,12 @@ does not exist.
 
 ## 4. Determining what is verifiable
 
+Use `symbolic ask -catalog` to print the supported operation ids, input
+slots, answer shapes, world assumptions, evidence behavior, limits, and
+example questions as JSON. MCP clients can call `ask_catalog` for the same
+catalog; it has no inputs and does not require parsing a project first. The
+catalog is the supported surface, not permission to submit arbitrary Prolog.
+
 The verifiability gate runs between extraction and proof, and it has
 three rules:
 
@@ -118,6 +124,7 @@ Engine capabilities verified live against this repo's own cached base:
 | Question grammar (wh → variable) | **shipped (v1)** — `priv/question_grammar.pl`, five shapes |
 | Question classifier + verifiability gate | **shipped (v1)** — `symbolic_ask`'s gate (§4's rules, incl. the arity rule) |
 | `symbolic ask` wire-up | **shipped (v1)** — CLI (JSON answers, exit-code epistemics) AND the MCP `ask` tool (same `symbolic_ask:ask/2` core over the codebase cache) |
+| ASK operation discovery | **shipped** — `symbolic ask -catalog` and MCP `ask_catalog` return the same machine-readable operation contracts without needing a fact database |
 
 v1 gate refinement, found while implementing: subjects gate strictly
 against `defines/5`; callees gate loosely (arity checked only when the

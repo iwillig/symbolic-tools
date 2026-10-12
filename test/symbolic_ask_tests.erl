@@ -339,6 +339,43 @@ catalog_declares_evidence_bearing_definition_sites_test() ->
     ?assertEqual(source_location, maps:get(evidence, Operation)),
     ?assertEqual(error, symbolic_ask_catalog:lookup(arbitrary, goal)).
 
+catalog_discovery_describes_supported_inputs_and_answer_contracts_test() ->
+    #{<<"operations">> := Operations} = symbolic_ask_catalog:describe(),
+    ?assertEqual(14, length(Operations)),
+    Ids = [maps:get(<<"id">>, Op) || Op <- Operations],
+    ?assertEqual(length(Ids), length(lists:usort(Ids))),
+    lists:foreach(fun(Op) ->
+        ?assert(is_binary(maps:get(<<"description">>, Op))),
+        ?assert(is_list(maps:get(<<"inputs">>, Op))),
+        ?assert(is_map(maps:get(<<"answer_shape">>, Op))),
+        ?assert(is_binary(maps:get(<<"world_description">>, Op))),
+        ?assert(is_binary(maps:get(<<"evidence_description">>, Op))),
+        ?assert(length(maps:get(<<"examples">>, Op)) > 0),
+        ?assert(is_binary(maps:get(<<"limits">>, Op)))
+    end, Operations),
+    Calls = lists:keyfind(<<"calls">>, 1,
+        [{maps:get(<<"id">>, Op), Op} || Op <- Operations]),
+    {<<"calls">>, CallsOp} = Calls,
+    ?assertEqual(<<"yes_no">>, maps:get(<<"answer_type">>, CallsOp)),
+    ?assertEqual(<<"closed_world">>, maps:get(<<"world">>, CallsOp)),
+    ?assertEqual(<<"none">>, maps:get(<<"evidence">>, CallsOp)),
+    ?assertMatch([#{<<"name">> := <<"caller">>, <<"type">> := <<"function">>},
+                  #{<<"name">> := <<"callee">>, <<"type">> := <<"function">>}],
+        maps:get(<<"inputs">>, CallsOp)),
+    ?assert(is_binary(maps:get(<<"description">>, CallsOp))),
+    ?assert(length(maps:get(<<"examples">>, CallsOp)) > 0).
+
+catalog_examples_are_recognized_by_the_question_pipeline_test() ->
+    with_db(facts(), fun(Db) ->
+        Examples = lists:append([
+            maps:get(<<"examples">>, Op) || Op <- maps:get(<<"operations">>,
+                symbolic_ask_catalog:describe())]),
+        lists:foreach(fun(Example) ->
+            ?assertNotEqual(unrecognized,
+                symbolic_ask:run_result(Db, binary_to_list(Example)))
+        end, Examples)
+    end).
+
 definition_site_is_exact_arity_and_carries_function_identity_test() ->
     Facts = [
         {defines, foo, 1, [], 'src/foo.erl', 10},

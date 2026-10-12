@@ -124,17 +124,29 @@ overview_cmd() ->
 
 ask_cmd() ->
     #{
-        help => "Answer a bounded English question against a fact database "
-                "(see docs/research-questions-to-prolog.md)",
+        help => "Answer a bounded English question or list supported ASK operations",
         arguments => [
             #{name => db, long => "db", required => false,
               help => "Path to a fact database (.dets); defaults to the project's configured database"},
-            #{name => question, help => "Question, e.g. \"how many functions call query_binary/2?\""}
+            #{name => catalog, long => "catalog", type => boolean, default => false,
+              help => "Print the supported ASK operations and their contracts as JSON"},
+            #{name => question, required => false,
+              help => "Question, e.g. \"how many functions call query_binary/2?\""}
         ],
         handler => fun(Args) ->
-            Db = resolve_database(Args, undefined, true),
-            #{question := Question} = Args,
-            symbolic_ask:run(Db, Question)
+            case maps:get(catalog, Args, false) of
+                true -> io:format("~ts~n", [jsx:encode(symbolic_ask_catalog:describe())]);
+                false ->
+                    case maps:find(question, Args) of
+                        {ok, Question} ->
+                            Db = resolve_database(Args, undefined, true),
+                            symbolic_ask:run(Db, Question);
+                        error ->
+                            io:put_chars(standard_error,
+                                "Provide a question or use -catalog.\n"),
+                            halt(2)
+                    end
+            end
         end
     }.
 
