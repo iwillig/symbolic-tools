@@ -40,6 +40,7 @@ serve_test_() ->
         fun overview_before_parse/1,
         fun query_before_parse_is_friendly_error/1,
         fun parse_reports_summary/1,
+        fun parse_persists_configured_database/1,
         fun parse_missing_dir_is_friendly_error/1,
         fun parse_bad_path_type_is_caught/1,
         fun overview_after_parse_matches_parse/1,
@@ -71,6 +72,28 @@ serve_test_() ->
         fun check_returns_a_verdict/1,
         fun analyze_text_returns_sentence_components/1
     ]}.
+
+parse_persists_configured_database(_Setup) ->
+    fun() ->
+        Root = filename:absname(filename:join(["_build", "serve_shared_db_project"])),
+        _ = file:del_dir_r(Root),
+        ConfigPath = filename:join([Root, ".symbolic", "config.json"]),
+        DbPath = filename:join([Root, ".symbolic", "facts.dets"]),
+        SourcePath = filename:join([Root, "src", "sample.erl"]),
+        ok = filelib:ensure_dir(ConfigPath),
+        ok = filelib:ensure_dir(SourcePath),
+        ok = file:write_file(ConfigPath,
+            <<"{\"paths\": [\"src\"], \"database\": \".symbolic/facts.dets\"}">>),
+        ok = file:write_file(SourcePath, <<"-module(serve_shared_db).\nhello() -> ok.\n">>),
+        try
+            Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(Root)})),
+            ?assertEqual(list_to_binary(DbPath),
+                maps:get(<<"database">>, maps:get(<<"ok">>, Json))),
+            ?assert(filelib:is_regular(DbPath))
+        after
+            _ = file:del_dir_r(Root)
+        end
+    end.
 
 extract_returns_a_claim(_Setup) ->
     fun() ->

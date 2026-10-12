@@ -16,10 +16,10 @@ cli_structure_test() ->
     ?assertEqual(["analyze", "ask", "check", "extract", "overview", "parse", "query", "search", "serve"],
         lists:sort(maps:keys(Commands))).
 
-query_cmd_requires_db_and_goal_test() ->
+query_cmd_allows_configured_db_and_requires_goal_test() ->
     #{commands := #{"query" := #{arguments := Args}}} = symbolic_cli:cli(),
     #{db := Db, rules := Rules, no_rules := NoRules, goal := Goal} = args_by_name(Args),
-    ?assertEqual(true, maps:get(required, Db)),
+    ?assertEqual(false, maps:get(required, Db)),
     ?assertEqual(false, maps:get(required, Rules)),
     %% -no-rules is a switch: boolean-typed and defaulted to false, so it
     %% is never absent from the Args map the handler receives.
@@ -135,11 +135,11 @@ extract_handler_forwards_the_model_flag_when_given_test() ->
         ["foo/2 improves performance", "/models/x.gguf"])),
     meck:unload(symbolic_extract).
 
-check_cmd_requires_db_and_sentence_test() ->
+check_cmd_allows_configured_db_and_requires_sentence_test() ->
     #{commands := #{"check" := #{arguments := Args}}} = symbolic_cli:cli(),
     #{db := Db, rules := Rules, no_rules := NoRules, model := Model, sentence := Sentence} =
         args_by_name(Args),
-    ?assertEqual(true, maps:get(required, Db)),
+    ?assertEqual(false, maps:get(required, Db)),
     ?assertEqual(false, maps:get(required, Rules)),
     ?assertEqual(boolean, maps:get(type, NoRules)),
     ?assertEqual(false, maps:get(default, NoRules)),
@@ -178,6 +178,29 @@ analyze_handler_forwards_text_test() ->
     Handler(#{text => "Hello world."}),
     ?assert(meck:called(symbolic_analyze, run, ["Hello world."])),
     meck:unload(symbolic_analyze).
+
+query_handler_uses_configured_database_when_db_is_omitted_test() ->
+    Root = filename:absname(filename:join(["_build", "cli_default_db_project"])),
+    _ = file:del_dir_r(Root),
+    ConfigPath = filename:join([Root, ".symbolic", "config.json"]),
+    DbPath = filename:join([Root, ".symbolic", "facts.dets"]),
+    ok = filelib:ensure_dir(ConfigPath),
+    ok = file:write_file(ConfigPath,
+        <<"{\"paths\": [\"src\"], \"database\": \".symbolic/facts.dets\"}">>),
+    {ok, OldCwd} = file:get_cwd(),
+    meck:new(symbolic_query, [passthrough]),
+    meck:expect(symbolic_query, run,
+        fun(Db, _Rules, _NoRules, _Goal) -> self() ! {resolved_db, Db}, ok end),
+    try
+        ok = file:set_cwd(Root),
+        #{commands := #{"query" := #{handler := Handler}}} = symbolic_cli:cli(),
+        Handler(#{goal => "foo(X)"}),
+        receive {resolved_db, DbPath} -> ok after 1000 -> ?assert(false) end
+    after
+        ok = file:set_cwd(OldCwd),
+        meck:unload(symbolic_query),
+        _ = file:del_dir_r(Root)
+    end.
 
 args_by_name(Args) ->
     maps:from_list([{maps:get(name, A), A} || A <- Args]).

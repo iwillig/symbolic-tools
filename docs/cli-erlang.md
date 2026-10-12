@@ -117,8 +117,8 @@ query_cmd() ->
     #{
         help => "Load a fact database and prove a goal against it",
         arguments => [
-            #{name => db, long => "db", required => true,
-              help => "Path to a fact database (.dets)"},
+            #{name => db, long => "db", required => false,
+              help => "Path to a fact database (.dets); defaults to the project's configured database"},
             #{name => rules, long => "rules", required => false,
               help => "Hand-written Prolog rule file (.pl) to consult alongside the facts"},
             #{name => no_rules, long => "no-rules", type => boolean, default => false,
@@ -126,7 +126,8 @@ query_cmd() ->
             #{name => goal, help => "Goal to prove, e.g. \"foo(X)\""}
         ],
         handler => fun(Args) ->
-            #{db := Db, goal := Goal} = Args,
+            Db = resolve_database(Args, undefined, true),
+            #{goal := Goal} = Args,
             symbolic_query:run(Db, maps:get(rules, Args, undefined),
                 maps:get(no_rules, Args, false), Goal)
         end
@@ -163,6 +164,24 @@ query_cmd() ->
   same way `-rules` overrides rules discovery) — see
   [`prolog-store.md`](prolog-store.md) §8 for the full design,
   `symbolic_config.erl` and `symbolic_parse:scan_paths/1`.
+
+An optional `database` string in `.symbolic/config.json` sets the project's
+shared DETS file, resolved relative to the project root. For example:
+
+```json
+{"paths": ["src", "test"], "database": ".symbolic/facts.dets"}
+```
+
+`parse` writes to this file when `-db` is omitted. `query`, `ask`, `overview`,
+`search`, and `check` use it when their `-db` option is omitted. An explicit
+`-db` always wins. Query commands discover the nearest project config from
+the current directory; `parse <dir>` starts discovery at its target and
+falls back to the current directory.
+If no configured database is found, database-backed
+commands require an explicit `-db`; existing configs without `database`
+remain valid. CLI and MCP do not coordinate concurrent DETS access; use the
+shared database sequentially.
+
 - `serve` starts the MCP server supervisor
   ([`erlang-mcp-design.md`](erlang-mcp-design.md)). **Implemented.**
 

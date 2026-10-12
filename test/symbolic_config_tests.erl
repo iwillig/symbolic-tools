@@ -34,6 +34,34 @@ read_leaves_an_absolute_path_entry_untouched_test() ->
         ?assertEqual({ok, ["/already/absolute"]}, symbolic_config:read(ConfigPath))
     end).
 
+read_settings_resolves_database_from_project_root_test() ->
+    with_scratch_config(<<"{\"paths\": [\"src\"], \"database\": \".symbolic/facts.dets\"}">>,
+        fun(Root, ConfigPath) ->
+            ?assertEqual({ok, #{paths => [filename:join(Root, "src")],
+                                database => filename:join(Root, ".symbolic/facts.dets")} },
+                symbolic_config:read_settings(ConfigPath))
+        end).
+
+read_settings_allows_missing_database_test() ->
+    with_scratch_config(<<"{\"paths\": [\"src\"]}">>, fun(Root, ConfigPath) ->
+        ?assertEqual({ok, #{paths => [filename:join(Root, "src")], database => undefined}},
+            symbolic_config:read_settings(ConfigPath))
+    end).
+
+default_database_discovers_nearest_project_config_test() ->
+    with_scratch_config(<<"{\"paths\": [\"src\"], \"database\": \".symbolic/facts.dets\"}">>,
+        fun(Root, _ConfigPath) ->
+            ?assertEqual({ok, filename:join(Root, ".symbolic/facts.dets")},
+                symbolic_config:default_database(filename:join(Root, "src")))
+        end).
+
+read_settings_rejects_non_string_database_test() ->
+    with_scratch_config(<<"{\"paths\": [\"src\"], \"database\": 42}">>,
+        fun(_Root, ConfigPath) ->
+            ?assertMatch({error, {invalid_config_database, ConfigPath, _}},
+                symbolic_config:read_settings(ConfigPath))
+        end).
+
 read_missing_file_is_an_error_test() ->
     ?assertMatch({error, {cannot_read_config, "no/such/config_zz.json", enoent}},
         symbolic_config:read("no/such/config_zz.json")).

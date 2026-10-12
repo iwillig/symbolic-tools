@@ -75,6 +75,7 @@ codebase_test_() ->
         fun parse_with_no_path_merges_config_paths/1,
         fun parse_with_no_path_and_no_config_is_error/1,
         fun path_is_a_project_root_uses_its_own_config/1,
+        fun configured_database_is_shared_with_cli_query_and_refreshes_on_reparse/1,
         fun two_projects_stay_independently_cached_via_their_own_roots/1,
         fun path_pointing_inside_a_configured_project_is_scanned_literally/1
     ]}.
@@ -546,6 +547,42 @@ path_is_a_project_root_uses_its_own_config(_Setup) ->
 %% touches the other's entry, same guarantee two Dir-based parses
 %% already had (two_parsed_directories_stay_independently_cached above),
 %% now proven for config-driven parsing too.
+configured_database_is_shared_with_cli_query_and_refreshes_on_reparse(_Setup) ->
+    fun() ->
+        Root = filename:absname(filename:join(["_build", "codebase_shared_db_project"])),
+        _ = file:del_dir_r(Root),
+        ConfigPath = filename:join([Root, ".symbolic", "config.json"]),
+        DbPath = filename:join([Root, ".symbolic", "facts.dets"]),
+        SourcePath = filename:join([Root, "src", "sample.erl"]),
+        ok = filelib:ensure_dir(ConfigPath),
+        ok = filelib:ensure_dir(SourcePath),
+        ok = file:write_file(ConfigPath,
+            <<"{\"paths\": [\"src\"], \"database\": \".symbolic/facts.dets\"}">>),
+        ok = file:write_file(SourcePath, <<"-module(shared_db_sample).\nhello() -> ok.\n">>),
+        try
+            {ok, Meta} = symbolic_codebase:parse(Root),
+            ?assertEqual(DbPath, maps:get(database, Meta)),
+            {solutions, _} = symbolic_query:run_result(DbPath, undefined,
+                "defines(hello, 0, _, _, _)"),
+            ?assertMatch({ok, [_]}, symbolic_codebase:query("defines(hello, 0, _, _, _)")),
+
+            %% A CLI-style database rewrite does not mutate MCP's current
+            %% in-memory snapshot; reparsing refreshes it from the source tree.
+            ok = file:write_file(SourcePath,
+                <<"-module(shared_db_sample).\ngoodbye() -> ok.\n">>),
+            {ok, {_Files, UpdatedFacts}} = symbolic_parse:scan(filename:join(Root, "src")),
+            ok = symbolic_fact_store:write(DbPath, UpdatedFacts),
+            {solutions, _} = symbolic_query:run_result(DbPath, undefined,
+                "defines(goodbye, 0, _, _, _)"),
+            ?assertMatch({ok, [_]}, symbolic_codebase:query("defines(hello, 0, _, _, _)")),
+            {ok, _} = symbolic_codebase:parse(Root),
+            ?assertMatch({ok, [_]}, symbolic_codebase:query("defines(goodbye, 0, _, _, _)")),
+            ?assertMatch({ok, []}, symbolic_codebase:query("defines(hello, 0, _, _, _)"))
+        after
+            _ = file:del_dir_r(Root)
+        end
+    end.
+
 two_projects_stay_independently_cached_via_their_own_roots(_Setup) ->
     fun() ->
         with_scratch_config_codebase(fun(RootA, _ConfigPathA) ->

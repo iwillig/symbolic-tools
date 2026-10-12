@@ -1,9 +1,9 @@
-%%% `symbolic serve` — the MCP server. Exposes the in-memory codebase
-%%% cache (symbolic_codebase) over the Model Context Protocol via `erlmcp`.
+%%% `symbolic serve` — the MCP server. Exposes the codebase cache and
+%%% configured DETS persistence (symbolic_codebase) over MCP via `erlmcp`.
 %%% See docs/erlang-mcp-design.md.
 %%%
 %%% Codebase tools:
-%%%   parse         scan a directory, extract facts, cache them in memory
+%%%   parse         scan a project, persist configured facts, cache in memory
 %%%   query         prove a Prolog goal against the cache, all solutions (capped)
 %%%   overview      report the current state of the cached fact base
 %%%   ask/extract/check/search provide bounded question, claim, and prose tools
@@ -83,7 +83,11 @@ setup_logging() ->
 register_tools() ->
     ok = erlmcp_stdio:add_tool(<<"parse">>,
         <<"Parse a PROJECT and cache its codebase facts in memory, keyed "
-          "by that project's own root. Two different rules for finding "
+          "by that project's own root. If .symbolic/config.json sets "
+          "`database`, parse also writes the same DETS facts used by the "
+          "CLI. MCP queries use this parse-time snapshot; after a CLI "
+          "write, call `parse` again to refresh it. Two different rules "
+          "for finding "
           "one, depending on whether `path` is given: omit `path` - a "
           ".symbolic/config.json is discovered by walking UP from this "
           "server process's own cwd (nothing found there is an error, "
@@ -567,6 +571,10 @@ meta_to_json(Meta) ->
         rules_file => case maps:get(rules_file, Meta, undefined) of
             undefined -> null;
             RulesPath -> jstr(RulesPath)
+        end,
+        database => case maps:get(database, Meta, undefined) of
+            undefined -> null;
+            DbPath -> jstr(DbPath)
         end
     }).
 

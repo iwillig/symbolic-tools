@@ -251,8 +251,9 @@ run(Dir, DbPath) ->
 run_config(ConfigOverride, DbPath) ->
     case resolve_config(ConfigOverride) of
         {ok, ConfigPath} ->
-            case symbolic_config:read(ConfigPath) of
-                {ok, Paths} -> run_paths(Paths, DbPath);
+            case symbolic_config:read_settings(ConfigPath) of
+                {ok, #{paths := Paths, database := ConfigDb}} ->
+                    run_paths(Paths, choose_db(DbPath, ConfigDb));
                 {error, Reason} -> halt_error(Reason)
             end;
         {error, Reason} -> halt_error(Reason)
@@ -277,6 +278,9 @@ resolve_config(undefined) ->
             end;
         {error, Reason} -> {error, {cannot_get_cwd, Reason}}
     end.
+
+choose_db(undefined, ConfigDb) -> ConfigDb;
+choose_db(DbPath, _ConfigDb) -> DbPath.
 
 run_paths(Paths, DbPath) ->
     case scan_paths(Paths) of

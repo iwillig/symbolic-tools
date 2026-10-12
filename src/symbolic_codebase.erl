@@ -1,14 +1,11 @@
 %%% The MCP server's in-memory codebase cache.
 %%%
-%%% A single registered gen_server, but it can hold more than one cached
+%%% A single registered gen_server that can hold more than one cached
 %%% codebase at once — one per PROJECT `parse` was pointed at, keyed by
-%%% that project's own root (see below for what "project" means here).
-%%% Still no on-disk persistence; the CLI's DETS path in
-%%% symbolic_fact_store.erl is separate and untouched. The `parse` tool
-%%% populates/replaces the entry for its own project (every other cached
-%%% project is left exactly as it was); `query`/`overview` take an
-%%% optional path to select which entry to use, defaulting to whichever
-%%% one was most recently parsed successfully when omitted.
+%%% that project's own root. A project's optional config database is
+%%% persisted to DETS on parse; queries use the in-memory snapshot until
+%%% that project is parsed again. `query`/`overview` take an optional path
+%%% to select an entry, defaulting to the most recently parsed project.
 %%%
 %%% Each cache entry is an erlog state (facts asserted in, ready to prove
 %%% against) plus a small Meta summary computed at parse time. Queries are
@@ -228,7 +225,7 @@ handle_call({parse, Dir, RulesOverride}, _From, State) ->
     safely(fun() ->
         StartMs = erlang:monotonic_time(millisecond),
         case own_config(Dir) of
-            undefined -> finish_parse(symbolic_parse:scan(Dir), normalize_dir(Dir), RulesOverride, StartMs, State, #{});
+            undefined -> finish_parse(symbolic_parse:scan(Dir), normalize_dir(Dir), RulesOverride, StartMs, State, undefined, #{});
             ConfigPath -> parse_from_config(ConfigPath, RulesOverride, StartMs, State)
         end
     end, State);
@@ -405,20 +402,20 @@ own_config(Dir) ->
 
 %% parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
 %%  {reply, ..., NewState}.
-%%  A .symbolic/config.json was found — read and validate it, then merge
-%%  every one of its `paths` into a single cache entry keyed by the
-%%  config's own project root (never Dir itself, which may only be a
-%%  subdirectory of it).
+%%  A .symbolic/config.json was found — read and validate it, merge its
+%%  paths into one cache entry, and persist facts to its optional DETS
+%%  database, all keyed by the config's own project root.
 parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
-    case symbolic_config:read(ConfigPath) of
-        {ok, Paths} ->
+    case symbolic_config:read_settings(ConfigPath) of
+        {ok, #{paths := Paths, database := DbPath}} ->
             ProjectRoot = symbolic_config:project_root(ConfigPath),
             finish_parse(symbolic_parse:scan_paths(Paths), ProjectRoot,
-                RulesOverride, StartMs, State, #{config_file => ConfigPath});
+                RulesOverride, StartMs, State, DbPath,
+                #{config_file => ConfigPath});
         {error, Reason} -> {reply, {error, Reason}, State}
     end.
 
-%% finish_parse(ScanResult, CacheKey, RulesOverride, StartMs, State, ExtraMeta)
+%% finish_parse(ScanResult, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta)
 %%  -> {reply, ..., NewState}.
 %%  The shared tail of both `parse` variants above: given a
 %%  scan/1-or-scan_paths/1 result and the (already-absolute) key to use
@@ -428,36 +425,44 @@ parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
 %%  error" guarantee handle_call({parse,...}) documented before this was
 %%  factored out still holds, since both callers still route every error
 %%  branch through the same {reply, {error,_}, State} (State unchanged).
-finish_parse({ok, {Files, Facts}}, CacheKey, RulesOverride, StartMs, State, ExtraMeta) ->
+finish_parse({ok, {Files, Facts}}, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta) ->
     RulesPath = resolve_rules(CacheKey, RulesOverride),
     case build_state(Facts, RulesPath) of
         {ok, Erl} ->
-            ElapsedMs = erlang:monotonic_time(millisecond) - StartMs,
-            Meta = maps:merge(compute_meta(Files, Facts, RulesPath, CacheKey, ElapsedMs), ExtraMeta),
-            Caches = maps:get(caches, State),
-            %% `facts` — the raw fact list — rides alongside the erlog
-            %% state so the ask pipeline can build its own one-shot
-            %% session (it consults the question grammar, which must
-            %% never land in the cached state). Duplicates the facts the
-            %% erlog state already holds; measured size for a repo this
-            %% scale is ~10MB of terms per cached project, traded for
-            %% keeping the cache provably read-only.
-            NewState = State#{
-                caches => Caches#{CacheKey => #{erl => Erl, meta => Meta,
-                                                facts => Facts}},
-                current => CacheKey},
-            {reply, {ok, Meta}, NewState};
+            case persist_database(DbPath, Facts) of
+                ok ->
+                    ElapsedMs = erlang:monotonic_time(millisecond) - StartMs,
+                    DbMeta = case DbPath of undefined -> #{}; _ -> #{database => DbPath} end,
+                    Meta = maps:merge(compute_meta(Files, Facts, RulesPath, CacheKey, ElapsedMs),
+                                      maps:merge(ExtraMeta, DbMeta)),
+                    Caches = maps:get(caches, State),
+                    %% The memory cache is a snapshot of this parse. A later
+                    %% CLI write to the shared DETS file is visible after MCP
+                    %% parses again, as documented in the shared-db contract.
+                    NewState = State#{
+                        caches => Caches#{CacheKey => #{erl => Erl, meta => Meta,
+                                                        facts => Facts, database => DbPath}},
+                        current => CacheKey},
+                    {reply, {ok, Meta}, NewState};
+                {error, Reason} -> {reply, {error, Reason}, State}
+            end;
         {error, Reason} ->
-            %% A bad rules file fails the whole parse rather than caching
-            %% a facts-only session silently missing the library the
-            %% caller asked for — State is untouched (this key's previous
-            %% entry, every other key's entry, and `current` all stay
-            %% exactly as they were), same as a query timeout/crash
-            %% leaves it untouched.
             {reply, {error, {rules_error, RulesPath, Reason}}, State}
     end;
-finish_parse({error, Reason}, _CacheKey, _RulesOverride, _StartMs, State, _ExtraMeta) ->
+finish_parse({error, Reason}, _CacheKey, _RulesOverride, _StartMs, State, _DbPath, _ExtraMeta) ->
     {reply, {error, Reason}, State}.
+
+persist_database(undefined, _Facts) -> ok;
+persist_database(DbPath, Facts) ->
+    try
+        ok = symbolic_fact_store:write(DbPath, Facts),
+        try symbolic_search:write_index_cache(DbPath, Facts)
+        catch _:_ -> ok
+        end,
+        ok
+    catch
+        Class:Reason -> {error, {database_write_failed, DbPath, Class, Reason}}
+    end.
 
 compute_meta(Files, Facts, RulesPath, NormDir, ElapsedMs) ->
     #{

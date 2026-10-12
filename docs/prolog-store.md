@@ -250,6 +250,24 @@ list of facts *before* that one write happens:
 { "paths": ["src", "test", "package.json"] }
 ```
 
+The config may also set an optional `database` path:
+
+```json
+{ "paths": ["src", "test"], "database": ".symbolic/facts.dets" }
+```
+
+`database` is resolved relative to the project root, like each `paths`
+entry. `symbolic_config:read_settings/1` returns both resolved paths and the
+optional database; the existing `read/1` remains a paths-only API. CLI parse
+writes to this database when `-db` is omitted, and database-backed CLI
+commands use it by default. An explicit CLI `-db` overrides the setting. MCP
+parse writes the same DETS database and returns its path in the parse
+summary. MCP query and overview still use the in-memory snapshot built by
+that parse: after another CLI command rewrites the database, call MCP `parse`
+again to refresh the snapshot. Without `database`, prior persistence behavior
+is unchanged. The CLI and MCP do not coordinate concurrent DETS access;
+run parse and query operations sequentially for a shared database file.
+
 - **Discovery** is the identical walk-up algorithm `.symbolic/rules.pl`
   already uses (`symbolic_query:discover_up/2` — the two now share one
   implementation; see `symbolic_query:discover_rules_from_dir/1`'s own

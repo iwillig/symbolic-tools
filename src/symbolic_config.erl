@@ -1,49 +1,46 @@
-%%% `.symbolic/config.json` — a project config file `symbolic parse`
-%%% respects, letting one scan cover MULTIPLE paths (directories and/or
-%%% individual files — e.g. `src/`, `test/`, and a config file like
-%%% `package.json`/`Cargo.toml`) merged into ONE fact set, instead of
-%%% the single directory `symbolic parse <dir>` takes directly. See
-%%% docs/prolog-store.md and docs/cli-erlang.md.
+%%% `.symbolic/config.json` — project paths and optional shared fact database.
 %%%
-%%% Auto-discovered the exact same way as `.symbolic/rules.pl` — see
-%%% symbolic_query:discover_up/2, which this module reuses rather than
-%%% re-implementing the walk-up algorithm a second time.
-%%%
-%%% Shape:
-%%%   { "paths": ["src", "test", "package.json"] }
-%%% Every entry is resolved relative to the config file's OWN directory
-%%% (its `.symbolic/` parent — the project root), not the caller's cwd,
-%%% so `symbolic parse` behaves the same regardless of where it's
-%%% invoked from. JSON (via the `jsx` dependency already used by
-%%% symbolic_term_json.erl) rather than another new format — no new
-%%% dependency, and every other structured-config format in the fact
-%%% schema (TOML/JSON) already gets its own tree-sitter extractor, so
-%%% this project's own tooling can already query its own config file
-%%% the same way it queries anyone else's.
+%%% Paths and database files are resolved relative to the config file's
+%%% project root, not the caller's working directory. Existing configs with
+%%% only `paths` remain valid. See docs/prolog-store.md and docs/cli-erlang.md.
 -module(symbolic_config).
 
--export([discover/1, read/1, project_root/1]).
+-export([discover/1, read/1, read_settings/1, default_database/1, project_root/1]).
 
 -define(CONFIG_DIR, ".symbolic").
 -define(CONFIG_FILE, "config.json").
 
-%% discover(StartDir) -> file:filename() | undefined.
-%%  Same two-starting-points walk-up as .symbolic/rules.pl.
 -spec discover(file:filename()) -> file:filename() | undefined.
 discover(StartDir) ->
     symbolic_query:discover_up(StartDir, [?CONFIG_DIR, ?CONFIG_FILE]).
 
-%% read(ConfigPath) -> {ok, [file:filename()]} | {error, term()}.
-%%  Reads, JSON-decodes, and validates the config, returning every
-%%  listed path resolved to an absolute path. Doesn't check the paths
-%%  actually exist — that's symbolic_parse:scan_paths/1's job, so the
-%%  same {no_such_path, Path}/{unsupported_file, Path} errors apply
-%%  whether a path came from argv or from this file.
+%% Backward-compatible paths-only API.
 -spec read(file:filename()) -> {ok, [file:filename()]} | {error, term()}.
 read(ConfigPath) ->
+    case read_settings(ConfigPath) of
+        {ok, #{paths := Paths}} -> {ok, Paths};
+        Error -> Error
+    end.
+
+%% Read and validate paths and the optional shared database setting.
+-spec read_settings(file:filename()) -> {ok, map()} | {error, term()}.
+read_settings(ConfigPath) ->
     case file:read_file(ConfigPath) of
         {ok, Bin} -> decode(ConfigPath, Bin);
         {error, Reason} -> {error, {cannot_read_config, ConfigPath, Reason}}
+    end.
+
+%% Resolve an optional database setting from the nearest project config.
+%% No config or no database key preserves existing caller behavior.
+-spec default_database(file:filename()) -> {ok, file:filename() | undefined} | {error, term()}.
+default_database(StartDir) ->
+    case discover(StartDir) of
+        undefined -> {ok, undefined};
+        ConfigPath ->
+            case read_settings(ConfigPath) of
+                {ok, #{database := DbPath}} -> {ok, DbPath};
+                Error -> Error
+            end
     end.
 
 decode(ConfigPath, Bin) ->
@@ -53,11 +50,16 @@ decode(ConfigPath, Bin) ->
         _:_ -> {error, {invalid_config_json, ConfigPath}}
     end.
 
-validate(ConfigPath, #{<<"paths">> := Paths}) when is_list(Paths), Paths =/= [] ->
+validate(ConfigPath, #{<<"paths">> := Paths} = Json) when is_list(Paths), Paths =/= [] ->
     case lists:all(fun is_binary/1, Paths) of
         true ->
             Root = project_root(ConfigPath),
-            {ok, [filename:join(Root, binary_to_list(P)) || P <- Paths]};
+            case database_path(ConfigPath, maps:get(<<"database">>, Json, undefined), Root) of
+                {ok, DbPath} ->
+                    {ok, #{paths => [filename:join(Root, binary_to_list(P)) || P <- Paths],
+                           database => DbPath}};
+                Error -> Error
+            end;
         false ->
             {error, {invalid_config_paths, ConfigPath,
                 "every entry in \"paths\" must be a string"}}
@@ -69,10 +71,15 @@ validate(ConfigPath, #{<<"paths">> := _NotAList}) ->
 validate(ConfigPath, _Json) ->
     {error, {missing_config_paths, ConfigPath}}.
 
-%% ConfigPath is <root>/.symbolic/config.json — the root is two levels
-%% up. Exported so a caller with no single Dir of its own (the MCP
-%% server's config-driven parse) has something sensible to use as a
-%% cache key / rules-discovery start dir — see symbolic_codebase.erl.
+database_path(_ConfigPath, undefined, _Root) -> {ok, undefined};
+database_path(ConfigPath, <<>>, _Root) ->
+    {error, {invalid_config_database, ConfigPath, "database must not be empty"}};
+database_path(_ConfigPath, DbPath, Root) when is_binary(DbPath) ->
+    {ok, filename:join(Root, binary_to_list(DbPath))};
+database_path(ConfigPath, _DbPath, _Root) ->
+    {error, {invalid_config_database, ConfigPath, "database must be a string"}}.
+
+%% The project root is two levels above .symbolic/config.json.
 -spec project_root(file:filename()) -> file:filename().
 project_root(ConfigPath) ->
     filename:dirname(filename:dirname(filename:absname(ConfigPath))).

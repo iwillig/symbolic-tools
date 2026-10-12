@@ -51,11 +51,13 @@ claude --system-prompt-file SYSTEM.md
 
 ### Configuration
 
-Create `.symbolic/config.json` to define the project paths.
+Create `.symbolic/config.json` to define the project paths and, optionally,
+the shared fact database. The database path is relative to the project root.
 
 ```json
 {
-  "paths": ["src", "test", "docs"]
+  "paths": ["src", "test", "docs"],
+  "database": ".symbolic/facts.dets"
 }
 ```
 
@@ -63,9 +65,11 @@ Symbolic scans Erlang, Rust, TypeScript, Bash, Markdown, TOML, and JSON.
 
 ## Basic usage
 
-The CLI can persist facts in a `.dets` file; the MCP server keeps parsed
-facts in memory. The examples below show CLI commands that have MCP
-equivalents; the two interfaces do not have identical command sets.
+When `database` is set, CLI and MCP parse operations write facts to the
+same `.dets` file. CLI database commands use it by default unless `-db`
+overrides it. MCP queries use the in-memory snapshot from the most recent
+`parse`; parse again after a CLI update to refresh that snapshot. The two
+interfaces do not have identical command sets.
 
 ### Parse a project
 

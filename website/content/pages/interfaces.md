@@ -3,9 +3,12 @@ Slug: interfaces
 Save_as: interfaces.html
 Subtitle: Compare codebase analysis from the CLI and an MCP client.
 
-The CLI can persist facts in a `.dets` file; the MCP server keeps parsed facts
-in memory. They share several capabilities, but their command and tool sets
-are not identical.
+When `.symbolic/config.json` sets `database`, CLI and MCP parse operations
+write facts to the same `.dets` file. CLI query commands use that configured
+database by default; an explicit `-db` overrides it. MCP queries use the
+in-memory snapshot from the last successful `parse`, so parse again after a
+CLI update to refresh MCP. They share several capabilities, but their command
+and tool sets are not identical.
 
 | Capability | CLI | MCP |
 |---|---|---|

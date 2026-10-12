@@ -346,7 +346,12 @@ individual files (`package.json`) alike — and merges them into one fact
 set, found by the same walking-up discovery `.symbolic/rules.pl` already
 uses (`-config <file>` overrides it, the same way `-rules` overrides
 rules discovery). This project's own [`.symbolic/config.json`](.symbolic/config.json)
-is exactly `{"paths": ["src", "test"]}` — see `docs/prolog-store.md` §8.
+currently lists `paths`. Projects may also set an optional `database` path,
+for example `"database": ".symbolic/facts.dets"`. The path is relative to
+the project root. CLI parse writes there by default, and database-backed
+CLI commands use it unless `-db` is given. MCP parse also writes to that file;
+MCP queries keep an in-memory snapshot until the next `parse`. See
+`docs/prolog-store.md` §8 for the sharing and refresh behavior.
 
 These commands run via a `rebar3 release` (see Install) rather than
 `rebar3 escriptize` — `parse`, `analyze`, and `serve` need real

@@ -47,8 +47,8 @@ query_cmd() ->
     #{
         help => "Load a fact database and prove a goal against it",
         arguments => [
-            #{name => db, long => "db", required => true,
-              help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
+            #{name => db, long => "db", required => false,
+              help => "Path to a fact database (.dets); defaults to the project's configured database"},
             #{name => rules, long => "rules", required => false,
               help => "Hand-written Prolog rule file (.pl) to consult alongside the facts. "
                       "Defaults to the nearest .symbolic/rules.pl, searched upwards from the "
@@ -58,7 +58,8 @@ query_cmd() ->
             #{name => goal, help => "Goal to prove, e.g. \"foo(X)\""}
         ],
         handler => fun(Args) ->
-            #{db := Db, goal := Goal} = Args,
+            Db = resolve_database(Args, undefined, true),
+            #{goal := Goal} = Args,
             symbolic_query:run(Db, maps:get(rules, Args, undefined),
                 maps:get(no_rules, Args, false), Goal)
         end
@@ -79,10 +80,14 @@ parse_cmd() ->
                       ".symbolic/config.json, searched upwards from the current directory"}
         ],
         handler => fun(Args) ->
-            DbPath = maps:get(db, Args, undefined),
-            case maps:get(dir, Args, undefined) of
+            Dir = maps:get(dir, Args, undefined),
+            DbPath = case Dir of
+                undefined -> maps:get(db, Args, undefined);
+                _ -> resolve_database(Args, Dir, false)
+            end,
+            case Dir of
                 undefined -> symbolic_parse:run_config(maps:get(config, Args, undefined), DbPath);
-                Dir -> symbolic_parse:run(Dir, DbPath)
+                _ -> symbolic_parse:run(Dir, DbPath)
             end
         end
     }.
@@ -117,14 +122,15 @@ search_cmd() ->
         help => "Full-text search over the prose facts (comments, paragraphs, headings, "
                 "block quotes) in a fact database (see docs/full-text-search.md)",
         arguments => [
-            #{name => db, long => "db", required => true,
-              help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
+            #{name => db, long => "db", required => false,
+              help => "Path to a fact database (.dets); defaults to the project's configured database"},
             #{name => limit, long => "limit", type => integer, default => 10,
               help => "Maximum number of results (default 10, must be >= 1)"},
             #{name => query, help => "Search query — plain words, e.g. \"inverted index\""}
         ],
         handler => fun(Args) ->
-            #{db := Db, query := Query} = Args,
+            Db = resolve_database(Args, undefined, true),
+            #{query := Query} = Args,
             symbolic_search:run(Db, Query, maps:get(limit, Args, 10))
         end
     }.
@@ -132,9 +138,9 @@ search_cmd() ->
 overview_cmd() ->
     #{
         help => "Report fact counts in a persisted fact database",
-        arguments => [#{name => db, long => "db", required => true,
-                       help => "Path to a fact database (.dets), written by `symbolic parse --db`"}],
-        handler => fun(#{db := Db}) -> symbolic_overview:run(Db) end
+        arguments => [#{name => db, long => "db", required => false,
+                       help => "Path to a fact database (.dets); defaults to the project's configured database"}],
+        handler => fun(Args) -> symbolic_overview:run(resolve_database(Args, undefined, true)) end
     }.
 
 ask_cmd() ->
@@ -142,12 +148,13 @@ ask_cmd() ->
         help => "Answer a bounded English question against a fact database "
                 "(see docs/research-questions-to-prolog.md)",
         arguments => [
-            #{name => db, long => "db", required => true,
-              help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
+            #{name => db, long => "db", required => false,
+              help => "Path to a fact database (.dets); defaults to the project's configured database"},
             #{name => question, help => "Question, e.g. \"how many functions call query_binary/2?\""}
         ],
         handler => fun(Args) ->
-            #{db := Db, question := Question} = Args,
+            Db = resolve_database(Args, undefined, true),
+            #{question := Question} = Args,
             symbolic_ask:run(Db, Question)
         end
     }.
@@ -157,8 +164,8 @@ check_cmd() ->
         help => "Extract a claim from a sentence and check it against a fact database "
                 "in one step (see docs/reviewing-llm-output.md)",
         arguments => [
-            #{name => db, long => "db", required => true,
-              help => "Path to a fact database (.dets), written by `symbolic parse --db`"},
+            #{name => db, long => "db", required => false,
+              help => "Path to a fact database (.dets); defaults to the project's configured database"},
             #{name => rules, long => "rules", required => false,
               help => "Hand-written Prolog rule file (.pl) to consult alongside the facts. "
                       "Defaults to the nearest .symbolic/rules.pl, searched upwards from the "
@@ -174,8 +181,36 @@ check_cmd() ->
             #{name => sentence, help => "Sentence to extract and check, e.g. \"foo/2 calls bar/1\""}
         ],
         handler => fun(Args) ->
-            #{db := Db, sentence := Sentence} = Args,
+            Db = resolve_database(Args, undefined, true),
+            #{sentence := Sentence} = Args,
             symbolic_check:run(Db, maps:get(rules, Args, undefined),
                 maps:get(no_rules, Args, false), Sentence, maps:get(model, Args, undefined))
         end
     }.
+
+resolve_database(Args, StartDir, Required) ->
+    case maps:get(db, Args, undefined) of
+        DbPath when is_list(DbPath), DbPath =/= [] -> DbPath;
+        undefined ->
+            case database_start_dir(StartDir) of
+                {ok, Dir} ->
+                    case symbolic_config:default_database(Dir) of
+                        {ok, DbPath} when is_list(DbPath) -> DbPath;
+                        {ok, undefined} when Required ->
+                            cli_error("database required: pass -db or set the database key in .symbolic/config.json");
+                        {ok, undefined} -> undefined;
+                        {error, Reason} ->
+                            cli_error(io_lib:format("cannot read project database setting: ~p", [Reason]))
+                    end;
+                {error, Reason} ->
+                    cli_error(io_lib:format("cannot determine project directory: ~p", [Reason]))
+            end;
+        _InvalidDb -> cli_error("database path must be a non-empty string")
+    end.
+
+database_start_dir(undefined) -> file:get_cwd();
+database_start_dir(Dir) -> {ok, Dir}.
+
+cli_error(Message) ->
+    io:put_chars(standard_error, [Message, "~n"]),
+    halt(2).
