@@ -147,22 +147,14 @@ query_cmd() ->
   (facts alone). Note `run_result/3` — the halt-free core the tests and any
   library caller use — keeps the stricter contract: there, `undefined`
   means "consult nothing", never "go looking". **Implemented.**
-- `parse` — walk a folder, run the tree-sitter extraction
-- `search` — full-text search over the prose facts in a fact database
-  (see [`full-text-search.md`](full-text-search.md))
-- `ask` — answer a bounded English question against a fact database
-  (see [`research-questions-to-prolog.md`](research-questions-to-prolog.md))
-  ([`tree-sitter-erlang.md`](tree-sitter-erlang.md)), print facts as JSON,
-  and optionally write them into a fact database via `-db`.
-  **Implemented.** `dir` is declared `nargs => 'maybe', required =>
-  false` — omitting it entirely switches to a second mode: every path
-  listed in `.symbolic/config.json`'s `paths` array (`src`, `test`, a
-  `package.json`, ...) is scanned and merged into ONE fact set instead
-  of one directory's. That file is found the same walking-up way
-  `.symbolic/rules.pl` is (`-config <file>` overrides discovery, the
-  same way `-rules` overrides rules discovery) — see
-  [`prolog-store.md`](prolog-store.md) §8 for the full design,
-  `symbolic_config.erl` and `symbolic_parse:scan_paths/1`.
+- `parse` — read the nearest `.symbolic/config.json`, scan only its
+  configured `paths`, print facts as JSON, and write them to its optional
+  configured database. **Implemented.** The command accepts no arguments:
+  no positional directory, `-config`, or `-db`. It discovers the project
+  config by walking up from the current directory; if none exists, it
+  returns an error instead of scanning the current directory. See
+  [`prolog-store.md`](prolog-store.md) §8 and
+  `symbolic_parse:run_config/2`.
 
 An optional `database` string in `.symbolic/config.json` sets the project's
 shared DETS file, resolved relative to the project root. For example:
@@ -171,15 +163,14 @@ shared DETS file, resolved relative to the project root. For example:
 {"paths": ["src", "test"], "database": ".symbolic/facts.dets"}
 ```
 
-`parse` writes to this file when `-db` is omitted. `query`, `ask`, `overview`,
-`search`, and `check` use it when their `-db` option is omitted. An explicit
-`-db` always wins. Query commands discover the nearest project config from
-the current directory; `parse <dir>` starts discovery at its target and
-falls back to the current directory.
-If no configured database is found, database-backed
-commands require an explicit `-db`; existing configs without `database`
-remain valid. CLI and MCP do not coordinate concurrent DETS access; use the
-shared database sequentially.
+`parse` always uses the discovered project config and writes to its
+`database` when one is set; it has no database override. `query`, `ask`,
+`overview`, `search`, and `check` use the configured database by default,
+and an explicit `-db` still overrides it for those commands. Parse and query
+commands discover the nearest project config from the current directory. If
+no configured database is found, database-backed commands require an explicit
+`-db`; existing configs without `database` remain valid. CLI and MCP do not
+coordinate concurrent DETS access; use the shared database sequentially.
 
 - `serve` starts the MCP server supervisor
   ([`erlang-mcp-design.md`](erlang-mcp-design.md)). **Implemented.**

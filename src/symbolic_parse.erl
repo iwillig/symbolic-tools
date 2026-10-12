@@ -1,7 +1,6 @@
-%%% `symbolic parse <dir> [--db <path>]` — walk a folder, run tree-sitter
-%%% extraction, optionally persist the fact set into a DETS database for
-%%% `symbolic query --db`, and print a JSON summary. See
-%%% docs/tree-sitter-erlang.md, docs/prolog-store.md.
+%%% `symbolic parse` — discover the project config, scan only its listed
+%%% paths, persist facts to its configured database when set, and print a
+%%% JSON summary. See docs/tree-sitter-erlang.md, docs/prolog-store.md.
 -module(symbolic_parse).
 -include_lib("kernel/include/logger.hrl").
 -export([run/1, run/2, run_config/2, scan/1, scan_paths/1]).
@@ -12,9 +11,9 @@
 
 %% Scan a directory and extract facts with NO side effects — no printing,
 %% no DETS write, no halt. Returns the scanned file list alongside the
-%% (usorted) fact set. The MCP server's `parse` tool (symbolic_codebase) is
-%% the main consumer; the CLI's run/2 below reuses it too. This is the
-%% single source of truth for "which files does a scan look at".
+%% (usorted) fact set. The MCP server's `parse` tool (symbolic_codebase) and
+%% the lower-level run/2 API reuse it. This is the single source of truth for
+%% "which files does a scan look at".
 -spec scan(file:name()) ->
     {ok, {Files :: [file:name()], Facts :: [tuple()]}} | {error, term()}.
 scan(Dir) ->
@@ -307,9 +306,8 @@ error_message({no_such_config, ConfigPath}) ->
     io_lib:format("parse: no such config file: ~s~n", [ConfigPath]);
 error_message({no_config_found, StartDir}) ->
     io_lib:format(
-        "parse: no directory given and no .symbolic/config.json found "
-        "walking up from ~s (or the current directory) - pass a "
-        "directory, or -config <file>, or add .symbolic/config.json~n",
+        "parse: no .symbolic/config.json found walking up from ~s - "
+        "add project configuration listing the paths to scan~n",
         [StartDir]);
 error_message({cannot_get_cwd, Reason}) ->
     io_lib:format("parse: could not get current directory: ~p~n", [Reason]);

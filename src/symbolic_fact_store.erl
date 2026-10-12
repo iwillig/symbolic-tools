@@ -1,5 +1,5 @@
 %%% A DETS-backed store for extracted Prolog facts — the persisted
-%%% "database" `symbolic parse --db` writes and `symbolic query --db`
+%%% "database" `symbolic parse` writes to the configured store and `symbolic query --db`
 %%% reads back, entirely in Erlang-term space. No Prolog text is ever
 %%% written or parsed on this path, unlike the old `.pl`-file round trip
 %%% (see docs/prolog-store.md, which recommended exactly this: a named

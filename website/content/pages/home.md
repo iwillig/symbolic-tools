@@ -66,15 +66,17 @@ Symbolic scans Erlang, Rust, TypeScript, Bash, Markdown, TOML, and JSON.
 ## Basic usage
 
 When `database` is set, CLI and MCP parse operations write facts to the
-same `.dets` file. CLI database commands use it by default unless `-db`
-overrides it. MCP queries use the in-memory snapshot from the most recent
-`parse`; parse again after a CLI update to refresh that snapshot. The two
-interfaces do not have identical command sets.
+same `.dets` file. Both `parse` interfaces take no arguments and use the
+project's configured paths. CLI database commands use the configured database
+by default unless `-db` overrides it. MCP queries use the in-memory snapshot
+from the most recent `parse`; parse again after a CLI update to refresh that
+snapshot. Start one MCP server from each project directory. The two interfaces
+do not have identical command sets.
 
 ### Parse a project
 
 ```sh
-symbolic parse .
+symbolic parse
 ```
 
 The CLI and MCP `parse` return a summary.

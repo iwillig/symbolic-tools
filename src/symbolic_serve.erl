@@ -3,7 +3,7 @@
 %%% See docs/erlang-mcp-design.md.
 %%%
 %%% Codebase tools:
-%%%   parse         scan a project, persist configured facts, cache in memory
+%%%   parse         scan configured project paths, persist facts, cache in memory
 %%%   query         prove a Prolog goal against the cache, all solutions (capped)
 %%%   overview      report the current state of the cached fact base
 %%%   ask/extract/check/search provide bounded question, claim, and prose tools
@@ -27,17 +27,12 @@
 %%% corrupt the stream from the client's point of view.
 -module(symbolic_serve).
 -include_lib("kernel/include/logger.hrl").
--export([run/0]).
-%% Exported for symbolic_serve_tests.erl only — exercising these three
-%% directly also exercises every rendering/error helper below them
-%% (json/1, query_result/3, solution_to_map/1, meta_to_json/1,
-%% parse_error_str/1, error_str/1, caught_str/3, limit_of/1, jstr/1,
-%% to_list/1), so nothing else needs a separate export. run/0,
-%% setup_logging/0, register_tools/0 stay untested by EUnit — they touch
-%% global logger/erlmcp state (removing the default logger handler,
-%% starting the erlmcp application) that a unit test shouldn't mutate;
-%% verified instead by the manual stdio smoke tests (see
-%% docs/erlang-mcp-design.md).
+-export([run/0, register_tools/0]).
+%% Handler functions are exported for symbolic_serve_tests.erl. The
+%% registration function is also exported so tests can verify the MCP tool
+%% schemas with a mocked erlmcp_stdio boundary. run/0 and setup_logging/0
+%% remain manual-smoke-test seams because they start applications and mutate
+%% global logger state (docs/erlang-mcp-design.md).
 -export([handle_parse/1, handle_query/1, handle_ask/1, handle_overview/1,
     handle_extract/1, handle_check/1, handle_search/1, handle_analyze_text/1]).
 
@@ -82,69 +77,25 @@ setup_logging() ->
 
 register_tools() ->
     ok = erlmcp_stdio:add_tool(<<"parse">>,
-        <<"Parse a PROJECT and cache its codebase facts in memory, keyed "
-          "by that project's own root. If .symbolic/config.json sets "
-          "`database`, parse also writes the same DETS facts used by the "
-          "CLI. MCP queries use this parse-time snapshot; after a CLI "
-          "write, call `parse` again to refresh it. Two different rules "
-          "for finding "
-          "one, depending on whether `path` is given: omit `path` - a "
-          ".symbolic/config.json is discovered by walking UP from this "
-          "server process's own cwd (nothing found there is an error, "
-          "since there's then nothing to scan). Give `path` - it's used "
-          "as a project ONLY if `path` ITSELF directly has a "
-          ".symbolic/config.json (no walking up its ancestors - an "
-          "explicit `path` is a commitment, not a hint, so a typo'd or "
-          "unrelated directory never gets silently reinterpreted as some "
-          "enclosing project); otherwise `path` is scanned directly as "
-          "one plain directory (the original, config-free behavior). "
-          "Either way, once a config IS used, every path in its `paths` "
-          "list (e.g. src/, test/, and a config file like package.json) "
-          "is scanned and merged into ONE cache entry, keyed by that "
-          "config's project root. Because the `path`-given rule runs "
-          "fresh per call rather than being pinned to this server's cwd, "
-          "one running server naturally caches as many different "
-          "projects as it's asked to - just pass each project's own root "
-          "directory as `path`. A previously cached project is untouched "
-          "by parsing a different one - both stay queryable, by passing "
-          "`path` to `query`/`overview` (the project root reported back "
-          "in the result's `path`, which may differ from what you passed "
-          "in if `path` was omitted). Re-parsing the SAME project always "
-          "rescans it and replaces just that entry. `query`/`overview` "
-          "with no `path` use whichever project was most recently "
-          "parsed. Also auto-consults that project's "
-          "`.symbolic/rules.pl` derived-predicate library, if one is "
-          "found by walking up from wherever the scan actually happened "
-          "(pass `rules` to use a specific file instead). Returns a "
-          "summary of what was loaded (files, languages, fact counts, "
-          "`config_file` when a config drove the scan, and which rules "
-          "file - if any - was consulted, as `rules_file`); check "
-          "`rules_file` before relying on a derived predicate. A bad "
-          "rules file fails the whole call and leaves any previously "
-          "cached project untouched.">>,
+        <<"Parse the paths in the project .symbolic/config.json found by "
+          "walking up from this server's working directory. The parse tool "
+          "accepts no arguments; set paths, database, and rules in project "
+          "configuration instead. A configured database is shared with the "
+          "CLI. MCP queries use this parse-time snapshot; after a CLI write, "
+          "call parse again to refresh it. Run one MCP server per project. "
+          "Returns a summary of the parsed project, including its root, "
+          "file and fact counts, configured database, and discovered rules "
+          "file. A failed parse leaves any previous cache unchanged.">>,
         fun handle_parse/1,
         #{<<"type">> => <<"object">>,
-          <<"properties">> => #{
-              <<"path">> => #{<<"type">> => <<"string">>,
-                             <<"description">> =>
-                                 <<"A project's root directory (must have "
-                                   ".symbolic/config.json directly inside "
-                                   "it to be treated as a project - no "
-                                   "walking up its ancestors), or any plain "
-                                   "directory to scan literally. Omit to "
-                                   "discover a project by walking up from "
-                                   "this server's own cwd instead">>},
-              <<"rules">> => #{<<"type">> => <<"string">>,
-                             <<"description">> =>
-                                 <<"Prolog rules file to consult instead of "
-                                   "auto-discovering .symbolic/rules.pl">>}},
+          <<"properties">> => #{},
+          <<"additionalProperties">> => false,
           <<"required">> => []}),
     ok = erlmcp_stdio:add_tool(<<"query">>,
-        <<"Prove a Prolog goal against a cached codebase and return all "
-          "solutions (capped). More than one directory can be cached at "
-          "once (see `parse`); pass `path` to pick which one, or omit it "
-          "to use whichever was most recently parsed. Raw facts, from "
-          "`overview`: "
+        <<"Prove a Prolog goal against the cached project and return all "
+          "solutions (capped). `parse` loads the project configured for "
+          "this server process. Omit `path` to use that cache entry. Raw "
+          "facts, from `overview`: "
           "defines(Function, Arity, Params, File, Line), "
           "export(Function, Arity, File, Line) - an Erlang -export list "
           "element (Erlang only; one fact per entry, keyed Fun+Arity like "
@@ -391,20 +342,10 @@ handle_search(Params) ->
 optional_string(Params, Key) ->
     case maps:find(Key, Params) of {ok, Value} -> to_list(Value); error -> undefined end.
 
-handle_parse(Params) ->    try
-        %% PathStr is where project discovery STARTS, not necessarily
-        %% what gets scanned — see symbolic_codebase:parse/2's own doc
-        %% comment. `undefined` (no `path` given) means "start from this
-        %% server's own cwd instead".
-        PathStr = optional_path(Params),
-        RulesOverride = case maps:find(<<"rules">>, Params) of
-            {ok, R} -> to_list(R);
-            error -> undefined
-        end,
-        %% ~p (not ~s): PathStr may now be `undefined` — same reasoning as
-        %% handle_query/1's identical Path logging below.
-        ?LOG_INFO("parse: path=~p rules=~p", [PathStr, RulesOverride]),
-        case symbolic_codebase:parse(PathStr, RulesOverride) of
+handle_parse(Params) when is_map(Params), map_size(Params) =:= 0 ->
+    try
+        ?LOG_INFO("parse: using project configuration from server cwd"),
+        case symbolic_codebase:parse(undefined) of
             {ok, Meta} ->
                 ?LOG_INFO("parse: ok path=~s files=~p total_facts=~p elapsed_ms=~p",
                           [maps:get(path, Meta), maps:get(files, Meta),
@@ -418,7 +359,9 @@ handle_parse(Params) ->    try
         Class:Crash:ST ->
             ?LOG_ERROR("parse: crashed ~p:~p~n~p", [Class, Crash, ST]),
             json(#{error => caught_str(Class, Crash, ST)})
-    end.
+    end;
+handle_parse(_Params) ->
+    json(#{error => <<"parse accepts no arguments; use project configuration">>}).
 
 %% The `query` MCP tool: prove a goal against a parsed directory's
 %% fact base. Params: `goal` (string, required), `path` (optional —
@@ -606,11 +549,9 @@ parse_error_str({rules_error, RulesPath, Reason}) ->
                        <<" - parse failed, any previously cached codebase "
                          "is unchanged">>]);
 parse_error_str({no_config_found, Cwd}) ->
-    iolist_to_binary([<<"no `path` given and no .symbolic/config.json "
-                         "found walking up from ">>, jstr(Cwd),
-                       <<" (this server's own cwd) - pass `path`, or add "
-                         ".symbolic/config.json listing the paths to "
-                         "scan">>]);
+    iolist_to_binary([<<"no .symbolic/config.json found walking up from ">>,
+                       jstr(Cwd), <<" (this server's working directory); "
+                         "add project configuration listing the paths to scan">>]);
 parse_error_str({parse_crashed, {Class, Reason}}) ->
     iolist_to_binary([<<"parse crashed (">>, jstr(io_lib:format("~p:~p", [Class, Reason])),
                        <<") - any previously cached codebase is unchanged; "

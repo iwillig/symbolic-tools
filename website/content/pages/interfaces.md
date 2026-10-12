@@ -3,12 +3,13 @@ Slug: interfaces
 Save_as: interfaces.html
 Subtitle: Compare codebase analysis from the CLI and an MCP client.
 
-When `.symbolic/config.json` sets `database`, CLI and MCP parse operations
-write facts to the same `.dets` file. CLI query commands use that configured
-database by default; an explicit `-db` overrides it. MCP queries use the
-in-memory snapshot from the last successful `parse`, so parse again after a
-CLI update to refresh MCP. They share several capabilities, but their command
-and tool sets are not identical.
+CLI and MCP `parse` take no arguments. They scan the paths in the project
+`.symbolic/config.json`; when it sets `database`, both write to the same
+`.dets` file. CLI query commands use that configured database by default; an
+explicit `-db` overrides it. MCP queries use the in-memory snapshot from the
+last successful `parse`, so parse again after a CLI update to refresh MCP.
+Start one MCP server from each project directory. The interfaces share
+capabilities, but their command and tool sets are not identical.
 
 | Capability | CLI | MCP |
 |---|---|---|
@@ -30,10 +31,10 @@ not an MCP tool.
 ## Parse
 
 ```sh
-symbolic parse .
+symbolic parse
 ```
 
-MCP: call `parse` with `path: "."`.
+MCP: call `parse` with no arguments. Start the server from the project directory.
 
 ## Query
 

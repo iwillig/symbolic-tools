@@ -169,7 +169,7 @@ function capitalize(word: string): string {
 ```
 
 ```sh
-$ symbolic parse .
+$ symbolic parse
 
 $ symbolic query 'calls(X, _, local(capitalize, _), _, _)'
 X = "formatName"                    # who calls capitalize directly
@@ -266,8 +266,9 @@ never sees a *different* file's export list.
 
 ## Supported languages
 
-`symbolic parse` walks a directory and picks an extractor per file
-extension. What each one produces:
+`symbolic parse` scans the paths listed in the project's
+`.symbolic/config.json` and picks an extractor for each file extension.
+What each one produces:
 
 - **TypeScript, Erlang, and Bash** — real code, real definitions.
   `defines`, `calls` (TypeScript distinguishes plain calls from method
@@ -313,10 +314,10 @@ vendored-fork Makefiles).
 
 ## Tools
 
-- **CLI** — `symbolic parse` walks a folder, prints facts as JSON, and
-  writes facts to the project's configured database when one is set. Use
-  `-db` to override that path. `symbolic analyze` tokenizes and segments
-  English using nlprule (see
+- **CLI** — `symbolic parse` scans the configured project paths, prints
+  facts as JSON, and writes to the configured database when one is set.
+  It takes no arguments. `symbolic analyze` tokenizes and segments English
+  using nlprule (see
   [`docs/nlprule-analysis.md`](docs/nlprule-analysis.md)); `symbolic query`
   loads that database and runs a query against it, consulting hand-written
   Prolog rules alongside the facts: `-rules <file>` for a one-off, or the
@@ -333,25 +334,23 @@ vendored-fork Makefiles).
 
 ```sh
 symbolic                                              # prints usage
-symbolic parse ./src                   # extract facts, print JSON, write a fact database
-symbolic parse                         # no dir: merge every path in .symbolic/config.json instead
+symbolic parse                                       # parse the project's configured paths
 symbolic query 'depends_on(X, Y)'      # ask a question about the codebase
 symbolic query 'top_fan_in(5, Ranked)' # derived rules, no -rules flag needed
 symbolic analyze 'The quick fox jumps.'              # English sentence/token analysis
 symbolic serve                                        # start the MCP server (stdio transport)
 ```
 
-`symbolic parse` with no directory scans every path listed in
-`.symbolic/config.json`'s `paths` array — directories (`src`, `test`) and
-individual files (`package.json`) alike — and merges them into one fact
-set, found by the same walking-up discovery `.symbolic/rules.pl` already
-uses (`-config <file>` overrides it, the same way `-rules` overrides
-rules discovery). This project's own [`.symbolic/config.json`](.symbolic/config.json)
-currently lists `paths`. Projects may also set an optional `database` path,
-for example `"database": ".symbolic/facts.dets"`. The path is relative to
-the project root. CLI parse writes there by default, and database-backed
-CLI commands use it unless `-db` is given. MCP parse also writes to that file;
-MCP queries keep an in-memory snapshot until the next `parse`. See
+`symbolic parse` discovers the nearest `.symbolic/config.json` by walking
+up from the current directory. It scans every configured path — directories
+and individual files — and does not accept target, config, or database
+arguments. If no config is found, it returns an error instead of scanning
+the current directory. This project's [`.symbolic/config.json`](.symbolic/config.json)
+sets `paths` and a `database` path relative to the project root. Parse writes
+to that database. Database-backed CLI commands use it by default; those
+commands may still accept `-db` overrides. MCP parse uses the server's
+working-directory project config, so run one MCP server per project. MCP
+queries keep an in-memory snapshot until the next `parse`. See
 `docs/prolog-store.md` §8 for the sharing and refresh behavior.
 
 These commands run via a `rebar3 release` (see Install) rather than
@@ -391,7 +390,7 @@ function capitalize(word: string): string {
 ```
 
 ```sh
-$ symbolic parse .
+$ symbolic parse
 ["comment","greeter.ts",1,"Formats a full name from its parts."]
 ["comment","greeter.ts",12,"Capitalizes the first letter of a word."]
 ["comment","greeter.ts",17,"TODO: handle names with a middle name too"]
@@ -540,7 +539,7 @@ No config needed yet.
 ````
 
 ```sh
-$ symbolic parse .
+$ symbolic parse
 ["code_block","notes.md","sh",8]
 ["paragraph","notes.md","A short intro paragraph that wraps onto a second line.",3]
 ["paragraph","notes.md","No config needed yet.",15]
@@ -613,7 +612,7 @@ path = "src/main.rs"
 ```
 
 ```sh
-$ symbolic parse .
+$ symbolic parse
 ["config_section","Cargo.toml","bin",8]
 ["config_section","Cargo.toml","dependencies",5]
 ["config_section","Cargo.toml","package",1]
@@ -633,7 +632,7 @@ Both files produce the *same* two predicates — `config_value`/
 format it's asking about:
 
 ```sh
-$ symbolic parse .
+$ symbolic parse
 
 $ symbolic query 'config_value(File, name, Value, _)'
 File = "package.json"
@@ -669,7 +668,7 @@ build() {
 ```
 
 ```sh
-$ symbolic parse .
+$ symbolic parse
 ["comment","deploy.sh",1,"Deploys the app to the given environment."]
 ["comment","deploy.sh",7,"Builds the release artifact."]
 ["defines","build",undefined,undefined,"deploy.sh",8]
@@ -739,7 +738,7 @@ function shout(word: string): string {
 ````
 
 ```sh
-$ symbolic parse .
+$ symbolic parse
 ["code_block","guide.md","ts",5]
 ["defines","capitalize",1,"(word: string)","greeter.ts",5]
 ["defines","formatName",2,"(first: string, last: string)","greeter.ts",1]

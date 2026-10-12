@@ -29,10 +29,9 @@ query_cmd_allows_configured_db_and_requires_goal_test() ->
     %% all — argparse treats every positional as required by default.
     ?assertEqual(false, maps:is_key(required, Goal)).
 
-parse_cmd_db_is_optional_test() ->
-    #{commands := #{"parse" := #{arguments := Args}}} = symbolic_cli:cli(),
-    #{db := Db} = args_by_name(Args),
-    ?assertEqual(false, maps:get(required, Db)).
+parse_cmd_accepts_no_arguments_test() ->
+    #{commands := #{"parse" := Parse}} = symbolic_cli:cli(),
+    ?assertNot(maps:is_key(arguments, Parse)).
 
 query_handler_forwards_db_rules_goal_test() ->
     meck:new(symbolic_query),
@@ -76,20 +75,13 @@ overview_handler_forwards_db_test() ->
     ?assert(meck:called(symbolic_overview, run, ["facts.dets"])),
     meck:unload(symbolic_overview).
 
-parse_handler_forwards_dir_and_db_test() ->
+parse_handler_uses_only_discovered_project_config_test() ->
     meck:new(symbolic_parse),
-    meck:expect(symbolic_parse, run, fun(_Dir, _Db) -> ok end),
+    meck:expect(symbolic_parse, run_config,
+        fun(undefined, undefined) -> ok end),
     #{commands := #{"parse" := #{handler := Handler}}} = symbolic_cli:cli(),
-    Handler(#{dir => "src", db => "facts.dets"}),
-    ?assert(meck:called(symbolic_parse, run, ["src", "facts.dets"])),
-    meck:unload(symbolic_parse).
-
-parse_handler_defaults_missing_db_test() ->
-    meck:new(symbolic_parse),
-    meck:expect(symbolic_parse, run, fun(_Dir, _Db) -> ok end),
-    #{commands := #{"parse" := #{handler := Handler}}} = symbolic_cli:cli(),
-    Handler(#{dir => "src"}),
-    ?assert(meck:called(symbolic_parse, run, ["src", undefined])),
+    Handler(#{}),
+    ?assert(meck:called(symbolic_parse, run_config, [undefined, undefined])),
     meck:unload(symbolic_parse).
 
 serve_handler_calls_run_test() ->

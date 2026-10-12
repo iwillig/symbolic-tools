@@ -36,8 +36,10 @@
 
 ## 1. The crash, root-caused
 
-`symbolic parse docs/` (and the MCP `parse` tool on the same path) segfaults the
-BEAM. Bisected to a minimal repro with the released CLI (`exit=139` on each):
+When a project's `.symbolic/config.json` includes `docs/` in `paths`,
+`symbolic parse` and the MCP `parse` tool segfault the BEAM. Both interfaces
+now read those paths from project configuration. Bisected to a minimal repro
+with the released CLI (`exit=139` on each):
 
 ```markdown
 ---

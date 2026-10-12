@@ -39,7 +39,7 @@ consult_string(Pid, ProgramText) ->
 %% Assert a pre-built list of fact tuples directly into the session's
 %% database — no text parsing, unlike consult/2 or consult_string/2 (see
 %% symbolic_fact_store.erl, which is where such a list normally comes
-%% from: a DETS-backed fact database written by `symbolic parse --db`).
+%% from: a DETS-backed fact database written to the configured store by `symbolic parse`).
 %% Uses `asserta`, not `assertz`: order is irrelevant for pure facts (it
 %% only affects backtracking order, never correctness), and
 %% erlog_db_dict's assertz_clause/4 appends via `Cs ++ [_]` — O(N) per

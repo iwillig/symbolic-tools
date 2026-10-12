@@ -10,19 +10,27 @@
 %% symbolic_codebase_tests.erl, since these handlers need the same
 %% registered symbolic_codebase cache running underneath them.
 %%
-%% Deliberately NOT tested here: run/0, setup_logging/0, register_tools/0
-%% — they mutate global logger/erlmcp state (removing the default logger
-%% handler process-wide, starting the erlmcp application), which a unit
-%% test shouldn't do. Covered instead by the manual stdio smoke tests
-%% (docs/erlang-mcp-design.md).
+%% run/0 and setup_logging/0 remain manual-smoke-test seams because they
+%% start applications and mutate global logger state. register_tools/0 is
+%% tested through a mocked erlmcp_stdio registration boundary.
 
 -define(FIXTURES, "test/fixtures").
 
 setup() ->
+    Root = filename:absname(filename:join(["_build", "serve_configured_project"])),
+    _ = file:del_dir_r(Root),
+    ConfigPath = filename:join([Root, ".symbolic", "config.json"]),
+    ok = filelib:ensure_dir(ConfigPath),
+    ok = file:write_file(ConfigPath,
+        <<"{\"paths\": [\"../../test/fixtures\"], "
+          "\"database\": \".symbolic/facts.dets\"}">>),
+    {ok, OldCwd} = file:get_cwd(),
     {ok, Pid} = symbolic_codebase:start_link(),
-    Pid.
+    ok = file:set_cwd(Root),
+    #{pid => Pid, cwd => OldCwd, root => Root}.
 
-teardown(Pid) ->
+teardown(#{pid := Pid, cwd := OldCwd, root := Root}) ->
+    ok = file:set_cwd(OldCwd),
     unlink(Pid),
     Ref = erlang:monitor(process, Pid),
     exit(Pid, shutdown),
@@ -30,19 +38,42 @@ teardown(Pid) ->
         {'DOWN', Ref, process, Pid, _Reason} -> ok
     after 1000 ->
         ok
-    end.
+    end,
+    _ = file:del_dir_r(Root).
 
 decode(JsonBinary) ->
     jsx:decode(JsonBinary, [return_maps]).
+
+parse_tool_schema_has_no_arguments_test() ->
+    meck:new(erlmcp_stdio, [non_strict]),
+    meck:expect(erlmcp_stdio, add_tool,
+        fun(Name, _Description, _Handler, Schema) ->
+            put({registered_tool_schema, Name}, Schema),
+            ok
+        end),
+    try
+        ok = symbolic_serve:register_tools(),
+        Schema = get({registered_tool_schema, <<"parse">>}),
+        ?assertEqual(#{}, maps:get(<<"properties">>, Schema)),
+        ?assertEqual(false, maps:get(<<"additionalProperties">>, Schema))
+    after
+        erase({registered_tool_schema, <<"parse">>}),
+        meck:unload(erlmcp_stdio)
+    end.
+
+parse_rejects_arguments_test() ->
+    Json = decode(symbolic_serve:handle_parse(#{<<"path">> => <<"/tmp">>,
+        <<"rules">> => <<"custom.pl">>})),
+    ?assertMatch(#{<<"error">> := <<"parse accepts no arguments", _/binary>>}, Json).
 
 serve_test_() ->
     {foreach, fun setup/0, fun teardown/1, [
         fun overview_before_parse/1,
         fun query_before_parse_is_friendly_error/1,
         fun parse_reports_summary/1,
+        fun parse_uses_only_configured_paths/1,
         fun parse_persists_configured_database/1,
-        fun parse_missing_dir_is_friendly_error/1,
-        fun parse_bad_path_type_is_caught/1,
+        fun parse_without_project_config_is_friendly_error/1,
         fun overview_after_parse_matches_parse/1,
         fun query_all_solutions/1,
         fun query_with_limit_truncates/1,
@@ -53,8 +84,7 @@ serve_test_() ->
         fun parse_reports_rules_file/1,
         fun overview_reports_rules_file/1,
         fun query_resolves_a_real_derived_predicate/1,
-        fun parse_with_broken_rules_override_is_friendly_error/1,
-        fun parsing_two_dirs_keeps_both_queryable_by_path/1,
+        fun parse_with_broken_project_rules_is_friendly_error/1,
         fun query_with_unknown_path_is_friendly_error/1,
         fun overview_with_unknown_path_is_friendly_error/1,
         fun overview_reports_version_before_parse/1,
@@ -73,26 +103,30 @@ serve_test_() ->
         fun analyze_text_returns_sentence_components/1
     ]}.
 
-parse_persists_configured_database(_Setup) ->
+parse_uses_only_configured_paths(Setup) ->
     fun() ->
-        Root = filename:absname(filename:join(["_build", "serve_shared_db_project"])),
-        _ = file:del_dir_r(Root),
-        ConfigPath = filename:join([Root, ".symbolic", "config.json"]),
-        DbPath = filename:join([Root, ".symbolic", "facts.dets"]),
-        SourcePath = filename:join([Root, "src", "sample.erl"]),
-        ok = filelib:ensure_dir(ConfigPath),
-        ok = filelib:ensure_dir(SourcePath),
-        ok = file:write_file(ConfigPath,
-            <<"{\"paths\": [\"src\"], \"database\": \".symbolic/facts.dets\"}">>),
-        ok = file:write_file(SourcePath, <<"-module(serve_shared_db).\nhello() -> ok.\n">>),
+        Root = maps:get(root, Setup),
+        UnlistedPath = filename:join(Root, "unlisted.erl"),
+        ok = file:write_file(UnlistedPath,
+            <<"-module(unlisted_source).\nnot_configured_fn() -> ok.\n">>),
         try
-            Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(Root)})),
-            ?assertEqual(list_to_binary(DbPath),
-                maps:get(<<"database">>, maps:get(<<"ok">>, Json))),
-            ?assert(filelib:is_regular(DbPath))
+            _ = decode(symbolic_serve:handle_parse(#{})),
+            Query = decode(symbolic_serve:handle_query(
+                #{<<"goal">> => <<"defines(not_configured_fn, 0, _, _, _)">>})),
+            ?assertMatch(#{<<"count">> := 0}, Query)
         after
-            _ = file:del_dir_r(Root)
+            _ = file:delete(UnlistedPath)
         end
+    end.
+
+parse_persists_configured_database(Setup) ->
+    fun() ->
+        Root = maps:get(root, Setup),
+        DbPath = filename:join([Root, ".symbolic", "facts.dets"]),
+        Json = decode(symbolic_serve:handle_parse(#{})),
+        ?assertEqual(list_to_binary(DbPath),
+            maps:get(<<"database">>, maps:get(<<"ok">>, Json))),
+        ?assert(filelib:is_regular(DbPath))
     end.
 
 extract_returns_a_claim(_Setup) ->
@@ -103,14 +137,14 @@ extract_returns_a_claim(_Setup) ->
 
 search_returns_cached_prose(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_search(#{<<"query">> => <<"exclamation">>})),
         ?assertMatch(#{<<"ok">> := [_ | _]}, Json)
     end.
 
 check_returns_a_verdict(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_check(#{<<"sentence">> => <<"shout/1 calls capitalize/1">>})),
         ?assertMatch(#{<<"ok">> := #{<<"verdict">> := <<"true">>}}, Json)
     end.
@@ -166,8 +200,7 @@ ask_yes_no_call_against_parsed_cache(_Setup) ->
     fun() ->
         %% sample.ts: shout/1 calls capitalize/1 — a real local call the
         %% gate can resolve and the proof can confirm against the cache.
-        _ = decode(symbolic_serve:handle_parse(#{
-            <<"path">> => list_to_binary(?FIXTURES)})),
+        _ = decode(symbolic_serve:handle_parse(#{})),
         Json = decode(symbolic_serve:handle_ask(#{
             <<"question">> => <<"does shout/1 call capitalize/1?">>})),
         ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"yes_no">>,
@@ -176,8 +209,7 @@ ask_yes_no_call_against_parsed_cache(_Setup) ->
 
 ask_count_and_enumerate_shapes(_Setup) ->
     fun() ->
-        _ = decode(symbolic_serve:handle_parse(#{
-            <<"path">> => list_to_binary(?FIXTURES)})),
+        _ = decode(symbolic_serve:handle_parse(#{})),
         Count = decode(symbolic_serve:handle_ask(#{
             <<"question">> => <<"how many functions call capitalize/1?">>})),
         ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"count">>,
@@ -191,8 +223,7 @@ ask_count_and_enumerate_shapes(_Setup) ->
 
 ask_wrong_arity_is_unverifiable_not_wrong(_Setup) ->
     fun() ->
-        _ = decode(symbolic_serve:handle_parse(#{
-            <<"path">> => list_to_binary(?FIXTURES)})),
+        _ = decode(symbolic_serve:handle_parse(#{})),
         %% capitalize/2 does not exist; capitalize/1 does — the gate must
         %% report the arity mismatch as an answer, not a tool error, and
         %% never answer a count of 0.
@@ -204,8 +235,7 @@ ask_wrong_arity_is_unverifiable_not_wrong(_Setup) ->
 
 ask_prose_returns_evidence(_Setup) ->
     fun() ->
-        _ = decode(symbolic_serve:handle_parse(#{
-            <<"path">> => list_to_binary(?FIXTURES)})),
+        _ = decode(symbolic_serve:handle_parse(#{})),
         %% sample.ts's shout JSDoc contains "exclamation mark" — prose
         %% questions come back as ranked evidence, never a verdict.
         Json = decode(symbolic_serve:handle_ask(#{
@@ -216,8 +246,7 @@ ask_prose_returns_evidence(_Setup) ->
 
 ask_unrecognized_shape_is_friendly_error(_Setup) ->
     fun() ->
-        _ = decode(symbolic_serve:handle_parse(#{
-            <<"path">> => list_to_binary(?FIXTURES)})),
+        _ = decode(symbolic_serve:handle_parse(#{})),
         Json = decode(symbolic_serve:handle_ask(#{
             <<"question">> => <<"what is the meaning of life">>})),
         ?assertMatch(#{<<"error">> := <<"unrecognized question shape", _/binary>>},
@@ -226,8 +255,7 @@ ask_unrecognized_shape_is_friendly_error(_Setup) ->
 
 ask_with_unknown_path_is_friendly_error(_Setup) ->
     fun() ->
-        _ = decode(symbolic_serve:handle_parse(#{
-            <<"path">> => list_to_binary(?FIXTURES)})),
+        _ = decode(symbolic_serve:handle_parse(#{})),
         Json = decode(symbolic_serve:handle_ask(#{
             <<"question">> => <<"does foo/1 call bar/1?">>,
             <<"path">> => <<"no/such/path_zz">>})),
@@ -248,7 +276,7 @@ query_before_parse_is_friendly_error(_Setup) ->
 
 parse_reports_summary(_Setup) ->
     fun() ->
-        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)})),
+        Json = decode(symbolic_serve:handle_parse(#{})),
         #{<<"ok">> := Ok} = Json,
         ?assertEqual(true, maps:get(<<"loaded">>, Ok)),
         ?assert(maps:get(<<"files">>, Ok) > 0),
@@ -256,25 +284,22 @@ parse_reports_summary(_Setup) ->
         ?assert(lists:member(<<"typescript">>, maps:get(<<"languages">>, Ok)))
     end.
 
-parse_missing_dir_is_friendly_error(_Setup) ->
+parse_without_project_config_is_friendly_error(Setup) ->
     fun() ->
-        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => <<"no/such/dir_zz">>})),
-        ?assertMatch(#{<<"error">> := <<"no such directory: ", _/binary>>}, Json)
-    end.
-
-%% to_list/1 has no clause for an integer — a non-binary, non-list `path`
-%% hits that function_clause error inside handle_parse/1's try, exercising
-%% the catch-all "handlers never crash" path (caught_str/3) rather than
-%% needing anything exotic to fail.
-parse_bad_path_type_is_caught(_Setup) ->
-    fun() ->
-        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => 123})),
-        ?assertMatch(#{<<"error">> := <<"caught error: function_clause", _/binary>>}, Json)
+        OldCwd = get_cwd(),
+        ok = file:set_cwd("/"),
+        try
+            Json = decode(symbolic_serve:handle_parse(#{})),
+            ?assertMatch(#{<<"error">> := <<"no .symbolic/config.json", _/binary>>}, Json)
+        after
+            ok = file:set_cwd(OldCwd)
+        end,
+        ?assertEqual(maps:get(root, Setup), get_cwd())
     end.
 
 overview_after_parse_matches_parse(_Setup) ->
     fun() ->
-        ParseJson = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)})),
+        ParseJson = decode(symbolic_serve:handle_parse(#{})),
         OverviewJson = decode(symbolic_serve:handle_overview(#{})),
         #{<<"ok">> := ParseOk} = ParseJson,
         #{<<"ok">> := OverviewOk} = OverviewJson,
@@ -284,14 +309,14 @@ overview_after_parse_matches_parse(_Setup) ->
 
 query_all_solutions(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_query(#{<<"goal">> => <<"defines(F, _, _, _, _)">>})),
         ?assertMatch(#{<<"truncated">> := false, <<"count">> := C} when C > 0, Json)
     end.
 
 query_with_limit_truncates(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         AllJson = decode(symbolic_serve:handle_query(#{<<"goal">> => <<"defines(F, _, _, _, _)">>})),
         Total = maps:get(<<"count">>, AllJson),
         ?assert(Total > 1),
@@ -303,14 +328,14 @@ query_with_limit_truncates(_Setup) ->
 %% No `limit` key at all in Params -> limit_of/1's fallback clause (50).
 query_default_limit_is_50(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_query(#{<<"goal">> => <<"defines(F, _, _, _, _)">>})),
         ?assertMatch(#{<<"limit">> := 50}, Json)
     end.
 
 query_undefined_predicate_is_friendly_error(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_query(#{<<"goal">> => <<"zzz_no_such_pred(X)">>})),
         ?assertMatch(
             #{<<"error">> := <<"no such predicate: zzz_no_such_pred/1", _/binary>>}, Json)
@@ -321,7 +346,7 @@ query_undefined_predicate_is_friendly_error(_Setup) ->
 %% (jstr(io_lib:format("~p", [Reason]))), not one of the named cases.
 query_malformed_goal_is_error(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_query(#{<<"goal">> => <<"defines(">>})),
         ?assertMatch(#{<<"error">> := Err} when is_binary(Err), Json)
     end.
@@ -340,7 +365,7 @@ query_bad_goal_type_is_caught(_Setup) ->
 %% the real .symbolic/rules.pl — rules_file in the JSON response names it.
 parse_reports_rules_file(_Setup) ->
     fun() ->
-        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)})),
+        Json = decode(symbolic_serve:handle_parse(#{})),
         #{<<"ok">> := Ok} = Json,
         ?assertMatch(<<_/binary>>, maps:get(<<"rules_file">>, Ok)),
         ?assert(binary:match(maps:get(<<"rules_file">>, Ok), <<".symbolic/rules.pl">>) =/= nomatch)
@@ -348,7 +373,7 @@ parse_reports_rules_file(_Setup) ->
 
 overview_reports_rules_file(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_overview(#{})),
         #{<<"ok">> := Ok} = Json,
         ?assertMatch(<<_/binary>>, maps:get(<<"rules_file">>, Ok))
@@ -371,7 +396,7 @@ overview_reports_version_before_parse(_Setup) ->
 %% separate `overview` round trip.
 parse_reports_version(_Setup) ->
     fun() ->
-        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)})),
+        Json = decode(symbolic_serve:handle_parse(#{})),
         #{<<"ok">> := Ok} = Json,
         ?assertMatch(<<_/binary>>, maps:get(<<"vsn">>, Ok)),
         ?assertMatch(<<_/binary>>, maps:get(<<"git_sha">>, Ok))
@@ -383,7 +408,7 @@ parse_reports_version(_Setup) ->
 %% `file_list` must not reappear.
 parse_omits_file_list(_Setup) ->
     fun() ->
-        Json = decode(symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)})),
+        Json = decode(symbolic_serve:handle_parse(#{})),
         #{<<"ok">> := Ok} = Json,
         ?assert(is_integer(maps:get(<<"files">>, Ok))),
         ?assertNot(maps:is_key(<<"file_list">>, Ok))
@@ -395,42 +420,14 @@ parse_omits_file_list(_Setup) ->
 %% `foo`, instead of the existence_error a facts-only cache would give.
 query_resolves_a_real_derived_predicate(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_query(#{<<"goal">> => <<"callees(foo, Callees)">>})),
         ?assertMatch(#{<<"count">> := C} when C > 0, Json)
     end.
 
-%% --- multiple cached directories, keyed by path (mirrors
-%%     symbolic_codebase_tests.erl's coverage of the same behavior one
-%%     layer down, exercised here through the actual tool handlers) ---
-
-%% Parsing a second directory doesn't evict the first: `query`/`overview`
-%% with an explicit `path` reach either one, and the no-`path` default
-%% follows whichever was parsed most recently.
-parsing_two_dirs_keeps_both_queryable_by_path(_Setup) ->
-    fun() ->
-        with_two_scratch_dirs(fun(DirA, DirB) ->
-            _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(DirA)}),
-            _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(DirB)}),
-            QueryA = decode(symbolic_serve:handle_query(#{
-                <<"goal">> => <<"defines(alpha_fn, 0, _, _, _)">>,
-                <<"path">> => list_to_binary(DirA)})),
-            ?assertMatch(#{<<"count">> := 1}, QueryA),
-            %% No `path` -> DirB, the most recently parsed.
-            NoPathOverview = decode(symbolic_serve:handle_overview(#{})),
-            #{<<"ok">> := NoPathOk} = NoPathOverview,
-            ?assertEqual(list_to_binary(DirB), maps:get(<<"path">>, NoPathOk)),
-            %% DirA is still there when asked for explicitly.
-            ExplicitOverviewA = decode(symbolic_serve:handle_overview(
-                #{<<"path">> => list_to_binary(DirA)})),
-            #{<<"ok">> := OkA} = ExplicitOverviewA,
-            ?assertEqual(list_to_binary(DirA), maps:get(<<"path">>, OkA))
-        end)
-    end.
-
 query_with_unknown_path_is_friendly_error(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_query(#{
             <<"goal">> => <<"defines(F, _, _, _, _)">>,
             <<"path">> => <<"no/such/dir_never_parsed_zz">>})),
@@ -441,7 +438,7 @@ query_with_unknown_path_is_friendly_error(_Setup) ->
 
 overview_with_unknown_path_is_friendly_error(_Setup) ->
     fun() ->
-        _ = symbolic_serve:handle_parse(#{<<"path">> => list_to_binary(?FIXTURES)}),
+        _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_overview(
             #{<<"path">> => <<"no/such/dir_never_parsed_zz">>})),
         ?assertMatch(
@@ -449,36 +446,25 @@ overview_with_unknown_path_is_friendly_error(_Setup) ->
             Json)
     end.
 
-%% Same shape as symbolic_codebase_tests.erl's helper of the same name —
-%% two scratch directories under _build/, each with one distinctively
-%% named function, kept separate so a query naming that function proves
-%% which cache entry actually answered it.
-with_two_scratch_dirs(Fun) ->
-    DirA = filename:absname(filename:join(["_build", "serve_multi_scratch_a"])),
-    DirB = filename:absname(filename:join(["_build", "serve_multi_scratch_b"])),
-    _ = file:del_dir_r(DirA),
-    _ = file:del_dir_r(DirB),
-    ok = filelib:ensure_path(DirA),
-    ok = filelib:ensure_path(DirB),
-    ok = file:write_file(filename:join(DirA, "sample.erl"),
-        <<"-module(sample_serve_multi_a).\nalpha_fn() -> ok.\n">>),
-    ok = file:write_file(filename:join(DirB, "sample.erl"),
-        <<"-module(sample_serve_multi_b).\nbeta_fn() -> ok.\n">>),
-    try
-        Fun(DirA, DirB)
-    after
-        _ = file:del_dir_r(DirA),
-        _ = file:del_dir_r(DirB)
+%% The MCP tool has no per-call rules override. The project's own rules
+%% file remains the only rules source for parse.
+parse_with_broken_project_rules_is_friendly_error(Setup) ->
+    fun() ->
+        Root = maps:get(root, Setup),
+        _ = decode(symbolic_serve:handle_parse(#{})),
+        RulesPath = filename:join([Root, ".symbolic", "rules.pl"]),
+        ok = file:write_file(RulesPath, <<"this is not valid Prolog !">>),
+        try
+            Json = decode(symbolic_serve:handle_parse(#{})),
+            ?assertMatch(#{<<"error">> := <<"cannot consult rules", _/binary>>}, Json),
+            Query = decode(symbolic_serve:handle_query(
+                #{<<"goal">> => <<"defines(shout, 1, _, _, _)">>})),
+            ?assertMatch(#{<<"count">> := C} when C > 0, Query)
+        after
+            _ = file:delete(RulesPath)
+        end
     end.
 
-%% A rules file that fails to consult renders through parse_error_str/1's
-%% new {rules_error, ...} clause, distinct from the existing not_parsed /
-%% existence_error / timeout friendly messages.
-parse_with_broken_rules_override_is_friendly_error(_Setup) ->
-    fun() ->
-        Json = decode(symbolic_serve:handle_parse(#{
-            <<"path">> => list_to_binary(?FIXTURES),
-            <<"rules">> => <<"no/such/rules_zz.pl">>})),
-        ?assertMatch(#{<<"error">> := <<"cannot consult rules no/such/rules_zz.pl", _/binary>>},
-            Json)
-    end.
+get_cwd() ->
+    {ok, Cwd} = file:get_cwd(),
+    Cwd.

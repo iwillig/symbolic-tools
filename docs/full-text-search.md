@@ -3,16 +3,18 @@
 **Status: implemented** — `native/symbolic_text` (Rustler NIF),
 `src/symbolic_text.erl` (wrapper), `src/symbolic_search.erl` + the
 `symbolic search` CLI command, the `text_search/2,3` Prolog predicate
-(`src/symbolic_prolog_lib.erl`), and the `symbolic parse --db` sidecar
-cache. This document records what was built, the stack decision behind
-it, and the rejected alternatives.
+(`src/symbolic_prolog_lib.erl`), and the parse-time sidecar cache for
+the project's configured database. This document records what was built,
+the stack decision behind it, and the rejected alternatives.
 
 ## What it does
 
-`symbolic parse --db` extracts prose as facts — `comment/3` from code,
+`symbolic parse` extracts prose as facts — `comment/3` from code,
 `paragraph/3`, `heading/5`, `blockquote/3` from markdown — alongside
-the structural facts. `symbolic search "query"` uses the project's configured database,
-indexes every prose fact, and returns BM25-ranked results as JSON:
+the structural facts. When the project config sets `database`, parse also
+persists those facts and the search sidecar. `symbolic search "query"` uses
+the configured database, indexes every prose fact, and returns BM25-ranked
+results as JSON:
 
 ```
 $ symbolic search -limit 3 "inverted index postings"
@@ -23,8 +25,9 @@ $ symbolic search -limit 3 "inverted index postings"
 The index is built fresh per invocation from the fact database alone —
 the same one-shot "start fresh, do work, tear down" shape as
 `symbolic query`'s prolog_session and `symbolic extract`'s model load —
-**except** when `symbolic parse --db` already wrote the sidecar cache
-(below), in which case search loads the prebuilt index instead.
+**except** when `symbolic parse` already wrote the sidecar cache for the
+configured database (below), in which case search loads the prebuilt index
+instead.
 
 ## The stack, and why
 
@@ -94,7 +97,8 @@ here.
 
 ## The parse-time cache
 
-`symbolic parse --db X.dets` also writes `X.dets.text_idx` — one
+When the project config sets a database, `symbolic parse` also writes
+`<database>.text_idx` — one
 `term_to_binary` container holding the BM25 snapshot bytes plus the doc
 metadata — from the same fact list as the DETS store itself
 (`symbolic_parse:maybe_store/2`, best-effort: a failed sidecar write

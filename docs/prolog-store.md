@@ -9,9 +9,10 @@ by the `symbolic parse` / `symbolic query` subcommands
 ([`cli-erlang.md`](cli-erlang.md)).
 
 **Implemented, not just designed:** §1–§2 below described the plan; it's now
-real. `symbolic parse -db <path>` writes facts into a **DETS table**
-(`symbolic_fact_store.erl`) — the "erlang style database" this doc's original
-recommendation pointed at — and `symbolic query -db <path>` reads them back
+real. `symbolic parse` writes facts to the configured database, when one is
+set, into a **DETS table** (`symbolic_fact_store.erl`) — the "erlang style
+database" this doc's original recommendation pointed at — and
+`symbolic query -db <path>` reads them back
 and asserts them directly into a fresh erlog session
 (`prolog_session:load_facts/2`), entirely as Erlang terms. **No Prolog text is
 parsed or printed anywhere on this path.**
@@ -234,10 +235,10 @@ binary contents at all.
 
 ## 8. Multiple scan roots, one fact set: `.symbolic/config.json`
 
-Everything in §7 above still describes ONE scan: `symbolic parse <dir>`
-walks exactly one directory tree, and `write/2` replaces the whole DETS
-table with that one walk's output. That was a real limitation for any
-project where the interesting facts don't all live under one root —
+`symbolic parse` scans the paths listed in the discovered project
+`.symbolic/config.json`, and `write/2` replaces the whole DETS table with
+that scan's output. A configured path list covers projects where the
+interesting facts don't all live under one root —
 `src/` and `test/` are two different directories in this project itself,
 and a config file (`package.json`, `Cargo.toml`) worth querying usually
 sits at the project root, alongside `src/`, not inside it.
@@ -258,15 +259,15 @@ The config may also set an optional `database` path:
 
 `database` is resolved relative to the project root, like each `paths`
 entry. `symbolic_config:read_settings/1` returns both resolved paths and the
-optional database; the existing `read/1` remains a paths-only API. CLI parse
-writes to this database when `-db` is omitted, and database-backed CLI
-commands use it by default. An explicit CLI `-db` overrides the setting. MCP
-parse writes the same DETS database and returns its path in the parse
-summary. MCP query and overview still use the in-memory snapshot built by
-that parse: after another CLI command rewrites the database, call MCP `parse`
-again to refresh the snapshot. Without `database`, prior persistence behavior
-is unchanged. The CLI and MCP do not coordinate concurrent DETS access;
-run parse and query operations sequentially for a shared database file.
+optional database; the existing `read/1` remains a paths-only API. Parse has
+no database override: CLI and MCP use this configured file when it is set.
+Database-backed CLI commands use it by default, and an explicit CLI `-db`
+continues to override it for those commands. MCP parse writes the same DETS
+database and returns its path in the summary. MCP query and overview use the
+in-memory snapshot built by parse: after a CLI update, call MCP `parse` again
+to refresh it. Without `database`, parsing still scans and reports facts but
+does not persist them. The CLI and MCP do not coordinate concurrent DETS
+access; run parse and query operations sequentially for a shared database.
 
 - **Discovery** is the identical walk-up algorithm `.symbolic/rules.pl`
   already uses (`symbolic_query:discover_up/2` — the two now share one
@@ -301,21 +302,15 @@ run parse and query operations sequentially for a shared database file.
   file's extraction is re-raised in the caller (`error({parse_worker_crashed,
   Reason})`) rather than silently dropped, so parallelizing the common
   case doesn't quietly change what happens on the uncommon one.
-- `symbolic parse` with **no directory argument** triggers this path
-  (`-config <file>` overrides discovery, the same way `-rules` does);
-  the MCP server's `parse` tool does too, when called with no `path` —
-  see `docs/cli-erlang.md` §2 and `docs/erlang-mcp-design.md`.
-- **The MCP server's discovery has one extra wrinkle a fresh CLI
-  invocation doesn't**: it's one long-lived process, so "walk up from
-  the current directory" means the SERVER's own cwd, fixed for its
-  whole lifetime — there's no per-call `cd`. That's what the MCP
-  `parse` tool's `config` parameter is for (`symbolic_codebase:parse/3`):
-  an explicit `.symbolic/config.json` path, exactly like `-config`,
-  which is what actually lets one running server hold cache entries for
-  *several* projects at once via config mode — two `parse` calls with
-  two different `config` values land in two different cache entries
-  (each keyed by its own project root), the same way two different
-  `path` directories already do for single-directory mode.
+- Both CLI and MCP `parse` use config discovery from their current working
+directory and accept no arguments. Neither interface can choose a scan
+folder, config file, database, or rules file per parse. A missing project
+config is an error; neither interface scans an arbitrary directory.
+- **MCP discovery uses the server process's working directory**, fixed for
+its lifetime. Each server therefore serves one project's configuration;
+start a separate server from another project directory to parse that
+project. The lower-level `symbolic_codebase` API retains direct path-based
+scanning for internal callers and tests, but the MCP tool does not expose it.
 
 Two things this does NOT do, on purpose: it doesn't merge with a
 *previous* `write/2` call (§7's replace-not-append model is unchanged —

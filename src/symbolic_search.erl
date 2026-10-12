@@ -10,7 +10,7 @@
 %%% symbolic_query:run_result/3 (a prolog_session) and
 %%% symbolic_extract_llm:run_result/2 (a model load). A fact database is
 %%% a deterministic function of the source tree, so there is nothing to
-%%% keep warm across calls: re-running `symbolic parse --db` plus this
+%%% keep warm across calls: re-running `symbolic parse` plus this
 %%% command is the cache strategy.
 %%%
 %%% No Prolog engine is involved on this path at all — prose facts are
@@ -26,7 +26,7 @@
 -export([run/3]).
 %% Exported for symbolic_search_tests.erl — run_result/3 is the
 %% halt-free core — and for symbolic_parse:maybe_store/2, which writes
-%% the sidecar alongside the DETS store on every `symbolic parse --db`.
+%% the sidecar alongside the configured DETS store on every `symbolic parse`.
 -export([run_result/3, run_facts/3, write_index_cache/2]).
 
 %% The prose-fact kinds this tier indexes, with their argument shapes
@@ -69,7 +69,7 @@ run_result(DbPath, Query, Limit) ->
             end
     end.
 
-%% The parse-time cache: `symbolic parse --db` writes <db>.text_idx —
+%% The parse-time cache: `symbolic parse` writes `<database>.text_idx` —
 %% the BM25 snapshot bytes plus the doc metadata — right after the
 %% DETS store, both from the same fact list (see symbolic_parse:
 %% maybe_store/2). One container, term_to_binary, so the fast path

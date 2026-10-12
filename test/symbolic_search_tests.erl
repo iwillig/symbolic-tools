@@ -1,7 +1,7 @@
 %%% Tests for symbolic_search — the `symbolic search` CLI's halt-free
 %%% core (run_result/3), exercised against a real DETS fact database
 %%% written with symbolic_fact_store:write/2, the same store
-%%% `symbolic parse --db` produces. Pins the prose-fact selection
+%%% `symbolic parse` produces for the configured database. Pins the prose-fact selection
 %%% (comment/3, paragraph/3, heading/4, blockquote/3 — including the
 %%% differing argument orders), the JSON result shape, ranking through
 %%% the real NIF, and the error paths.

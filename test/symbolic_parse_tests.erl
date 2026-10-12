@@ -71,7 +71,7 @@ error_message_no_such_config_test() ->
 
 error_message_no_config_found_test() ->
     Text = lists:flatten(symbolic_parse:error_message({no_config_found, "/some/dir"})),
-    ?assertMatch("parse: no directory given and no .symbolic/config.json found" ++ _, Text).
+    ?assertMatch("parse: no .symbolic/config.json found walking up from /some/dir" ++ _, Text).
 
 %% --- resolve_config/1: an explicit -config path wins outright (and must
 %% exist); otherwise .symbolic/config.json is discovered by walking up

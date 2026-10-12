@@ -57,10 +57,17 @@ function authorize(cardToken: string, amountCents: number): void {
 `payments.ts` — planned, then forgotten, exactly the kind of drift that
 accumulates silently in real docs. Nothing about that is obvious from
 reading either file in isolation; it only shows up once both are facts
-in the same base.
+in the same base. The example project's `.symbolic/config.json` is:
+
+```json
+{"paths": ["payments.ts", "guide.md"], "database": ".symbolic/facts.dets"}
+```
+
+Run `symbolic parse` from the project root; it discovers and uses those
+settings without path arguments.
 
 ```sh
-$ symbolic parse .
+$ symbolic parse
 ["code_block","guide.md","ts",5]
 ["code_block","guide.md","ts",14]
 ["comment","payments.ts",1,"Charges a card for the given amount, delegating to the Stripe API."]
@@ -83,8 +90,8 @@ $ symbolic parse .
 ```
 
 Facts print as JSON Lines, not raw Prolog text (`docs/prolog-store.md`
-§7) — one JSON array per fact. `parse -db` also writes the same facts
-into a DETS database (`facts.dets`). Every scenario below needs one more
+§7) — one JSON array per fact. When the project config sets `database`,
+`symbolic parse` also writes the facts to that DETS file. Every scenario below needs one more
 thing: derived predicates like these. They're the small end of
 [`lint-queries.md`](lint-queries.md)'s library, and in this project the
 real copy lives in `.symbolic/rules.pl`, which `symbolic query` consults
@@ -225,7 +232,9 @@ answer instead of a wish to "please read both files carefully."
 Everything above used the CLI (`symbolic query ...`) for
 readability, but an LLM agent talks to a **live,
 persistent session** over MCP (`symbolic serve`), not a fresh CLI
-process per question — see `docs/erlang-mcp-design.md`. Same facts,
+process per question — see `docs/erlang-mcp-design.md`. Start the server
+from the project directory; MCP `parse` takes no arguments and uses that
+project's config. Same facts,
 same rules, same answers; the difference is the transport. This is a
 real, captured JSON-RPC exchange against a running `symbolic serve`
 process — driven by a small script issuing exactly the four tool calls
@@ -271,9 +280,9 @@ Prolog **text**, consulted via the ordinary, unchanged
 `prolog_session:consult_string/2` path, so this demonstrates that raw
 MCP capability directly: the agent sends a hand-written Prolog program
 (the facts above, written out as literal Prolog syntax, plus the five
-helper rules) as one string. This is **not** how the CLI's `symbolic
-parse -db` pipeline loads facts anymore, though — that writes/reads a
-DETS database and asserts terms directly, with no Prolog text involved
+helper rules) as one string. This is **not** how the CLI's configured `symbolic parse` pipeline loads
+facts anymore, though — that writes/reads a DETS database and asserts
+terms directly, with no Prolog text involved
 at all (`docs/prolog-store.md` §7). An agent driving `symbolic serve`
 today would more naturally send just the five rules this way (real,
 short, hand-written Prolog) and get the extracted facts into the same

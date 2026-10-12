@@ -11,7 +11,7 @@ consults it automatically (see [`cli-erlang.md`](cli-erlang.md) §2) — no
 `-rules` flag needed for anything below:
 
 ```sh
-$ symbolic parse src
+$ symbolic parse
 $ symbolic query 'all_duplicate_names(Pairs)'
 ```
 
@@ -22,7 +22,7 @@ missing from the file while still being advertised by this doc — the exact
 drift (`top_fan_out/2`, `all_risky_calls/1` and friends, referenced below
 but absent from the library) that test was written to catch.
 
-Written and verified against this project's own `src/` directory —
+Written and verified against this project's configured paths —
 every count and example below is real, captured output from actually
 running the queries, not hand-written. They were all captured against
 *one* particular tree, though, and every one of them moves when the
@@ -47,7 +47,7 @@ atom at all:
 Every prior test fixture in this project happened to avoid apostrophes,
 so this never surfaced until pointed at this project's own prose
 comments ("it's", "session's", "caller's" — ordinary English, all
-through `src/`) — `symbolic parse src` would fail to `consult` its own
+through `src/`) — `symbolic parse` would fail to `consult` its own
 output back in.
 
 **Fixed at the source, not worked around**: free-text fact fields
@@ -381,7 +381,7 @@ For scale (at the time this section was captured): 222 `defines/3`, 723
 `calls` gaining `CallerArity` plus an `ArgCount` on every `local`/
 `remote`/`member` term. The query *syntax* below (`duplicate_name/3` etc., already updated above)
 still runs; the *captured output* (counts, JSON blobs) will differ from
-a fresh `symbolic parse src` run today — regenerate
+a fresh `symbolic parse` run today — regenerate
 rather than trust these numbers at face value.
 
 **A visible side effect of the JSON output format** (`prolog-store.md`
@@ -643,7 +643,7 @@ pattern more heavily.
 Six more rules, added on top of the library above to cover the shapes of
 question an ESLint config typically encodes — everything here is still
 derived from `defines/5`/`calls/5` alone, no new fact type. Real output
-below, from the same `symbolic parse src` run as above.
+below, from the same `symbolic parse` run as above.
 
 ```sh
 $ symbolic query 'all_too_many_params(X)'
