@@ -135,16 +135,22 @@ tree_per_parse_does_not_leak_body() ->
     end,
     lists:foreach(fun(_) -> Burn() end, lists:seq(1, 600)),
     erlang:garbage_collect(),
+    %% In the full suite, the first post-warm-up batch can expand process
+    %% RSS substantially even though subsequent batches remain flat. RSS
+    %% includes runtime allocator growth, so prime that high-water state
+    %% before taking the baseline. A per-parse tree leak continues to grow
+    %% during the measured batch and remains well above this threshold.
+    lists:foreach(fun(_) -> Burn() end, lists:seq(1, 600)),
+    erlang:garbage_collect(),
     Before = Rss(),
     lists:foreach(fun(_) -> Burn() end, lists:seq(1, 600)),
     erlang:garbage_collect(),
     After = Rss(),
     Growth = After - Before,
     %% Measured directly against the retired C NIF: ~1 GB of RSS growth
-    %% over this exact window (one leaked TSTree per parse); the fixed
-    %% NIF measures a few MB of noise. The threshold sits two orders of
-    %% magnitude below the leak, so it can't flake on noise but will
-    %% fire on even a partially reintroduced leak.
+    %% over this exact 600-parse window (one leaked TSTree per parse);
+    %% after the allocator warm-up, the fixed NIF should remain far below
+    %% the threshold.
     ?assert(Growth < 20 * 1024).
 
 %% A source with codepoints > 255. The C NIF decoded its char-list input
