@@ -36,8 +36,11 @@ brew install symbolic-tools
 claude mcp add symbolic -- symbolic serve
 ```
 
-`/mcp` inside Claude Code shows `symbolic` connected. It provides
-`parse`, `query`, `ask`, `overview`, `extract`, `check`, and `search`.
+`/mcp` inside Claude Code shows `symbolic` connected. Its MCP tools are
+`parse`, `query`, `ask`, `overview`, `extract`, `check`, `search`, and
+`analyze_text`. The CLI also has an `analyze` command; the MCP
+`analyze_text` tool additionally returns bounded query-frame suggestions.
+See [CLI and MCP interfaces](interfaces.html) for the differences.
 
 
 ### Run Claude Custom System Prompt
@@ -60,8 +63,9 @@ Symbolic scans Erlang, Rust, TypeScript, Bash, Markdown, TOML, and JSON.
 
 ## Basic usage
 
-The CLI stores facts in `facts.dets`. The MCP server keeps the same facts
-in memory. Each CLI command below has an MCP equivalent.
+The CLI can persist facts in a `.dets` file; the MCP server keeps parsed
+facts in memory. The examples below show CLI commands that have MCP
+equivalents; the two interfaces do not have identical command sets.
 
 ### Parse a project
 

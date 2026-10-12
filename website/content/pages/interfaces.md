@@ -1,10 +1,28 @@
-Title: CLI and MCP parity
+Title: CLI and MCP interfaces
 Slug: interfaces
 Save_as: interfaces.html
-Subtitle: Run the same codebase analysis from a terminal or an MCP client.
+Subtitle: Compare codebase analysis from the CLI and an MCP client.
 
-The CLI stores facts in a `.dets` file. The MCP server stores facts in memory.
-Both interfaces support parse, query, ask, overview, extract, check, and search.
+The CLI can persist facts in a `.dets` file; the MCP server keeps parsed facts
+in memory. They share several capabilities, but their command and tool sets
+are not identical.
+
+| Capability | CLI | MCP |
+|---|---|---|
+| Parse a codebase | `parse` | `parse` |
+| Prove a Prolog goal | `query` | `query` |
+| Ask a bounded English question | `ask` | `ask` |
+| Inspect fact counts/cache state | `overview` | `overview` |
+| Extract a claim | `extract` | `extract` |
+| Check a claim against facts | `check` | `check` |
+| Search prose facts | `search` | `search` |
+| Analyze English text | `analyze` | `analyze_text` |
+| Start the MCP server | `serve` | — |
+
+The CLI's `analyze` command returns sentence and token analysis. MCP's
+`analyze_text` also returns bounded query-frame suggestions; these are
+candidates, not verified claims. `serve` is a CLI launcher for the MCP server,
+not an MCP tool.
 
 ## Parse
 
