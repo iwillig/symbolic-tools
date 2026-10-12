@@ -9,11 +9,12 @@ single-maintainer repo, not a team workflow. The Homebrew formula
 tap repo and no tarball/sha256 to compute — cutting the release *is*
 publishing the package.
 
-## 1. Bump the version in five places
+## 1. Prepare the changelog and version metadata
 
-Three are load-bearing, two are doc references that quote them —
-`grep -rn '"0\.1\.0"' src/ rebar.config Formula/ docs/ readme.md` finds
-all of them for the version you're bumping *from*:
+Add a dated `CHANGELOG.md` entry for the user-facing changes since the
+previous release. Update the release version in five files (the Homebrew
+formula contains two separate version strings). `grep -rn '"0\.1\.0"' src/ rebar.config Formula/ docs/ readme.md` finds the version
+references for the release you're bumping *from*:
 
 - `src/symbolic_tools.app.src` — the `{vsn, "X.Y.Z"}` tuple.
 - `rebar.config` — the `relx` `{release, {symbolic_tools, "X.Y.Z"}, ...}`
@@ -29,6 +30,8 @@ all of them for the version you're bumping *from*:
 - `readme.md` — the Homebrew install section says which tag the
   formula "builds from the tagged `vX.Y.Z`".
 
+The changelog entry is separate from those version references. Use the
+previous tag as the range for the summary and keep the entry concise.
 Don't touch version-looking strings elsewhere — `readme.md`'s TOML/JSON
 extraction examples and `docs/logging-and-metrics.md`'s OpenTelemetry
 sketch both use `"0.1.0"` as illustrative example data for a
@@ -45,7 +48,7 @@ rebar3 release                          # confirm releases/X.Y.Z exists
 ## 3. Commit, tag, push
 
 ```sh
-git add <the five files above>
+git add CHANGELOG.md <the five version-reference files above>
 git commit -m "Bump version to X.Y.Z"
 
 git tag -a vX.Y.Z -m "$(cat <<'EOF'

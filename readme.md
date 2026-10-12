@@ -791,7 +791,7 @@ afterward (confirmed by testing: with `dev_mode` on, the release's `lib/`
 entries are symlinks back into the build tree, which breaks the moment
 Homebrew's own temporary build sandbox is cleaned up). `Formula/symbolic-
 tools.rb` is the actual formula, verified end-to-end with a real local
-`brew install --build-from-source`, and builds from the tagged `v0.3.0`
+`brew install --build-from-source`, and builds from the tagged `v0.4.0`
 release. See [`docs/releasing.md`](docs/releasing.md) for how a release
 actually gets cut.
 
@@ -831,7 +831,8 @@ Dependencies:
 
 ## Documentation
 
-`docs/` holds the full design for this project — start with
+See [`CHANGELOG.md`](CHANGELOG.md) for release history. `docs/` holds the
+full design for this project — start with
 `erlang-mcp-design.md` for the overall architecture, or
 `prolog-schema.md` if you just want to know what a query can ask about,
 then follow either's cross-references. Grouped by concern:
