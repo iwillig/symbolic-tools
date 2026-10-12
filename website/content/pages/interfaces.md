@@ -35,7 +35,7 @@ MCP: call `parse` with `path: "."`.
 ## Query
 
 ```sh
-symbolic query -db facts.dets "defines(F, A, _, _, _")
+symbolic query -db facts.dets "defines(F, A, _, _, _)"
 ```
 
 MCP: call `query` with the same `goal`.
