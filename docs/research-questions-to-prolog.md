@@ -81,6 +81,8 @@ slots, answer shapes, world assumptions, evidence behavior, limits, and
 example questions as JSON. MCP clients can call `ask_catalog` for the same
 catalog; it has no inputs and does not require parsing a project first. The
 catalog is the supported surface, not permission to submit arbitrary Prolog.
+See [`ask-evidence.md`](ask-evidence.md) for the meaning of source witnesses,
+capped citations, and empty evidence arrays.
 
 The verifiability gate runs between extraction and proof, and it has
 three rules:

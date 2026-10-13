@@ -201,5 +201,21 @@ ask_command_offers_catalog_without_requiring_a_question_test() ->
     ?assertEqual(false, maps:get(default, Catalog)),
     ?assertEqual(false, maps:get(required, Question)).
 
+ask_handler_forwards_question_to_shared_answer_runner_test() ->
+    meck:new(symbolic_ask),
+    meck:expect(symbolic_ask, run, fun(Db, Question) ->
+        self() ! {ask_forwarded, Db, Question}, ok
+    end),
+    try
+        #{commands := #{"ask" := #{handler := Handler}}} = symbolic_cli:cli(),
+        Handler(#{db => "facts.dets", question => "does foo/1 call bar/1?"}),
+        receive
+            {ask_forwarded, "facts.dets", "does foo/1 call bar/1?"} -> ok
+        after 1000 -> ?assert(false)
+        end
+    after
+        meck:unload(symbolic_ask)
+    end.
+
 args_by_name(Args) ->
     maps:from_list([{maps:get(name, A), A} || A <- Args]).

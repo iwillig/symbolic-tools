@@ -934,19 +934,13 @@ execute_answer(Pid, sites, {def_site_of, {'/', SName, SArity}}) ->
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end;
-%% calls with a file subject — any call site of the object whose file
-%% basename matches. Reuses the sites answer, which already merges all
-%% three call shapes.
+%% calls with a file subject — preserve the basename match semantics,
+%% and return one matching calls fact when the answer is positive.
 execute_answer(Pid, yes_no, {calls_file, FileBin, Object}) ->
-    case answer(Pid, sites, {call_sites_of, Object}) of
-        {ok, #{<<"answer">> := Sites}} ->
-            Found = lists:any(
-                fun(#{<<"file">> := F}) -> file_matches(F, FileBin) end,
-                Sites
-            ),
-            {ok, yes_no_answer(Found)};
-        {error, Reason} ->
-            {error, Reason}
+    case call_evidence_in_file(Pid, Object, FileBin) of
+        {ok, []} -> {ok, yes_no_evidence(false, [])};
+        {ok, [Witness | _]} -> {ok, yes_no_evidence(true, [Witness])};
+        Error -> Error
     end;
 %% is file F scanned? — the gate IS the proof: the basename appears in
 %% any fact's File field (defines, comments, paragraphs, config).
@@ -1220,6 +1214,68 @@ all_call_evidence(Pid, {'/', SName, SArity}, {'/', OName, OArity}) ->
         no_solution -> {error, {findall_never_fails, calls}};
         {error, Reason} -> {error, {query_failed, Reason}}
     end.
+
+call_evidence_in_file(Pid, {'/', OName, OArity}, FileBin) ->
+    OArityText = call_arity(OArity),
+    CalleeName = quoted_atom_name(OName),
+    LocalGoal = "findall(st(C, CallerArity, local, " ++ OArityText ++ ", F, L), calls(C, CallerArity, local(" ++
+        CalleeName ++ ", " ++ OArityText ++ "), F, L), L1)",
+    RemoteGoal = ", findall(st(C, CallerArity, remote, " ++ OArityText ++ ", M, F, L), " ++
+        "calls(C, CallerArity, remote(M, " ++ CalleeName ++ ", " ++ OArityText ++
+        "), F, L), L2)",
+    {MemberGoal, RemoteDottedGoal} = call_file_shape_goals(OName, OArityText),
+    Goal = LocalGoal ++ RemoteGoal ++ MemberGoal ++ RemoteDottedGoal,
+    case prolog_session:query(Pid, Goal) of
+        {ok, Bindings} ->
+            Facts = lists:append([
+                proplists:get_value(Name, Bindings, [])
+                || Name <- ['L1', 'L2', 'L3', 'L4']]),
+            Evidence = lists:sort(fun evidence_before/2,
+                [file_call_evidence(Fact, OName, OArity)
+                 || Fact <- Facts, fact_file_matches(Fact, FileBin)]),
+            {ok, Evidence};
+        no_solution -> {error, {findall_never_fails, calls}};
+        {error, Reason} -> {error, {query_failed, Reason}}
+    end.
+
+call_file_shape_goals(OName, OArityText) ->
+    case split_receiver_method(OName) of
+        {Receiver, Method} ->
+            ReceiverText = quoted_atom_name(Receiver),
+            MethodText = quoted_atom_name(Method),
+            Member = ", findall(st(C, CallerArity, member, " ++ OArityText ++ ", F, L), " ++
+                "calls(C, CallerArity, member(" ++ ReceiverText ++ ", " ++ MethodText ++
+                ", " ++ OArityText ++ "), F, L), L3)",
+            RemoteDotted = ", findall(st(C, CallerArity, remote_dotted, " ++
+                OArityText ++ ", M, N, F, L), calls(C, CallerArity, remote(" ++
+                ReceiverText ++ ", " ++ MethodText ++ ", " ++ OArityText ++
+                "), F, L), L4)",
+            {Member, RemoteDotted};
+        none -> {"", ""}
+    end.
+
+fact_file_matches({'st', _, _, _, _, File, _}, FileBin) -> file_matches(File, FileBin);
+fact_file_matches({'st', _, _, _, _, _, File, _}, FileBin) -> file_matches(File, FileBin);
+fact_file_matches({'st', _, _, _, _, _, _, File, _}, FileBin) -> file_matches(File, FileBin).
+
+file_call_evidence({'st', Caller, CallerArity, local, CallArity, File, Line}, OName, _OArity) ->
+    call_evidence_entry(Caller, CallerArity, File, Line,
+        #{<<"kind">> => <<"local">>, <<"name">> => to_bin(OName),
+          <<"arity">> => CallArity});
+file_call_evidence({'st', Caller, CallerArity, remote, CallArity, Module, File, Line}, OName, _OArity) ->
+    call_evidence_entry(Caller, CallerArity, File, Line,
+        #{<<"kind">> => <<"remote">>, <<"module">> => to_bin(Module),
+          <<"name">> => to_bin(OName), <<"arity">> => CallArity});
+file_call_evidence({'st', Caller, CallerArity, member, CallArity, File, Line}, OName, _OArity) ->
+    {Receiver, Method} = split_receiver_method(OName),
+    call_evidence_entry(Caller, CallerArity, File, Line,
+        #{<<"kind">> => <<"member">>, <<"receiver">> => to_bin(Receiver),
+          <<"method">> => to_bin(Method), <<"arity">> => CallArity});
+file_call_evidence({'st', Caller, CallerArity, remote_dotted, CallArity, Module, Name, File, Line},
+        _OName, _OArity) ->
+    call_evidence_entry(Caller, CallerArity, File, Line,
+        #{<<"kind">> => <<"remote">>, <<"module">> => to_bin(Module),
+          <<"name">> => to_bin(Name), <<"arity">> => CallArity}).
 
 call_shape_goals(Caller, OName, OArityText) ->
     case split_receiver_method(OName) of

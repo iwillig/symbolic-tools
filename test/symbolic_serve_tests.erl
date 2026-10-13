@@ -221,13 +221,14 @@ ask_before_parse_is_friendly_error(_Setup) ->
         ?assertMatch(#{<<"error">> := _}, Json)
     end.
 
-ask_yes_no_call_against_parsed_cache(_Setup) ->
+ask_yes_no_call_against_parsed_cache(#{root := Root}) ->
     fun() ->
-        %% sample.ts: shout/1 calls capitalize/1 — a real local call the
-        %% gate can resolve and the proof can confirm against the cache.
+        %% The CLI runner and MCP adapter must expose the same shared answer
+        %% map for both a positive witness and an empty-evidence negative.
         _ = decode(symbolic_serve:handle_parse(#{})),
-        Json = decode(symbolic_serve:handle_ask(#{
-            <<"question">> => <<"does shout/1 call capitalize/1?">>})),
+        PositiveQuestion = <<"does shout/1 call capitalize/1?">>,
+        PositiveJson = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => PositiveQuestion})),
         ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"yes_no">>,
                                      <<"answer">> := true,
                                      <<"evidence">> := [#{
@@ -238,8 +239,22 @@ ask_yes_no_call_against_parsed_cache(_Setup) ->
                                              <<"call">> := #{
                                                  <<"kind">> := <<"local">>,
                                                  <<"name">> := <<"capitalize">>,
-                                                 <<"arity">> := 1}}}]}}, Json)
+                                                 <<"arity">> := 1}}}]}}, PositiveJson),
+        assert_cli_mcp_answer_equal(Root, PositiveQuestion, PositiveJson),
+        NegativeQuestion = <<"does shout/1 call foo/1?">>,
+        NegativeJson = decode(symbolic_serve:handle_ask(#{
+            <<"question">> => NegativeQuestion})),
+        ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"yes_no">>,
+                                     <<"answer">> := false,
+                                     <<"evidence">> := []}}, NegativeJson),
+        assert_cli_mcp_answer_equal(Root, NegativeQuestion, NegativeJson)
     end.
+
+assert_cli_mcp_answer_equal(Root, Question, McpJson) ->
+    DbPath = filename:join([Root, ".symbolic", "facts.dets"]),
+    {ok, CliAnswer} = symbolic_ask:run_result(DbPath, binary_to_list(Question)),
+    CliJsonAnswer = decode(jsx:encode(CliAnswer)),
+    ?assertEqual(CliJsonAnswer, maps:get(<<"ok">>, McpJson)).
 
 ask_count_and_enumerate_shapes(_Setup) ->
     fun() ->

@@ -466,7 +466,15 @@ catalog_discovery_describes_supported_inputs_and_answer_contracts_test() ->
     ?assertEqual(<<"witness_pair">>, maps:get(<<"evidence_mode">>, ReturnsOp)),
     ?assertMatch(#{<<"properties">> := #{<<"evidence">> :=
         #{<<"items">> := #{<<"oneOf">> := [_, _, _]}}}},
-        maps:get(<<"answer_shape">>, ReturnsOp)).
+        maps:get(<<"answer_shape">>, ReturnsOp)),
+    {_, CallsInFileOp} = lists:keyfind(<<"calls_in_file">>, 1,
+        [{maps:get(<<"id">>, Op), Op} || Op <- Operations]),
+    ?assertEqual(<<"source_location">>, maps:get(<<"evidence">>, CallsInFileOp)),
+    ?assertEqual(<<"witness">>, maps:get(<<"evidence_mode">>, CallsInFileOp)),
+    ?assertMatch(#{<<"properties">> := #{<<"evidence">> :=
+        #{<<"items">> := #{<<"properties">> := #{<<"predicate">> :=
+            #{<<"const">> := <<"calls">>}}}}}},
+        maps:get(<<"answer_shape">>, CallsInFileOp)).
 
 catalog_examples_are_recognized_by_the_question_pipeline_test() ->
     with_db(facts(), fun(Db) ->
@@ -557,17 +565,38 @@ pipeline_returns_line_scope_test() ->
             symbolic_ask:run_result(Db, "does verifyPhoneCode/1 return message?"))
     end).
 
-%% Gap 2: file subjects route through the calls path — "does file F
-%% call X?" gates the file, then proves through the sites answer.
+%% File subjects retain the existing file gate and basename matching,
+%% and cite a matching calls fact for positive answers.
 pipeline_file_subject_calls_test() ->
     Facts = [
         {defines, 'JoinAccountModal', 1, [], 'JoinAccountModal.ts', 1},
         {calls, 'JoinAccountModal', 1, {local, setError, 1}, 'JoinAccountModal.ts', 2},
-        {defines, setError, 1, [], 'JoinAccountModal.ts', 3}
+        {calls, 'JoinAccountModal', 1, {member, form, setError, 1}, 'JoinAccountModal.ts', 4},
+        {defines, setError, 1, [], 'JoinAccountModal.ts', 3},
+        {defines, unrelated, 0, [], 'Other.ts', 1},
+        {calls, unrelated, 0, {local, setError, 1}, 'Other.ts', 2}
     ],
     with_db(Facts, fun(Db) ->
-        ?assertEqual({ok, yes_no_true()},
-            symbolic_ask:run_result(Db, "does file JoinAccountModal.ts call setError/1?")),
+        {ok, Positive} = symbolic_ask:run_result(Db,
+            "does file JoinAccountModal.ts call setError/1?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Positive)),
+        ?assertEqual([#{<<"predicate">> => <<"calls">>,
+            <<"file">> => <<"JoinAccountModal.ts">>, <<"line">> => 2,
+            <<"fact">> => #{<<"caller">> => <<"JoinAccountModal/1">>,
+                <<"call">> => #{<<"kind">> => <<"local">>,
+                    <<"name">> => <<"setError">>, <<"arity">> => 1}}}],
+            maps:get(<<"evidence">>, Positive)),
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
+            symbolic_ask:run_result(Db, "does file JoinAccountModal.ts call missing/1?")),
+        {ok, MemberAnswer} = symbolic_ask:run_result(Db,
+            "does file JoinAccountModal.ts call form.setError/1?"),
+        ?assertEqual([#{<<"predicate">> => <<"calls">>,
+            <<"file">> => <<"JoinAccountModal.ts">>, <<"line">> => 4,
+            <<"fact">> => #{<<"caller">> => <<"JoinAccountModal/1">>,
+                <<"call">> => #{<<"kind">> => <<"member">>,
+                    <<"receiver">> => <<"form">>, <<"method">> => <<"setError">>,
+                    <<"arity">> => 1}}}], maps:get(<<"evidence">>, MemberAnswer)),
         ?assertMatch({error, {unverifiable, {no_such_file, _}}},
             symbolic_ask:run_result(Db, "does file nope.ts call setError/1?"))
     end).
@@ -645,8 +674,6 @@ pipeline_what_calls_test() ->
         ?assertEqual(true, maps:get(<<"evidence_complete">>, Answer)),
         ?assertEqual(1, length(maps:get(<<"evidence">>, Answer)))
     end).
-
-yes_no_true() -> #{<<"type">> => <<"yes_no">>, <<"answer">> => true}.
 
 tmp_db() ->
     filename:join(["/tmp", "symbolic_ask_tests_"

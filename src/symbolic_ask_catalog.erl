@@ -17,7 +17,7 @@ operations() ->
      operation(uses, yes_no, closed_world, source_location),
      operation(returns_mention, yes_no, closed_world, source_location),
      operation(handles_literal, yes_no, closed_world, source_location),
-     operation(calls_in_file, yes_no, closed_world, none),
+     operation(calls_in_file, yes_no, closed_world, source_location),
      operation(uses_in_file, yes_no, closed_world, source_location),
      operation(file_scanned, yes_no, scan_scope, source_location),
      operation(config_defined, yes_no, closed_world, source_location),
@@ -173,6 +173,8 @@ answer_shape(uses_in_file, yes_no) ->
     yes_no_evidence_shape(expr_ref_evidence_schema());
 answer_shape(handles_literal, yes_no) ->
     yes_no_evidence_shape(literal_evidence_schema());
+answer_shape(calls_in_file, yes_no) ->
+    yes_no_evidence_shape(call_evidence_schema());
 answer_shape(config_defined, yes_no) ->
     yes_no_evidence_shape(config_evidence_schema());
 answer_shape(file_scanned, yes_no) ->
@@ -363,6 +365,7 @@ evidence_mode(uses) -> witness;
 evidence_mode(returns_mention) -> witness_pair;
 evidence_mode(uses_in_file) -> witness;
 evidence_mode(handles_literal) -> witness;
+evidence_mode(calls_in_file) -> witness;
 evidence_mode(config_defined) -> witness;
 evidence_mode(file_scanned) -> witness;
 evidence_mode(call_sites) -> all_matches;
@@ -388,6 +391,8 @@ evidence_description(config_defined, source_location) ->
     <<"Returns one deterministic matching config_value fact; false answers have no witness.">>;
 evidence_description(handles_literal, source_location) ->
     <<"Returns one deterministic matching literal fact, including its kind and value; false answers have no witness.">>;
+evidence_description(calls_in_file, source_location) ->
+    <<"Returns one deterministic matching calls fact in the named file; false answers have no witness.">>;
 evidence_description(defines, source_location) ->
     <<"Returns one deterministic matching defines fact as a source witness; false answers have no witness.">>;
 evidence_description(call_sites, source_location) ->
