@@ -41,6 +41,7 @@
 -export([run_result/2, ask/2, map_tags/1, ident_candidates/1]).
 
 -define(GRAMMAR_FILE, "question_grammar.pl").
+-define(CALLER_EVIDENCE_LIMIT, 50).
 
 %% halt() belongs only here, at the CLI's edge — same rule as
 %% symbolic_query, symbolic_extract, symbolic_check, symbolic_search.
@@ -787,18 +788,9 @@ execute_answer(Pid, yes_no, {calls, Subject, Object}) ->
 %% when the question named no arity. MUST precede the general
 %% {defines, Ident} clause, which would otherwise swallow it.
 execute_answer(Pid, yes_no, {defines, {'/', Name, any}}) ->
-    case prolog_session:query(Pid, defines_goal(Name, "_")) of
-        {ok, _} -> {ok, yes_no_answer(true)};
-        no_solution -> {ok, yes_no_answer(false)};
-        {error, Reason} -> {error, {query_failed, Reason}}
-    end;
-execute_answer(Pid, yes_no, {defines, Ident}) ->
-    {'/', Name, Arity} = Ident,
-    case prolog_session:query(Pid, defines_goal(Name, Arity)) of
-        {ok, _} -> {ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => true}};
-        no_solution -> {ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => false}};
-        {error, Reason} -> {error, {query_failed, Reason}}
-    end;
+    definition_answer(Pid, Name, "A");
+execute_answer(Pid, yes_no, {defines, {'/', Name, Arity}}) ->
+    definition_answer(Pid, Name, integer_to_list(Arity));
 %% Enumeration: gate the callee, findall both call shapes, merge, dedup,
 %% sort — stable output whatever order load_facts' asserta left.
 execute_answer(Pid, enumerate, {callers_of, Object}) ->
@@ -811,10 +803,14 @@ execute_answer(Pid, count, {callers_of, Object}) ->
     case gate(Pid, Object, loose) of
         ok ->
             case enumerate_callers(Pid, Object) of
-                {ok, #{<<"answer">> := Callers}} ->
+                {ok, #{<<"answer">> := Callers,
+                       <<"evidence">> := Evidence,
+                       <<"evidence_complete">> := Complete}} ->
                     {ok, #{
                         <<"type">> => <<"count">>,
-                        <<"answer">> => length(Callers)
+                        <<"answer">> => length(Callers),
+                        <<"evidence">> => Evidence,
+                        <<"evidence_complete">> => Complete
                     }};
                 Other ->
                     Other
@@ -845,33 +841,16 @@ execute_answer(Pid, prose, Span) ->
 %% candidate name is tried until one proves; none does → false, which
 %% is an answer, not an error.
 execute_answer(Pid, yes_no, {uses, Subject, Candidates}) ->
-    case
-        bool_any(
-            Pid,
-            Candidates,
-            fun(C) -> expr_ref_anywhere(Subject, C) end
-        )
-    of
-        {ok, Bool} -> {ok, yes_no_answer(Bool)};
+    case expr_ref_evidence(Pid, Subject, Candidates, undefined) of
+        {ok, Evidence} -> {ok, yes_no_evidence_from_witness(Evidence)};
         Error -> Error
     end;
 %% uses with a file subject — any expr_ref of the name in a file whose
 %% basename matches the question's file name.
 execute_answer(Pid, yes_no, {uses_file, FileBin, Candidates}) ->
-    case
-        bool_any(
-            Pid,
-            Candidates,
-            fun(C) ->
-                "findall(F, expr_ref(_, _, _, " ++
-                    quoted_atom_name(C) ++ ", F, _), L)"
-            end
-        )
-    of
-        {ok, _} ->
-            {ok, yes_no_answer(file_hits(Pid, FileBin, Candidates))};
-        Error ->
-            Error
+    case file_expr_ref_evidence(Pid, Candidates, FileBin, []) of
+        {ok, Evidence} -> {ok, yes_no_evidence_from_witness(Evidence)};
+        Error -> Error
     end;
 %% returns — a valued return statement in the subject that references
 %% the name: the return_stmt ∧ expr_ref join from the plan, mention
@@ -882,60 +861,28 @@ execute_answer(Pid, yes_no, {uses_file, FileBin, Candidates}) ->
 %% defeating the very true→false flip the claims check. Multi-line
 %% return expressions are the accepted v1 blind spot.
 execute_answer(Pid, yes_no, {returns, Subject, Candidates}) ->
-    case return_lines(Pid, Subject) of
-        {ok, []} ->
-            {ok, yes_no_answer(false)};
-        {ok, Lines} ->
-            Found = lists:any(
-                fun(Line) ->
-                    ViaRef = mentions_at_line(
-                        Pid,
-                        Subject,
-                        Candidates,
-                        Line,
-                        fun expr_ref_goal/3
-                    ),
-                    ViaKey = mentions_at_line(
-                        Pid,
-                        Subject,
-                        Candidates,
-                        Line,
-                        fun object_key_goal/3
-                    ),
-                    mention_true(ViaRef) orelse mention_true(ViaKey)
-                end,
-                Lines
-            ),
-            {ok, yes_no_answer(Found)};
-        Error ->
-            Error
+    case return_mention_evidence(Pid, Subject, Candidates) of
+        {ok, []} -> {ok, yes_no_evidence(false, [])};
+        {ok, Evidence} -> {ok, yes_no_evidence(true, Evidence)};
+        Error -> Error
     end;
 %% handles — a branch-level literal whose value equals the name
 %% (case-insensitive), proving "maps/handles X" against literal/7.
 execute_answer(Pid, yes_no, {handles, {'/', SName, SArity}, Candidates}) ->
     %% literal/8: Id, Function, Arity, Kind, Value, File, Line, Raw
     %% (the tool description's literal/7 predates the Raw column).
-    Goal =
-        "findall(V, literal(_, " ++ quoted_atom_name(SName) ++
-            ", " ++ integer_to_list(SArity) ++ ", _, V, _, _, _), L)",
+    Goal = "findall(st(K, V, F, L), literal(_, " ++ quoted_atom_name(SName) ++
+        ", " ++ integer_to_list(SArity) ++ ", K, V, F, L, _), Literals)",
     case prolog_session:query(Pid, Goal) of
         {ok, Bindings} ->
-            Values = proplists:get_value('L', Bindings, []),
-            Wanted = [string:lowercase(binary_to_list(C)) || C <- Candidates],
-            Found = lists:any(
-                fun(V) ->
-                    case flatten_value(V) of
-                        nomatch -> false;
-                        Flat -> lists:member(string:lowercase(Flat), Wanted)
-                    end
-                end,
-                Values
-            ),
-            {ok, yes_no_answer(Found)};
-        no_solution ->
-            {ok, yes_no_answer(false)};
-        {error, Reason} ->
-            {error, {query_failed, Reason}}
+            Literals = proplists:get_value('Literals', Bindings, []),
+            Evidence = lists:sort(fun evidence_before/2,
+                [literal_evidence(SName, SArity, K, V, F, L)
+                 || {'st', K, V, F, L} <- Literals,
+                    literal_matches(V, Candidates)]),
+            {ok, yes_no_evidence_from_witness(Evidence)};
+        no_solution -> {ok, yes_no_evidence(false, [])};
+        {error, Reason} -> {error, {query_failed, Reason}}
     end;
 %% sites — WHERE is X called: every call site as {caller, file, line},
 %% all three call shapes merged, deduped, sorted by file then line.
@@ -1004,15 +951,26 @@ execute_answer(Pid, yes_no, {calls_file, FileBin, Object}) ->
 %% is file F scanned? — the gate IS the proof: the basename appears in
 %% any fact's File field (defines, comments, paragraphs, config).
 execute_answer(Pid, yes_no, {file_scanned, FileWords}) ->
-    case file_scanned_check(Pid, FileWords) of
-        {ok, Bool} -> {ok, yes_no_answer(Bool)};
+    case file_scanned_evidence(Pid, file_segment(FileWords)) of
+        {ok, Evidence} -> {ok, yes_no_evidence_from_witness(Evidence)};
         Error -> Error
     end;
 %% is config K defined? — exact dotted key against config_value/4.
 execute_answer(Pid, yes_no, {config_defined, KeyWords}) ->
     Key = file_segment(KeyWords),
-    Goal = "config_value(_, " ++ quoted_atom_name(Key) ++ ", _, _)",
-    bool_answer(Pid, Goal);
+    Goal = "findall(st(F, V, L), config_value(F, " ++ quoted_atom_name(Key) ++
+        ", V, L), ConfigFacts)",
+    case prolog_session:query(Pid, Goal) of
+        {ok, Bindings} ->
+            Evidence = lists:sort(fun evidence_before/2,
+                [source_evidence(<<"config_value">>, File, Line,
+                    #{<<"key">> => to_bin(Key), <<"value">> => to_bin(Value)})
+                 || {'st', File, Value, Line} <-
+                    proplists:get_value('ConfigFacts', Bindings, [])]),
+            {ok, yes_no_evidence_from_witness(Evidence)};
+        no_solution -> {ok, yes_no_evidence(false, [])};
+        {error, Reason} -> {error, {query_failed, Reason}}
+    end;
 execute_answer(_Pid, Type, Rel) ->
     {error, {unknown_question_shape, Type, Rel}}.
 
@@ -1048,22 +1006,36 @@ definition_site_entry(_Other) ->
     #{}.
 
 file_scanned_check(Pid, FileWords) ->
-    Base = file_segment(FileWords),
-    %% Each source queried separately: a fact base may not carry every
-    %% predicate (paragraph/3 is markdown-only), and an unknown
-    %% predicate is an empty source, not an error.
-    Sources = [
-        "findall(F, defines(_, _, _, F, _), L)",
-        "findall(F, comment(F, _, _), L)",
-        "findall(F, paragraph(F, _, _), L)",
-        "findall(F, config_value(F, _, _, _), L)"
-    ],
-    Files = lists:append([files_from(Pid, G) || G <- Sources]),
-    {ok, lists:any(fun(F) -> file_matches(F, Base) end, Files)}.
+    case file_scanned_evidence(Pid, file_segment(FileWords)) of
+        {ok, []} -> {ok, false};
+        {ok, _Evidence} -> {ok, true};
+        Error -> Error
+    end.
 
-files_from(Pid, Goal) ->
+file_scanned_evidence(Pid, Base) ->
+    Defines = source_fact_entries(Pid,
+        "findall(st(N, A, F, Line), defines(N, A, _, F, Line), L)",
+        fun({'st', N, A, F, L}) -> source_evidence(<<"defines">>, F, L,
+            #{<<"function">> => render_ident({'-', N, A})}) end),
+    Comments = source_fact_entries(Pid,
+        "findall(st(F, Line, T), comment(F, Line, T), L)",
+        fun({'st', F, L, T}) -> source_evidence(<<"comment">>, F, L,
+            #{<<"text">> => to_bin(T)}) end),
+    Paragraphs = source_fact_entries(Pid,
+        "findall(st(F, Line, T), paragraph(F, Line, T), L)",
+        fun({'st', F, L, T}) -> source_evidence(<<"paragraph">>, F, L,
+            #{<<"text">> => to_bin(T)}) end),
+    Config = source_fact_entries(Pid,
+        "findall(st(F, K, V, Line), config_value(F, K, V, Line), L)",
+        fun({'st', F, K, V, L}) -> source_evidence(<<"config_value">>, F, L,
+            #{<<"key">> => to_bin(K), <<"value">> => to_bin(V)}) end),
+    Matches = [Entry || Entry <- Defines ++ Comments ++ Paragraphs ++ Config,
+        file_matches(maps:get(<<"file">>, Entry), Base)],
+    {ok, lists:sort(fun evidence_before/2, Matches)}.
+
+source_fact_entries(Pid, Goal, Convert) ->
     case prolog_session:query(Pid, Goal) of
-        {ok, Bindings} -> proplists:get_value('L', Bindings, []);
+        {ok, Bindings} -> [Convert(Fact) || Fact <- proplists:get_value('L', Bindings, [])];
         _ -> []
     end.
 
@@ -1087,90 +1059,83 @@ flatten_value(V) when is_list(V) ->
 flatten_value(_) ->
     nomatch.
 
-bool_answer(Pid, Goal) ->
+literal_matches(Value, Candidates) ->
+    case flatten_value(Value) of
+        nomatch -> false;
+        Flat -> lists:member(string:lowercase(Flat),
+            [string:lowercase(binary_to_list(to_bin(C))) || C <- Candidates])
+    end.
+
+literal_evidence(Name, Arity, Kind, Value, File, Line) ->
+    #{<<"predicate">> => <<"literal">>, <<"file">> => to_bin(File),
+      <<"line">> => Line,
+      <<"fact">> => #{<<"function">> => render_ident({'-', Name, Arity}),
+          <<"kind">> => to_bin(Kind), <<"value">> => to_bin(Value)}}.
+
+return_mention_evidence(Pid, {'/', Name, Arity}, Candidates) ->
+    NameText = quoted_atom_name(Name),
+    ArityText = integer_to_list(Arity),
+    ReturnGoal = "findall(st(F, Line), return_stmt(" ++ NameText ++ ", " ++
+        ArityText ++ ", true, F, Line), ReturnFacts)",
+    RefGoal = "findall(st(Identifier, F, Line), expr_ref(_, " ++ NameText ++
+        ", " ++ ArityText ++ ", Identifier, F, Line), RefFacts)",
+    KeyGoal = "findall(st(Key, F, Line), object_key(" ++ NameText ++ ", " ++
+        ArityText ++ ", Key, F, Line), KeyFacts)",
+    case query_fact_list(Pid, ReturnGoal, 'ReturnFacts') of
+        {ok, ReturnFacts} ->
+            case query_fact_list(Pid, RefGoal, 'RefFacts') of
+                {ok, RefFacts} ->
+                    case query_fact_list(Pid, KeyGoal, 'KeyFacts') of
+                        {ok, KeyFacts} ->
+                            {ok, return_witness_pair(Name, Arity, Candidates,
+                                ReturnFacts, RefFacts, KeyFacts)};
+                        Error -> Error
+                    end;
+                Error -> Error
+            end;
+        Error -> Error
+    end.
+
+query_fact_list(Pid, Goal, Binding) ->
     case prolog_session:query(Pid, Goal) of
-        {ok, _} -> {ok, yes_no_answer(true)};
-        no_solution -> {ok, yes_no_answer(false)};
-        {error, Reason} -> {error, {query_failed, Reason}}
-    end.
-
-bool_any(_Pid, [], _GoalFun) ->
-    {ok, false};
-bool_any(Pid, [C | Rest], GoalFun) ->
-    case prolog_session:query(Pid, GoalFun(C)) of
-        {ok, _} -> {ok, true};
-        no_solution -> bool_any(Pid, Rest, GoalFun);
-        {error, Reason} -> {error, Reason}
-    end.
-
-expr_ref_goal({'/', SName, SArity}, Candidate, Line) ->
-    "expr_ref(_, " ++ quoted_atom_name(SName) ++ ", " ++
-        integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate) ++
-        ", _, " ++ integer_to_list(Line) ++ ")".
-
-%% uses stays function-level: "does X use W" asks whether X's code
-%% mentions W anywhere, unlike returns which is line-scoped.
-expr_ref_anywhere({'/', SName, SArity}, Candidate) ->
-    "expr_ref(_, " ++ quoted_atom_name(SName) ++ ", " ++
-        integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate) ++
-        ", _, _)".
-
-%% HasValue is the extractor's string "true" (a charlist in erlog),
-%% not the atom — matching the atom proves nothing and answers a
-%% confident false about real returns.
-%% HasValue is the atom true (erlog's printer quotes every atom, which
-%% once masqueraded as a string and sent this goal chasing "true").
-object_key_goal({'/', SName, SArity}, Candidate, Line) ->
-    "object_key(" ++ quoted_atom_name(SName) ++ ", " ++
-        integer_to_list(SArity) ++ ", " ++ quoted_atom_name(Candidate) ++
-        ", _, " ++ integer_to_list(Line) ++ ")".
-
-mentions_at_line(Pid, Subject, Candidates, Line, GoalFun) ->
-    bool_any_lenient(Pid, Candidates, fun(C) -> GoalFun(Subject, C, Line) end).
-
-mention_true({ok, Bool}) -> Bool;
-mention_true(_) -> false.
-
-%% Like bool_any, but a predicate absent from the fact base counts as
-%% an empty source instead of failing the question.
-bool_any_lenient(_Pid, [], _GoalFun) ->
-    {ok, false};
-bool_any_lenient(Pid, [C | Rest], GoalFun) ->
-    case prolog_session:query(Pid, GoalFun(C)) of
-        {ok, _} -> {ok, true};
-        no_solution -> bool_any_lenient(Pid, Rest, GoalFun);
-        {error, {existence_error, procedure, _}} -> bool_any_lenient(Pid, Rest, GoalFun);
-        {error, Reason} -> {error, Reason}
-    end.
-
-return_lines(Pid, {'/', SName, SArity}) ->
-    Goal =
-        "findall(L, return_stmt(" ++ quoted_atom_name(SName) ++ ", " ++
-            integer_to_list(SArity) ++ ", true, _, L), Ls)",
-    case prolog_session:query(Pid, Goal) of
-        {ok, Bindings} -> {ok, proplists:get_value('Ls', Bindings, [])};
+        {ok, Bindings} -> {ok, proplists:get_value(Binding, Bindings, [])};
         no_solution -> {ok, []};
         {error, {existence_error, procedure, _}} -> {ok, []};
         {error, Reason} -> {error, Reason}
     end.
 
-file_hits(Pid, FileBin, Candidates) ->
-    Hit = lists:any(
-        fun(C) ->
-            Goal =
-                "findall(F, expr_ref(_, _, _, " ++
-                    quoted_atom_name(C) ++ ", F, _), L)",
-            case prolog_session:query(Pid, Goal) of
-                {ok, Bindings} ->
-                    Files = proplists:get_value('L', Bindings, []),
-                    lists:any(fun(F) -> file_matches(F, FileBin) end, Files);
-                _ ->
-                    false
-            end
-        end,
-        Candidates
-    ),
-    Hit.
+return_witness_pair(Name, Arity, Candidates, ReturnFacts, RefFacts, KeyFacts) ->
+    CandidateSet = [to_bin(Candidate) || Candidate <- Candidates],
+    MentionFacts =
+        [{<<"expr_ref">>, Identifier, File, Line}
+         || {'st', Identifier, File, Line} <- RefFacts,
+            lists:member(to_bin(Identifier), CandidateSet)] ++
+        [{<<"object_key">>, Key, File, Line}
+         || {'st', Key, File, Line} <- KeyFacts,
+            lists:member(to_bin(Key), CandidateSet)],
+    Pairs = [[return_stmt_evidence(Name, Arity, ReturnFile, ReturnLine),
+              return_mention_fact(Name, Arity, Predicate, NameOrKey, File, Line)]
+        || {'st', ReturnFile, ReturnLine} <- ReturnFacts,
+           {Predicate, NameOrKey, File, Line} <- MentionFacts,
+           ReturnLine =:= Line],
+    case lists:sort([lists:sort(fun evidence_before/2, Pair) || Pair <- Pairs]) of
+        [] -> [];
+        [WitnessPair | _] -> WitnessPair
+    end.
+
+return_stmt_evidence(Name, Arity, File, Line) ->
+    source_evidence(<<"return_stmt">>, File, Line,
+        #{<<"function">> => render_ident({'-', Name, Arity}),
+          <<"has_value">> => true}).
+
+return_mention_fact(Name, Arity, <<"expr_ref">>, Identifier, File, Line) ->
+    source_evidence(<<"expr_ref">>, File, Line,
+        #{<<"function">> => render_ident({'-', Name, Arity}),
+          <<"identifier">> => to_bin(Identifier)});
+return_mention_fact(Name, Arity, <<"object_key">>, Key, File, Line) ->
+    source_evidence(<<"object_key">>, File, Line,
+        #{<<"function">> => render_ident({'-', Name, Arity}),
+          <<"key">> => to_bin(Key)}).
 
 %% --- the gate: verifiability decided BEFORE proving ---
 
@@ -1224,28 +1189,167 @@ defines_goal(Name, ArityText) when is_list(ArityText) ->
 
 %% --- proving helpers ---
 
-yes_no_calls(Pid, {'/', SName, SArity}, {'/', OName, OArity}) ->
-    OArityText = arity_text(OArity),
-    Local =
-        "calls(" ++ quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity) ++
-            ", local(" ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++
-            "), _, _)",
-    Remote =
-        "calls(" ++ quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity) ++
-            ", remote(_, " ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++
-            "), _, _)",
-    case prolog_session:query(Pid, Local) of
-        {ok, _} ->
-            {ok, yes_no_answer(true)};
-        no_solution ->
-            case prolog_session:query(Pid, Remote) of
-                {ok, _} -> {ok, yes_no_answer(true)};
-                no_solution -> yes_no_member(Pid, SName, SArity, OName, OArityText);
-                {error, Reason} -> {error, {query_failed, Reason}}
-            end;
-        {error, Reason} ->
-            {error, {query_failed, Reason}}
+yes_no_calls(Pid, Caller, Callee) ->
+    case all_call_evidence(Pid, Caller, Callee) of
+        {ok, []} -> {ok, call_answer(false, [])};
+        {ok, [Witness | _]} -> {ok, call_answer(true, [Witness])};
+        Error -> Error
     end.
+
+all_call_evidence(Pid, {'/', SName, SArity}, {'/', OName, OArity}) ->
+    OArityText = call_arity(OArity),
+    CallerText = quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity),
+    LocalGoal = "findall(st(local, " ++ OArityText ++ ", F, L), calls(" ++ CallerText ++
+        ", local(" ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++
+        "), F, L), L1)",
+    RemoteGoal = ", findall(st(remote, M, " ++ OArityText ++ ", F, L), calls(" ++ CallerText ++
+        ", remote(M, " ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++
+        "), F, L), L2)",
+    {MemberGoal, RemoteDottedGoal} = call_shape_goals(
+        CallerText, OName, OArityText),
+    Goal = LocalGoal ++ RemoteGoal ++ MemberGoal ++ RemoteDottedGoal,
+    case prolog_session:query(Pid, Goal) of
+        {ok, Bindings} ->
+            Local = proplists:get_value('L1', Bindings, []),
+            Remote = proplists:get_value('L2', Bindings, []),
+            Member = proplists:get_value('L3', Bindings, []),
+            RemoteDotted = proplists:get_value('L4', Bindings, []),
+            {ok, lists:sort(fun evidence_before/2,
+                [call_evidence(Item, SName, SArity, OName, OArity)
+                 || Item <- Local ++ Remote ++ Member ++ RemoteDotted])};
+        no_solution -> {error, {findall_never_fails, calls}};
+        {error, Reason} -> {error, {query_failed, Reason}}
+    end.
+
+call_shape_goals(Caller, OName, OArityText) ->
+    case split_receiver_method(OName) of
+        {Receiver, Method} ->
+            ReceiverText = quoted_atom_name(Receiver),
+            MethodText = quoted_atom_name(Method),
+            Member = ", findall(st(member, " ++ OArityText ++ ", F, L), calls(" ++ Caller ++
+                ", member(" ++ ReceiverText ++ ", " ++ MethodText ++
+                ", " ++ OArityText ++ "), F, L), L3)",
+            RemoteDotted = ", findall(st(remote_dotted, " ++ ReceiverText ++ ", " ++ MethodText ++
+                ", " ++ OArityText ++ ", F, L), calls(" ++ Caller ++
+                ", remote(" ++ ReceiverText ++ ", " ++ MethodText ++
+                ", " ++ OArityText ++ "), F, L), L4)",
+            {Member, RemoteDotted};
+        none -> {"", ""}
+    end.
+
+call_evidence({'st', local, Arity, File, Line}, SName, SArity, OName, _OArity) ->
+    call_evidence_entry(SName, SArity, File, Line,
+        #{<<"kind">> => <<"local">>, <<"name">> => to_bin(OName),
+          <<"arity">> => Arity});
+call_evidence({'st', remote, Module, Arity, File, Line}, SName, SArity, OName, _OArity) ->
+    call_evidence_entry(SName, SArity, File, Line,
+        #{<<"kind">> => <<"remote">>, <<"module">> => to_bin(Module),
+          <<"name">> => to_bin(OName), <<"arity">> => Arity});
+call_evidence({'st', member, Arity, File, Line},
+        SName, SArity, OName, _OArity) ->
+    {Receiver, Method} = split_receiver_method(OName),
+    call_evidence_entry(SName, SArity, File, Line,
+        #{<<"kind">> => <<"member">>, <<"receiver">> => to_bin(Receiver),
+          <<"method">> => to_bin(Method), <<"arity">> => Arity});
+call_evidence({'st', remote_dotted, Module, Name, Arity, File, Line},
+        SName, SArity, _OName, _OArity) ->
+    call_evidence_entry(SName, SArity, File, Line,
+        #{<<"kind">> => <<"remote">>, <<"module">> => to_bin(Module),
+          <<"name">> => to_bin(Name), <<"arity">> => Arity}).
+
+call_evidence_entry(SName, SArity, File, Line, Call) ->
+    #{<<"predicate">> => <<"calls">>,
+      <<"file">> => to_bin(File),
+      <<"line">> => Line,
+      <<"fact">> => #{<<"caller">> => render_ident({'-', SName, SArity}),
+          <<"call">> => Call}}.
+
+definition_answer(Pid, Name, ArityText) ->
+    Goal = "findall(st(" ++ ArityText ++ ", F, L), defines(" ++
+        quoted_atom_name(Name) ++ ", " ++ ArityText ++ ", _, F, L), L1)",
+    case prolog_session:query(Pid, Goal) of
+        {ok, Bindings} ->
+            Entries = [definition_evidence(Name, A, F, L)
+                || {'st', A, F, L} <- proplists:get_value('L1', Bindings, [])],
+            case lists:sort(fun evidence_before/2, Entries) of
+                [] -> {ok, yes_no_evidence(false, [])};
+                [Witness | _] -> {ok, yes_no_evidence(true, [Witness])}
+            end;
+        no_solution -> {error, {findall_never_fails, defines}};
+        {error, Reason} -> {error, {query_failed, Reason}}
+    end.
+
+definition_evidence(Name, Arity, File, Line) ->
+    #{<<"predicate">> => <<"defines">>, <<"file">> => to_bin(File),
+      <<"line">> => Line,
+      <<"fact">> => #{<<"function">> => render_ident({'-', Name, Arity})}}.
+
+yes_no_evidence(Bool, Evidence) ->
+    #{<<"type">> => <<"yes_no">>, <<"answer">> => Bool,
+      <<"evidence">> => Evidence}.
+
+evidence_before(A, B) ->
+    {maps:get(<<"file">>, A), maps:get(<<"line">>, A), maps:get(<<"fact">>, A)} =<
+        {maps:get(<<"file">>, B), maps:get(<<"line">>, B), maps:get(<<"fact">>, B)}.
+
+call_answer(Bool, Evidence) ->
+    #{<<"type">> => <<"yes_no">>, <<"answer">> => Bool,
+      <<"evidence">> => Evidence}.
+
+yes_no_evidence_from_witness([]) -> yes_no_evidence(false, []);
+yes_no_evidence_from_witness([Witness | _]) -> yes_no_evidence(true, [Witness]).
+
+expr_ref_evidence(Pid, Subject = {'/', SName, SArity}, Candidates, FileFilter) ->
+    collect_expr_ref_candidates(Pid, Subject, SName, SArity,
+        Candidates, FileFilter, []).
+
+collect_expr_ref_candidates(_Pid, _Subject, _Name, _Arity, [], _FileFilter, Acc) ->
+    {ok, lists:sort(fun evidence_before/2, Acc)};
+collect_expr_ref_candidates(Pid, Subject, Name, Arity, [Candidate | Rest], FileFilter, Acc) ->
+    Goal = "findall(st(F, L), expr_ref(_, " ++ quoted_atom_name(Name) ++ ", " ++
+        integer_to_list(Arity) ++ ", " ++ quoted_atom_name(Candidate) ++ ", F, L), Hits)",
+    case prolog_session:query(Pid, Goal) of
+        {ok, Bindings} ->
+            Entries = [expr_ref_entry(Subject, Candidate, File, Line)
+                || {'st', File, Line} <- proplists:get_value('Hits', Bindings, []),
+                   matches_optional_file(File, FileFilter)],
+            collect_expr_ref_candidates(Pid, Subject, Name, Arity, Rest,
+                FileFilter, Entries ++ Acc);
+        no_solution ->
+            collect_expr_ref_candidates(Pid, Subject, Name, Arity, Rest,
+                FileFilter, Acc);
+        {error, Reason} -> {error, Reason}
+    end.
+
+expr_ref_entry({'/', Name, Arity}, Candidate, File, Line) ->
+    source_evidence(<<"expr_ref">>, File, Line,
+        #{<<"function">> => render_ident({'-', Name, Arity}),
+          <<"identifier">> => to_bin(Candidate)}).
+
+file_expr_ref_evidence(_Pid, [], _FileFilter, Acc) ->
+    {ok, lists:sort(fun evidence_before/2, Acc)};
+file_expr_ref_evidence(Pid, [Candidate | Rest], FileFilter, Acc) ->
+    Goal = "findall(st(N, A, F, L), expr_ref(_, N, A, " ++
+        quoted_atom_name(Candidate) ++ ", F, L), Hits)",
+    case prolog_session:query(Pid, Goal) of
+        {ok, Bindings} ->
+            Entries = [source_evidence(<<"expr_ref">>, File, Line,
+                #{<<"function">> => render_ident({'-', Name, Arity}),
+                  <<"identifier">> => to_bin(Candidate)})
+                || {'st', Name, Arity, File, Line} <-
+                    proplists:get_value('Hits', Bindings, []),
+                   file_matches(File, FileFilter)],
+            file_expr_ref_evidence(Pid, Rest, FileFilter, Entries ++ Acc);
+        no_solution -> file_expr_ref_evidence(Pid, Rest, FileFilter, Acc);
+        {error, Reason} -> {error, Reason}
+    end.
+
+matches_optional_file(_File, undefined) -> true;
+matches_optional_file(File, Filter) -> file_matches(File, Filter).
+
+source_evidence(Predicate, File, Line, Fact) ->
+    #{<<"predicate">> => Predicate, <<"file">> => to_bin(File),
+      <<"line">> => Line, <<"fact">> => Fact}.
 
 enumerate_callers(Pid, {'/', OName, OArity}) ->
     OArityText = arity_text(OArity),
@@ -1263,65 +1367,53 @@ enumerate_callers(Pid, {'/', OName, OArity}) ->
             Callers = lists:usort(
                 [render_ident(I) || I <- L1 ++ L2 ++ L3 ++ L4]
             ),
-            {ok, #{<<"type">> => <<"enumerate">>, <<"answer">> => Callers}};
+            case caller_evidence(Pid, Callers, {'/', OName, OArity}) of
+                {ok, Evidence, Complete} ->
+                    {ok, #{<<"type">> => <<"enumerate">>,
+                        <<"answer">> => Callers,
+                        <<"evidence">> => Evidence,
+                        <<"evidence_complete">> => Complete}};
+                Error -> Error
+            end;
         no_solution ->
             {error, {findall_never_fails, callers_of}};
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end.
 
-%% Method calls (`supabase.auth.verifyOtp(...)`) are stored as
-%% calls(..., member(Receiver, Method, Arity), ...). A dotted object
-%% name splits at the last dot into receiver.method — matching how the
-%% extractor records chained receivers (`this.baz` → receiver
-%% `this.baz`). Without this third probe the question would prove
-%% nothing and answer a confident false about a call the fact base
-%% does hold — the exact silent-wrong failure this pipeline exists to
-%% prevent.
-yes_no_member(Pid, SName, SArity, OName, OArityText) ->
-    case split_receiver_method(OName) of
-        {Receiver, Method} ->
-            Member =
-                "calls(" ++ quoted_atom_name(SName) ++ ", " ++
-                    integer_to_list(SArity) ++ ", member(" ++
-                    quoted_atom_name(Receiver) ++ ", " ++
-                    quoted_atom_name(Method) ++ ", " ++ OArityText ++
-                    "), _, _)",
-            case prolog_session:query(Pid, Member) of
-                {ok, _} ->
-                    {ok, yes_no_answer(true)};
-                no_solution ->
-                    dotted_remote_probe(
-                        Pid,
-                        SName,
-                        SArity,
-                        Receiver,
-                        Method,
-                        OArityText
-                    );
-                {error, Reason} ->
-                    {error, {query_failed, Reason}}
+caller_evidence(Pid, Callers, Object) ->
+    Covered = lists:sublist(Callers, ?CALLER_EVIDENCE_LIMIT),
+    case caller_evidence_for(Pid, Covered, Object, []) of
+        {ok, Evidence} ->
+            {ok, Evidence, length(Callers) =< ?CALLER_EVIDENCE_LIMIT};
+        Error -> Error
+    end.
+
+caller_evidence_for(_Pid, [], _Object, Acc) ->
+    {ok, lists:sort(fun evidence_before/2, Acc)};
+caller_evidence_for(Pid, [Caller | Rest], Object, Acc) ->
+    case split_rendered_ident(Caller) of
+        {ok, CallerIdent} ->
+            case all_call_evidence(Pid, CallerIdent, Object) of
+                {ok, [Witness | _]} ->
+                    caller_evidence_for(Pid, Rest, Object, [Witness | Acc]);
+                {ok, []} -> {error, {missing_caller_witness, Caller}};
+                Error -> Error
             end;
-        none ->
-            {ok, yes_no_answer(false)}
+        error -> {error, {invalid_caller_identity, Caller}}
     end.
 
-%% A dotted name is ambiguous between a method call (obj.method) and an
-%% Erlang remote call (module:function) — the fact base decides. Without
-%% the remote probe, "does handle_query/1 call maps.get/2?" answers a
-%% confident false about a real remote call.
-dotted_remote_probe(Pid, SName, SArity, Receiver, Method, OArityText) ->
-    Remote =
-        "calls(" ++ quoted_atom_name(SName) ++ ", " ++
-            integer_to_list(SArity) ++ ", remote(" ++
-            quoted_atom_name(Receiver) ++ ", " ++
-            quoted_atom_name(Method) ++ ", " ++ OArityText ++ "), _, _)",
-    case prolog_session:query(Pid, Remote) of
-        {ok, _} -> {ok, yes_no_answer(true)};
-        no_solution -> {ok, yes_no_answer(false)};
-        {error, Reason} -> {error, {query_failed, Reason}}
+split_rendered_ident(Ident) when is_binary(Ident) ->
+    case binary:split(Ident, <<"/">>) of
+        [Name, ArityBin] ->
+            try {ok, {'/', Name, binary_to_integer(ArityBin)}}
+            catch error:badarg -> error end;
+        _ -> error
     end.
 
+%% Dotted names can denote a member receiver/method or a remote
+%% module/function. The evidence query tests both shapes and preserves
+%% the actual CallSpec in its witness.
 split_receiver_method(Name) when is_atom(Name) ->
     split_receiver_method(atom_to_binary(Name, utf8));
 split_receiver_method(Name) when is_binary(Name) ->
@@ -1362,12 +1454,17 @@ yes_no_answer(Bool) ->
     #{<<"type">> => <<"yes_no">>, <<"answer">> => Bool}.
 
 render_ident({'-', Name, Arity}) when is_atom(Name) ->
-    iolist_to_binary([atom_to_list(Name), "/", integer_to_list(Arity)]).
+    iolist_to_binary([atom_to_list(Name), "/", integer_to_list(Arity)]);
+render_ident({'-', Name, Arity}) when is_binary(Name) ->
+    iolist_to_binary([Name, "/", integer_to_list(Arity)]).
 
 %% `any` (statistical tier, arity not pinned by the question) proves
 %% against an unbound Prolog variable — every arity counts.
 arity_text(any) -> "_";
 arity_text(N) when is_integer(N) -> integer_to_list(N).
+
+call_arity(any) -> "A";
+call_arity(N) when is_integer(N) -> integer_to_list(N).
 
 %% The DCG hands erlog already-legal atoms (the tokenizer guarantees
 %% lowercase-start); the statistical tier hands binaries that may carry

@@ -229,7 +229,16 @@ ask_yes_no_call_against_parsed_cache(_Setup) ->
         Json = decode(symbolic_serve:handle_ask(#{
             <<"question">> => <<"does shout/1 call capitalize/1?">>})),
         ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"yes_no">>,
-                                     <<"answer">> := true}}, Json)
+                                     <<"answer">> := true,
+                                     <<"evidence">> := [#{
+                                         <<"predicate">> := <<"calls">>,
+                                         <<"file">> := _, <<"line">> := 19,
+                                         <<"fact">> := #{
+                                             <<"caller">> := <<"shout/1">>,
+                                             <<"call">> := #{
+                                                 <<"kind">> := <<"local">>,
+                                                 <<"name">> := <<"capitalize">>,
+                                                 <<"arity">> := 1}}}]}}, Json)
     end.
 
 ask_count_and_enumerate_shapes(_Setup) ->

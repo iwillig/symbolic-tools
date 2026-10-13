@@ -37,18 +37,39 @@ with_db(Facts, Body) ->
 
 yes_no_call_true_across_both_call_shapes_test() ->
     with_db(facts(), fun(Db) ->
-        %% One question proves BOTH the local shape and the remote shape
-        %% are covered: foo/2's call to bar/1 is local, to halt/1 remote.
-        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => true}},
-            symbolic_ask:run_result(Db, "does foo/2 call bar/1?")),
-        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => true}},
-            symbolic_ask:run_result(Db, "does foo/2 call halt/1?"))
+        %% The answer keeps its yes/no fields and cites a matching fact.
+        {ok, Local} = symbolic_ask:run_result(Db, "does foo/2 call bar/1?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Local)),
+        [LocalWitness] = maps:get(<<"evidence">>, Local),
+        ?assertEqual(#{
+            <<"predicate">> => <<"calls">>,
+            <<"file">> => <<"p.erl">>,
+            <<"line">> => 10,
+            <<"fact">> => #{
+                <<"caller">> => <<"foo/2">>,
+                <<"call">> => #{<<"kind">> => <<"local">>,
+                    <<"name">> => <<"bar">>, <<"arity">> => 1}}},
+            LocalWitness),
+        {ok, Remote} = symbolic_ask:run_result(Db, "does foo/2 call halt/1?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Remote)),
+        [RemoteWitness] = maps:get(<<"evidence">>, Remote),
+        ?assertEqual(#{
+            <<"predicate">> => <<"calls">>,
+            <<"file">> => <<"p.erl">>,
+            <<"line">> => 11,
+            <<"fact">> => #{
+                <<"caller">> => <<"foo/2">>,
+                <<"call">> => #{<<"kind">> => <<"remote">>,
+                    <<"module">> => <<"erlang">>,
+                    <<"name">> => <<"halt">>, <<"arity">> => 1}}},
+            RemoteWitness)
     end).
 
 yes_no_call_false_is_an_answer_not_an_error_test() ->
     with_db(facts(), fun(Db) ->
         %% baz/3 exists and calls bar/1, but baz/3 does NOT call halt/1.
-        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => false}},
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
             symbolic_ask:run_result(Db, "does baz/3 call halt/1?"))
     end).
 
@@ -61,24 +82,58 @@ who_calls_alias_parses_like_which_functions_test() ->
 
 enumerate_lists_distinct_callers_sorted_test() ->
     with_db(facts(), fun(Db) ->
-        {ok, #{<<"type">> := <<"enumerate">>, <<"answer">> := Callers}} =
+        {ok, #{<<"type">> := <<"enumerate">>, <<"answer">> := Callers,
+               <<"evidence">> := Evidence, <<"evidence_complete">> := Complete}} =
             symbolic_ask:run_result(Db, "which functions call bar/1?"),
-        ?assertEqual([<<"baz/3">>, <<"foo/2">>], Callers)
+        ?assertEqual([<<"baz/3">>, <<"foo/2">>], Callers),
+        ?assertEqual(true, Complete),
+        ?assertEqual(2, length(Evidence)),
+        ?assertEqual([<<"foo/2">>, <<"baz/3">>],
+            [maps:get(<<"caller">>, maps:get(<<"fact">>, E)) || E <- Evidence]),
+        ?assertEqual([10, 12], [maps:get(<<"line">>, E) || E <- Evidence]),
+        ?assert(lists:all(fun(E) -> maps:get(<<"predicate">>, E) =:= <<"calls">> end,
+            Evidence))
     end).
 
 count_counts_distinct_functions_test() ->
     with_db(facts(), fun(Db) ->
-        ?assertEqual({ok, #{<<"type">> => <<"count">>, <<"answer">> => 2}},
-            symbolic_ask:run_result(Db, "how many functions call bar/1?"))
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "how many functions call bar/1?"),
+        ?assertEqual(2, maps:get(<<"answer">>, Answer)),
+        ?assertEqual(true, maps:get(<<"evidence_complete">>, Answer)),
+        ?assertEqual(2, length(maps:get(<<"evidence">>, Answer)))
+    end).
+
+caller_evidence_is_capped_and_reports_incompleteness_test() ->
+    Callers = [list_to_atom("caller_" ++ integer_to_list(N)) || N <- lists:seq(1, 52)],
+    CallFacts = [{calls, Caller, 1, {local, bar, 1}, 'callers.erl', N + 1}
+        || {Caller, N} <- lists:zip(Callers, lists:seq(1, 52))],
+    with_db([{defines, bar, 1, [], "bar.erl", 1} | CallFacts], fun(Db) ->
+        {ok, Enumerated} = symbolic_ask:run_result(Db,
+            "which functions call bar/1?"),
+        ?assertEqual(52, length(maps:get(<<"answer">>, Enumerated))),
+        ?assertEqual(50, length(maps:get(<<"evidence">>, Enumerated))),
+        ?assertEqual(false, maps:get(<<"evidence_complete">>, Enumerated)),
+        {ok, Counted} = symbolic_ask:run_result(Db,
+            "how many functions call bar/1?"),
+        ?assertEqual(52, maps:get(<<"answer">>, Counted)),
+        ?assertEqual(50, length(maps:get(<<"evidence">>, Counted))),
+        ?assertEqual(false, maps:get(<<"evidence_complete">>, Counted))
     end).
 
 is_defined_true_and_false_test() ->
     with_db(facts(), fun(Db) ->
-        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => true}},
-            symbolic_ask:run_result(Db, "is foo/2 defined?")),
-        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => false}},
+        {ok, Defined} = symbolic_ask:run_result(Db, "is foo/2 defined?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Defined)),
+        [Definition] = maps:get(<<"evidence">>, Defined),
+        ?assertEqual(#{<<"predicate">> => <<"defines">>,
+            <<"file">> => <<"p.erl">>, <<"line">> => 1,
+            <<"fact">> => #{<<"function">> => <<"foo/2">>}}, Definition),
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
             symbolic_ask:run_result(Db, "is zzz/9 defined?")),
-        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => false}},
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
             symbolic_ask:run_result(Db, "does zzz/9 exist?"))
     end).
 
@@ -128,10 +183,12 @@ stdlib_callee_without_defines_passes_the_gate_test() ->
     with_db(facts(), fun(Db) ->
         %% halt/1 has no defines/5 fact (it's stdlib) and must still be
         %% answerable — the loose gate only fires when the name is known.
-        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => true}},
-            symbolic_ask:run_result(Db, "does foo/2 call halt/1?")),
+        {ok, HaltAnswer} = symbolic_ask:run_result(Db, "does foo/2 call halt/1?"),
+        ?assertEqual(true, maps:get(<<"answer">>, HaltAnswer)),
+        ?assertEqual(1, length(maps:get(<<"evidence">>, HaltAnswer))),
         %% A stdlib-shaped name nothing calls answers false, cleanly.
-        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>, <<"answer">> => false}},
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
             symbolic_ask:run_result(Db, "does foo/2 call format/1?"))
     end).
 
@@ -307,24 +364,55 @@ pipeline_uses_returns_handles_sites_scanned_config_test() ->
         {config_value, 'en.json', 'auth.codeExpiredError', <<"expired copy">>, 3}
     ],
     with_db(Facts, fun(Db) ->
-        ?assertEqual({ok, yes_no_true()},
-            symbolic_ask:run_result(Db, "does verifyCode/1 use message?")),
+        {ok, UsesAnswer} = symbolic_ask:run_result(Db, "does verifyCode/1 use message?"),
+        ?assertEqual(true, maps:get(<<"answer">>, UsesAnswer)),
+        [UsesWitness] = maps:get(<<"evidence">>, UsesAnswer),
+        ?assertEqual(#{<<"predicate">> => <<"expr_ref">>,
+            <<"file">> => <<"supabaseOtp.ts">>, <<"line">> => 4,
+            <<"fact">> => #{<<"function">> => <<"verifyCode/1">>,
+                            <<"identifier">> => <<"message">>}}, UsesWitness),
+        {ok, FileUses} = symbolic_ask:run_result(Db,
+            "does file supabaseOtp.ts use message?"),
+        ?assertEqual(true, maps:get(<<"answer">>, FileUses)),
+        [FileUsesWitness] = maps:get(<<"evidence">>, FileUses),
+        ?assertEqual(<<"supabaseOtp.ts">>, maps:get(<<"file">>, FileUsesWitness)),
         %% Line-scoped returns: the expr_ref message sits on line 4, the
         %% return on line 5 — a mention outside the return statement
         %% does not make "returns message" true.
-        ?assertEqual({ok, yes_no_false()},
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
             symbolic_ask:run_result(Db, "does verifyCode/1 return message?")),
-        ?assertEqual({ok, yes_no_true()},
-            symbolic_ask:run_result(Db, "does getClaimPhoneErrorMessage/1 handle alreadySignedIn?")),
+        {ok, HandlesAnswer} = symbolic_ask:run_result(Db,
+            "does getClaimPhoneErrorMessage/1 handle alreadySignedIn?"),
+        ?assertEqual(true, maps:get(<<"answer">>, HandlesAnswer)),
+        [LiteralWitness] = maps:get(<<"evidence">>, HandlesAnswer),
+        ?assertEqual(#{<<"predicate">> => <<"literal">>,
+            <<"file">> => <<"useClaimAccount.ts">>, <<"line">> => 6,
+            <<"fact">> => #{<<"function">> => <<"getClaimPhoneErrorMessage/1">>,
+                <<"kind">> => <<"string">>, <<"value">> => <<"alreadySignedIn">>}},
+            LiteralWitness),
         SitesResult = symbolic_ask:run_result(Db, "where is verifyCode/1 called?"),
         ?assertMatch({ok, #{<<"type">> := <<"sites">>, <<"answer">> := [_ | _]}},
             SitesResult),
-        ?assertEqual({ok, yes_no_true()},
-            symbolic_ask:run_result(Db, "is file JoinAccountModal.ts scanned?")),
-        ?assertEqual({ok, yes_no_false()},
+        {ok, ScannedAnswer} = symbolic_ask:run_result(Db,
+            "is file JoinAccountModal.ts scanned?"),
+        ?assertEqual(true, maps:get(<<"answer">>, ScannedAnswer)),
+        [ScanWitness] = maps:get(<<"evidence">>, ScannedAnswer),
+        ?assertEqual(#{<<"predicate">> => <<"defines">>,
+            <<"file">> => <<"JoinAccountModal.ts">>, <<"line">> => 3,
+            <<"fact">> => #{<<"function">> => <<"JoinAccountModal/1">>}},
+            ScanWitness),
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
             symbolic_ask:run_result(Db, "is file nope.ts scanned?")),
-        ?assertEqual({ok, yes_no_true()},
-            symbolic_ask:run_result(Db, "is config auth.codeExpiredError defined?"))
+        {ok, ConfigAnswer} = symbolic_ask:run_result(Db,
+            "is config auth.codeExpiredError defined?"),
+        ?assertEqual(true, maps:get(<<"answer">>, ConfigAnswer)),
+        [ConfigWitness] = maps:get(<<"evidence">>, ConfigAnswer),
+        ?assertEqual(#{<<"predicate">> => <<"config_value">>,
+            <<"file">> => <<"en.json">>, <<"line">> => 3,
+            <<"fact">> => #{<<"key">> => <<"auth.codeExpiredError">>,
+                            <<"value">> => <<"expired copy">>}}, ConfigWitness)
     end).
 
 %% Gap 1: a returned object's field is a property KEY, not an expr_ref —
@@ -358,12 +446,27 @@ catalog_discovery_describes_supported_inputs_and_answer_contracts_test() ->
     {<<"calls">>, CallsOp} = Calls,
     ?assertEqual(<<"yes_no">>, maps:get(<<"answer_type">>, CallsOp)),
     ?assertEqual(<<"closed_world">>, maps:get(<<"world">>, CallsOp)),
-    ?assertEqual(<<"none">>, maps:get(<<"evidence">>, CallsOp)),
+    ?assertEqual(<<"source_location">>, maps:get(<<"evidence">>, CallsOp)),
+    ?assertEqual(<<"witness">>, maps:get(<<"evidence_mode">>, CallsOp)),
+    ?assertMatch(#{<<"properties">> := #{<<"evidence">> := #{<<"type">> := <<"array">>}}},
+        maps:get(<<"answer_shape">>, CallsOp)),
     ?assertMatch([#{<<"name">> := <<"caller">>, <<"type">> := <<"function">>},
                   #{<<"name">> := <<"callee">>, <<"type">> := <<"function">>}],
         maps:get(<<"inputs">>, CallsOp)),
     ?assert(is_binary(maps:get(<<"description">>, CallsOp))),
-    ?assert(length(maps:get(<<"examples">>, CallsOp)) > 0).
+    ?assert(length(maps:get(<<"examples">>, CallsOp)) > 0),
+    {_, CallersOp} = lists:keyfind(<<"callers">>, 1,
+        [{maps:get(<<"id">>, Op), Op} || Op <- Operations]),
+    ?assertEqual(50, maps:get(<<"evidence_limit">>, CallersOp)),
+    ?assertEqual(<<"capped_matches">>, maps:get(<<"evidence_mode">>, CallersOp)),
+    ?assertMatch(#{<<"properties">> := #{<<"evidence_complete">> := #{<<"type">> := <<"boolean">>}}},
+        maps:get(<<"answer_shape">>, CallersOp)),
+    {_, ReturnsOp} = lists:keyfind(<<"returns_mention">>, 1,
+        [{maps:get(<<"id">>, Op), Op} || Op <- Operations]),
+    ?assertEqual(<<"witness_pair">>, maps:get(<<"evidence_mode">>, ReturnsOp)),
+    ?assertMatch(#{<<"properties">> := #{<<"evidence">> :=
+        #{<<"items">> := #{<<"oneOf">> := [_, _, _]}}}},
+        maps:get(<<"answer_shape">>, ReturnsOp)).
 
 catalog_examples_are_recognized_by_the_question_pipeline_test() ->
     with_db(facts(), fun(Db) ->
@@ -401,8 +504,42 @@ pipeline_returns_object_key_test() ->
         {object_key, verifyCode, 1, reason, 'supabaseOtp.ts', 2}
     ],
     with_db(Facts, fun(Db) ->
-        ?assertEqual({ok, yes_no_true()},
-            symbolic_ask:run_result(Db, "does verifyCode/1 return reason?"))
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does verifyCode/1 return reason?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        ?assertEqual([
+            #{<<"predicate">> => <<"object_key">>,
+              <<"file">> => <<"supabaseOtp.ts">>, <<"line">> => 2,
+              <<"fact">> => #{<<"function">> => <<"verifyCode/1">>,
+                              <<"key">> => <<"reason">>}},
+            #{<<"predicate">> => <<"return_stmt">>,
+              <<"file">> => <<"supabaseOtp.ts">>, <<"line">> => 2,
+              <<"fact">> => #{<<"function">> => <<"verifyCode/1">>,
+                              <<"has_value">> => true}}
+        ], lists:sort(fun(A, B) ->
+            {maps:get(<<"predicate">>, A), maps:get(<<"file">>, A)} =<
+            {maps:get(<<"predicate">>, B), maps:get(<<"file">>, B)}
+        end, maps:get(<<"evidence">>, Answer)))
+    end).
+
+pipeline_returns_expr_ref_includes_both_witness_facts_test() ->
+    Facts = [
+        {defines, renderError, 1, [], 'src/render.ts', 1},
+        {return_stmt, renderError, 1, true, 'src/render.ts', 4},
+        {expr_ref, [0], renderError, 1, reason, 'src/render.ts', 4}
+    ],
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does renderError/1 return reason?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        Evidence = maps:get(<<"evidence">>, Answer),
+        ?assertEqual(2, length(Evidence)),
+        ?assertEqual([<<"expr_ref">>, <<"return_stmt">>],
+            lists:sort([maps:get(<<"predicate">>, E) || E <- Evidence])),
+        ?assert(lists:all(fun(E) ->
+            maps:get(<<"file">>, E) =:= <<"src/render.ts">> andalso
+            maps:get(<<"line">>, E) =:= 4
+        end, Evidence))
     end).
 
 %% The line scope cuts both ways: a mention elsewhere in the function
@@ -415,7 +552,8 @@ pipeline_returns_line_scope_test() ->
         {object_key, verifyPhoneCode, 1, message, 'useClaimAccount.ts', 5}
     ],
     with_db(Facts, fun(Db) ->
-        ?assertEqual({ok, yes_no_false()},
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
             symbolic_ask:run_result(Db, "does verifyPhoneCode/1 return message?"))
     end).
 
@@ -444,10 +582,56 @@ pipeline_snake_case_verb_half_subject_test() ->
         {defines, get, 2, [], 'maps.ts', 3}
     ],
     with_db(Facts, fun(Db) ->
-        ?assertEqual({ok, yes_no_true()},
-            symbolic_ask:run_result(Db, "does handle_query/1 call maps/get/2?")),
-        ?assertEqual({ok, yes_no_false()},
+        {ok, Answer} = symbolic_ask:run_result(Db, "does handle_query/1 call maps/get/2?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        [Witness] = maps:get(<<"evidence">>, Answer),
+        ?assertEqual(<<"serve.ts">>, maps:get(<<"file">>, Witness)),
+        ?assertEqual(2, maps:get(<<"line">>, Witness)),
+        ?assertEqual(<<"remote">>, maps:get(<<"kind">>, maps:get(<<"call">>, maps:get(<<"fact">>, Witness)))),
+        ?assertEqual({ok, #{<<"type">> => <<"yes_no">>,
+                            <<"answer">> => false, <<"evidence">> => []}},
             symbolic_ask:run_result(Db, "does handle_query/1 call render_query/2?"))
+    end).
+
+dotted_remote_call_yes_no_includes_module_and_source_site_test() ->
+    Facts = [
+        {defines, callRemote, 1, [], 'src/remote.ts', 1},
+        {calls, callRemote, 1, {remote, 'supabase.auth', verifyOtp, 2},
+            'src/remote.ts', 9}
+    ],
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does callRemote/1 call supabase.auth.verifyOtp/2?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        [Witness] = maps:get(<<"evidence">>, Answer),
+        ?assertEqual(#{<<"predicate">> => <<"calls">>,
+            <<"file">> => <<"src/remote.ts">>, <<"line">> => 9,
+            <<"fact">> => #{<<"caller">> => <<"callRemote/1">>,
+                <<"call">> => #{<<"kind">> => <<"remote">>,
+                    <<"module">> => <<"supabase.auth">>,
+                    <<"name">> => <<"verifyOtp">>, <<"arity">> => 2}}}, Witness)
+    end).
+
+member_call_yes_no_includes_receiver_and_source_site_test() ->
+    Facts = [
+        {defines, callMember, 1, [], 'src/member.ts', 1},
+        {calls, callMember, 1, {member, 'supabase.auth', verifyOtp, 2}, 'src/member.ts', 8}
+    ],
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does callMember/1 call supabase.auth.verifyOtp/2?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        [Witness] = maps:get(<<"evidence">>, Answer),
+        ?assertEqual(#{
+            <<"predicate">> => <<"calls">>,
+            <<"file">> => <<"src/member.ts">>,
+            <<"line">> => 8,
+            <<"fact">> => #{
+                <<"caller">> => <<"callMember/1">>,
+                <<"call">> => #{<<"kind">> => <<"member">>,
+                    <<"receiver">> => <<"supabase.auth">>,
+                    <<"method">> => <<"verifyOtp">>, <<"arity">> => 2}}},
+            Witness)
     end).
 
 pipeline_what_calls_test() ->
@@ -456,12 +640,13 @@ pipeline_what_calls_test() ->
         {defines, 'JoinAccountModal', 1, [], 'm.ts', 2}
     ],
     with_db(Facts, fun(Db) ->
-        ?assertEqual({ok, #{<<"type">> => <<"enumerate">>, <<"answer">> => [<<"JoinAccountModal/1">>]}},
-            symbolic_ask:run_result(Db, "what calls setError/1?"))
+        {ok, Answer} = symbolic_ask:run_result(Db, "what calls setError/1?"),
+        ?assertEqual([<<"JoinAccountModal/1">>], maps:get(<<"answer">>, Answer)),
+        ?assertEqual(true, maps:get(<<"evidence_complete">>, Answer)),
+        ?assertEqual(1, length(maps:get(<<"evidence">>, Answer)))
     end).
 
 yes_no_true() -> #{<<"type">> => <<"yes_no">>, <<"answer">> => true}.
-yes_no_false() -> #{<<"type">> => <<"yes_no">>, <<"answer">> => false}.
 
 tmp_db() ->
     filename:join(["/tmp", "symbolic_ask_tests_"
