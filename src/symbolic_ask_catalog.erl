@@ -26,7 +26,23 @@ operations() ->
 
 -spec describe() -> #{binary() => term()}.
 describe() ->
-    #{<<"operations">> => [public_operation(Op) || Op <- operations()] }.
+    #{<<"operations">> => [public_operation(Op) || Op <- operations()],
+      <<"ambiguity_answer_shape">> => ambiguity_answer_shape()}.
+
+ambiguity_answer_shape() ->
+    #{<<"type">> => <<"object">>,
+      <<"properties">> => #{
+          <<"type">> => #{<<"const">> => <<"ambiguous">>},
+          <<"reason">> => #{<<"type">> => <<"string">>},
+          <<"candidates">> => array_of(#{<<"type">> => <<"object">>,
+              <<"properties">> => #{
+                  <<"name">> => #{<<"type">> => <<"string">>},
+                  <<"arity">> => #{<<"type">> => <<"integer">>},
+                  <<"file">> => #{<<"type">> => <<"string">>},
+                  <<"line">> => #{<<"type">> => <<"integer">>}},
+              <<"required">> => [<<"name">>, <<"arity">>,
+                  <<"file">>, <<"line">>]} )},
+      <<"required">> => [<<"type">>, <<"reason">>, <<"candidates">>]}.
 
 -spec lookup(atom(), term()) -> {ok, map()} | error.
 lookup(yes_no, {calls, _, _}) -> find(calls);
@@ -55,6 +71,7 @@ operation(Id, Answer, World, Evidence) ->
     {Description, Inputs, Examples} = details(Id),
     #{id => Id, description => Description, inputs => Inputs,
       answer => Answer, answer_shape => answer_shape(Id, Answer),
+      incomplete_scan_answer_shape => incomplete_scan_answer_shape(World),
       world => World, world_description => world_description(World),
       evidence => Evidence, evidence_mode => evidence_mode(Id),
       evidence_description => evidence_description(Id, Evidence),
@@ -68,6 +85,7 @@ public_operation(Op) ->
       <<"inputs">> => maps:get(inputs, Op),
       <<"answer_type">> => atom_to_binary(maps:get(answer, Op)),
       <<"answer_shape">> => maps:get(answer_shape, Op),
+      <<"incomplete_scan_answer_shape">> => maps:get(incomplete_scan_answer_shape, Op),
       <<"world">> => atom_to_binary(maps:get(world, Op)),
       <<"world_description">> => maps:get(world_description, Op),
       <<"evidence">> => atom_to_binary(maps:get(evidence, Op)),
@@ -350,8 +368,25 @@ answer_object(Type, Properties, Required) ->
 array_of(ItemSchema) ->
     #{<<"type">> => <<"array">>, <<"items">> => ItemSchema}.
 
+incomplete_scan_answer_shape(corpus_evidence) -> null;
+incomplete_scan_answer_shape(_World) ->
+    #{<<"type">> => <<"object">>,
+      <<"properties">> => #{
+          <<"type">> => #{<<"const">> => <<"unknown">>},
+          <<"reason">> => #{<<"type">> => <<"string">>},
+          <<"scope">> => #{<<"type">> => <<"object">>,
+              <<"properties">> => #{
+                  <<"scan_paths">> => array_of(#{<<"type">> => <<"string">>}),
+                  <<"files">> => #{<<"type">> => <<"integer">>},
+                  <<"complete">> => #{<<"type">> => <<"boolean">>},
+                  <<"metadata_available">> => #{<<"type">> => <<"boolean">>},
+                  <<"failed_files">> => array_of(#{<<"type">> => <<"string">>})},
+              <<"required">> => [<<"scan_paths">>, <<"files">>,
+                  <<"complete">>, <<"metadata_available">>, <<"failed_files">>]}},
+      <<"required">> => [<<"type">>, <<"reason">>, <<"scope">>]}.
+
 world_description(closed_world) ->
-    <<"A negative answer means no matching extracted fact was found in the loaded fact base; it is limited by scan and extraction coverage.">>;
+    <<"A negative answer is scoped to the loaded fact base. If scan metadata is missing or extraction failed, ASK returns unknown instead of treating absence as false.">>;
 world_description(corpus_evidence) ->
     <<"Search returns matching indexed prose as evidence. No hits do not prove a claim false.">>;
 world_description(scan_scope) ->

@@ -38,7 +38,8 @@
 %% codebase cache. map_tags/1 and ident_candidates/1 are the Stage 2
 %% statistical tier's pure halves (PLAN-statistical-nlp-tier.md),
 %% exported for unit tests without the NIF.
--export([run_result/2, ask/2, map_tags/1, ident_candidates/1]).
+-export([run_result/2, ask/2, ask/3, ask_detailed/3, ambiguity_answer/1,
+         map_tags/1, ident_candidates/1]).
 
 -define(GRAMMAR_FILE, "question_grammar.pl").
 -define(CALLER_EVIDENCE_LIMIT, 50).
@@ -54,6 +55,9 @@ run(DbPath, Question) ->
         unrecognized ->
             io:put_chars(standard_error, "Unrecognized.\n"),
             halt(1);
+        {error, {ambiguous, Candidates}} ->
+            io:format("~ts~n", [jsx:encode(ambiguity_answer(Candidates))]),
+            halt(2);
         {error, {unverifiable, Reason}} ->
             io:format("~ts~n", [
                 jsx:encode(#{
@@ -77,7 +81,14 @@ run_result(DbPath, Question) ->
         false ->
             {error, {no_such_db, DbPath}};
         true ->
-            ask(symbolic_fact_store:read(DbPath), Question)
+            Facts = symbolic_fact_store:read(DbPath),
+            Metadata = case symbolic_fact_store:read_metadata(DbPath) of
+                {ok, ParsedMetadata} -> ParsedMetadata;
+                _ -> #{<<"metadata_available">> => false,
+                       <<"complete">> => false, <<"scan_paths">> => [],
+                       <<"files">> => 0, <<"failed_files">> => []}
+            end,
+            ask(Facts, Question, Metadata)
     end.
 
 %% The shared pipeline core: tokenize, load a one-shot session from a
@@ -87,6 +98,27 @@ run_result(DbPath, Question) ->
 -spec ask([tuple()], string()) ->
     {ok, map()} | unrecognized | {error, term()}.
 ask(Facts, Question) ->
+    ask(Facts, Question, #{<<"complete">> => false,
+        <<"scan_paths">> => [], <<"files">> => 0, <<"failed_files">> => []}).
+
+-spec ask([tuple()], string(), map()) ->
+    {ok, map()} | unrecognized | {error, term()}.
+%% Benchmark seam: preserves the public answer and additionally returns the
+%% catalog operation selected by the interpreter. It is for regression
+%% measurement, not part of CLI/MCP answer payloads.
+-spec ask_detailed([tuple()], string(), map()) ->
+    {{ok, map()} | unrecognized | {error, term()}, map() | undefined}.
+ask_detailed(Facts, Question, Metadata) ->
+    erase({?MODULE, operation_trace}),
+    try
+        Result = ask(Facts, Question, Metadata),
+        {Result, get({?MODULE, operation_trace})}
+    after
+        erase({?MODULE, operation_trace})
+    end.
+
+ask(Facts, Question, Metadata) ->
+    erase({?MODULE, operation_trace}),
     {ok, Pid} = prolog_session:start_link(),
     Result =
         case prolog_session:load_facts(Pid, Facts) of
@@ -108,7 +140,53 @@ ask(Facts, Question) ->
                 end
         end,
     prolog_session:stop(Pid),
-    Result.
+    scope_answer(Result, Metadata).
+
+scope_answer({ok, Answer}, Metadata) ->
+    case metadata_complete(Metadata) of
+        true ->
+            HasScope = maps:is_key(<<"scan_paths">>, Metadata) orelse
+                maps:is_key(scan_paths, Metadata),
+            case HasScope andalso scope_dependent_answer(Answer) of
+                true -> {ok, Answer#{<<"scope">> => scope_from_metadata(Metadata)}};
+                false -> {ok, Answer}
+            end;
+        false ->
+            case scope_dependent_answer(Answer) of
+                true -> {ok, #{<<"type">> => <<"unknown">>,
+                    <<"reason">> => <<"The scan is incomplete; absence is not reliable.">>,
+                    <<"scope">> => scope_from_metadata(Metadata)}};
+                false -> {ok, Answer}
+            end
+    end;
+scope_answer(Result, _Metadata) -> Result.
+
+metadata_complete(#{<<"complete">> := Complete}) -> Complete =:= true;
+metadata_complete(#{scan_complete := Complete}) -> Complete =:= true;
+metadata_complete(_) -> false.
+
+scope_dependent_answer(#{<<"type">> := <<"yes_no">>, <<"answer">> := false}) -> true;
+scope_dependent_answer(#{<<"type">> := <<"enumerate">>}) -> true;
+scope_dependent_answer(#{<<"type">> := <<"count">>}) -> true;
+scope_dependent_answer(#{<<"type">> := <<"sites">>}) -> true;
+scope_dependent_answer(_) -> false.
+
+scope_from_metadata(Metadata) ->
+    ScopePaths = maps:get(<<"scan_paths">>, Metadata,
+        maps:get(scan_paths, Metadata, [])),
+    FailedFiles = maps:get(<<"failed_files">>, Metadata,
+        maps:get(failed_files, Metadata, [])),
+    Files = maps:get(<<"files">>, Metadata,
+        maps:get(files, Metadata, 0)),
+    Complete = metadata_complete(Metadata),
+    MetadataAvailable = maps:get(<<"metadata_available">>, Metadata,
+        maps:get(scan_metadata_available, Metadata,
+            maps:is_key(<<"complete">>, Metadata) orelse maps:is_key(scan_complete, Metadata))),
+    #{<<"scan_paths">> => [to_bin(Path) || Path <- ScopePaths],
+      <<"files">> => Files,
+      <<"complete">> => Complete,
+      <<"metadata_available">> => MetadataAvailable,
+      <<"failed_files">> => [to_bin(File) || File <- FailedFiles]}.
 
 parse(Pid, TokensText, Question) ->
     Goal = "phrase(question(Type, Rel), " ++ TokensText ++ ")",
@@ -141,6 +219,16 @@ parse(Pid, TokensText, Question) ->
 %% `unrecognized` when the NIF is absent — it never takes the pipeline
 %% down.
 
+record_operation({Type, Relation}) ->
+    case symbolic_ask_catalog:lookup(Type, Relation) of
+        {ok, Operation} ->
+            put({?MODULE, operation_trace}, #{
+                <<"operation">> => atom_to_binary(maps:get(id, Operation)),
+                <<"answer_type">> => atom_to_binary(Type)});
+        error -> erase({?MODULE, operation_trace})
+    end;
+record_operation(_) -> erase({?MODULE, operation_trace}).
+
 statistical_fallback(Pid, Question) ->
     try symbolic_nlp:tag(unicode:characters_to_binary(Question)) of
         {ok, Tags} ->
@@ -161,6 +249,7 @@ statistical_fallback(Pid, Question) ->
                         _ -> answer(Pid, prose, Words)
                     end;
                 {ok, Template} ->
+                    record_operation(Template),
                     build_relation(Pid, Template)
             end;
         {error, _} ->
@@ -237,16 +326,6 @@ find_verb([{W, _} = T | Rest], Acc) ->
     case verb_relation(W) =/= other andalso not GlueNext of
         true -> {W, lists:reverse(Acc), Rest};
         false -> find_verb(Rest, [T | Acc])
-    end.
-
-find_tagged(Pred, Tags) -> find_tagged(Pred, Tags, []).
-
-find_tagged(_Pred, [], _Acc) ->
-    none;
-find_tagged(Pred, [T | Rest], Acc) ->
-    case Pred(T) of
-        true -> {T, lists:reverse(Acc), Rest};
-        false -> find_tagged(Pred, Rest, [T | Acc])
     end.
 
 %% "does X call Y?" — verb splits the question into subject and object
@@ -503,13 +582,69 @@ arities_of(Pid, Name) ->
         {error, Reason} -> {error, Reason}
     end.
 
-%% Subject resolution — strict-gate semantics. Candidates are tried in
-%% order against defines/5; the first one present wins. No arity in the
-%% question and exactly one known arity → use it; several known arities
-%% → loudly ambiguous; an explicit arity that mismatches → wrong_arity.
+%% Resolve every plausible identifier against the fact base before
+%% proving. Selecting the first defined candidate would silently answer
+%% a different question when a phrase contains multiple code identifiers.
+resolve_candidates(Pid, Candidates, Mode) ->
+    Entities = defined_entities(Pid, Candidates),
+    Matching = [Entity || Entity = {Name, Arity, _File, _Line} <- Entities,
+        candidate_allows_arity(Name, Arity, Candidates)],
+    case Matching of
+        [{Name, Arity, _File, _Line}] -> {ok, {'/', Name, Arity}};
+        [_First, _Second | _] -> {error, {ambiguous, candidate_json(Matching)}};
+        [] when Entities =/= [] ->
+            case Entities of
+                [{Name, _Arity, _File, _Line}] ->
+                    {Given, _} = lists:keyfind(Name, 1, Candidates),
+                    {error, {unverifiable, {wrong_arity, Name, Given}}};
+                _ -> {error, {ambiguous, candidate_json(Entities)}}
+            end;
+        [] when Mode =:= strict -> resolve_strict(Pid, Candidates, Candidates);
+        [] -> resolve_loose(Pid, Candidates, Candidates)
+    end.
+
+defined_entities(Pid, Candidates) ->
+    Rows = lists:append([definition_rows(Pid, Name) || {Name, _} <- Candidates]),
+    unique_definition_identities(lists:usort(Rows), []).
+
+definition_rows(Pid, Name) ->
+    Goal = "findall(st(A, F, Line), defines(" ++ quoted_atom(Name) ++
+        ", A, _, F, Line), L)",
+    source_fact_entries(Pid, Goal, fun({'st', Arity, File, Line}) ->
+        {Name, Arity, to_bin(File), Line}
+    end).
+
+unique_definition_identities([], Acc) -> lists:reverse(Acc);
+unique_definition_identities([{Name, Arity, File, Line} | Rest], Acc) ->
+    %% The current fact schema's function identity is exactly name/arity;
+    %% multiple source locations for that identity are sites, not separate
+    %% overload candidates.
+    case lists:any(fun({N, A, _F, _}) -> N =:= Name andalso A =:= Arity end, Acc) of
+        true -> unique_definition_identities(Rest, Acc);
+        false -> unique_definition_identities(Rest, [{Name, Arity, File, Line} | Acc])
+    end.
+
+candidate_allows_arity(Name, Arity, Candidates) ->
+    lists:any(fun
+        ({CandidateName, undefined}) -> CandidateName =:= Name;
+        ({CandidateName, Given}) -> CandidateName =:= Name andalso Given =:= Arity
+    end, Candidates).
+
+candidate_json(Entities) ->
+    [#{<<"name">> => Name, <<"arity">> => Arity,
+       <<"file">> => File, <<"line">> => Line}
+     || {Name, Arity, File, Line} <- Entities].
+
+ambiguity_answer(Candidates) ->
+    #{<<"type">> => <<"ambiguous">>,
+      <<"reason">> => <<"The name matches multiple functions. Choose one candidate or specify its arity.">>,
+      <<"candidates">> => Candidates}.
+
+%% Subject resolution — strict-gate semantics. The unresolved fallback
+%% preserves precise no-such-function and wrong-arity errors.
 resolve_ident(Pid, Words) ->
     Candidates = [split_arity(C) || C <- ident_candidates(Words)],
-    resolve_strict(Pid, Candidates, Candidates).
+    resolve_candidates(Pid, Candidates, strict).
 
 resolve_strict(_Pid, [], []) ->
     {error, {unverifiable, {no_such_function, none, none}}};
@@ -540,7 +675,7 @@ resolve_strict(Pid, [{Name, Given} | Rest], All) ->
 %% that named no arity.
 resolve_object(Pid, Words) ->
     Candidates = [split_arity(C) || C <- ident_candidates(Words)],
-    resolve_loose(Pid, Candidates, Candidates).
+    resolve_candidates(Pid, Candidates, loose).
 
 resolve_loose(Pid, [{Name, Given} | Rest], All) ->
     case arities_of(Pid, Name) of
@@ -770,7 +905,11 @@ lower(B) when is_binary(B) ->
 %%% "calls bar/1", not about which boundary).
 answer(Pid, Type, Rel) ->
     case symbolic_ask_catalog:lookup(Type, Rel) of
-        {ok, _Operation} -> execute_answer(Pid, Type, Rel);
+        {ok, Operation} ->
+            put({?MODULE, operation_trace}, #{
+                <<"operation">> => atom_to_binary(maps:get(id, Operation)),
+                <<"answer_type">> => atom_to_binary(Type)}),
+            execute_answer(Pid, Type, Rel);
         error -> {error, {unknown_question_shape, Type, Rel}}
     end.
 
@@ -1479,7 +1618,7 @@ split_receiver_method(Name) when is_binary(Name) ->
     end.
 
 %% Returns the 1-based position just after the last dot, or 0.
-last_dot(Name, 0) ->
+last_dot(_Name, 0) ->
     0;
 last_dot(Name, Pos) when Pos > 0 ->
     case binary:at(Name, Pos - 1) of
@@ -1505,9 +1644,6 @@ member_findall_tail(OName, OArityText) ->
     end.
 
 %% --- shaping helpers ---
-
-yes_no_answer(Bool) ->
-    #{<<"type">> => <<"yes_no">>, <<"answer">> => Bool}.
 
 render_ident({'-', Name, Arity}) when is_atom(Name) ->
     iolist_to_binary([atom_to_list(Name), "/", integer_to_list(Arity)]);

@@ -1,6 +1,19 @@
 -module(symbolic_fact_store_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+metadata_round_trips_and_missing_metadata_is_distinct_test() ->
+    Path = filename:join(["/tmp", "symbolic_fact_meta_"
+        ++ integer_to_list(erlang:unique_integer([positive])) ++ ".dets"]),
+    Metadata = #{<<"complete">> => false,
+                 <<"failed_files">> => [<<"src/bad.ts">>]},
+    try
+        ?assertEqual(not_found, symbolic_fact_store:read_metadata(Path)),
+        ?assertEqual(ok, symbolic_fact_store:write_metadata(Path, Metadata)),
+        ?assertEqual({ok, Metadata}, symbolic_fact_store:read_metadata(Path))
+    after
+        _ = file:delete(Path ++ ".scan.json")
+    end.
+
 write_and_read_round_trips_test() ->
     Path = tmp_path(),
     Facts = [

@@ -118,6 +118,7 @@ serve_test_() ->
         fun ask_before_parse_is_friendly_error/1,
         fun ask_yes_no_call_against_parsed_cache/1,
         fun ask_count_and_enumerate_shapes/1,
+        fun ask_ambiguity_returns_candidates_and_matches_cli/1,
         fun ask_wrong_arity_is_unverifiable_not_wrong/1,
         fun ask_prose_returns_evidence/1,
         fun ask_unrecognized_shape_is_friendly_error/1,
@@ -268,6 +269,34 @@ ask_count_and_enumerate_shapes(_Setup) ->
         ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"enumerate">>,
                                      <<"answer">> := [<<"shout/1">>]}},
             Enumerate)
+    end.
+
+ask_ambiguity_returns_candidates_and_matches_cli(_Setup) ->
+    fun() ->
+        Root = filename:absname(filename:join(["_build", "serve_ambiguous_ask"])),
+        Config = filename:join([Root, ".symbolic", "config.json"]),
+        DbPath = filename:join([Root, ".symbolic", "facts.dets"]),
+        Source = filename:join([Root, "src", "lookup.ts"]),
+        _ = file:del_dir_r(Root),
+        ok = filelib:ensure_dir(Config),
+        ok = filelib:ensure_dir(Source),
+        ok = file:write_file(Config,
+            <<"{\"paths\":[\"src\"],\"database\":\".symbolic/facts.dets\"}">>),
+        ok = file:write_file(Source,
+            <<"function lookup(value: number) {}\nfunction lookup(value: number, other: number) {}\n">>),
+        try
+            {ok, _} = symbolic_codebase:parse(Root),
+            Question = "is lookup defined?",
+            {error, {ambiguous, Candidates}} = symbolic_ask:run_result(DbPath, Question),
+            CliAnswer = symbolic_ask:ambiguity_answer(Candidates),
+            Mcp = decode(symbolic_serve:handle_ask(#{
+                <<"question">> => list_to_binary(Question),
+                <<"path">> => list_to_binary(Root)})),
+            ?assertEqual(#{<<"ok">> => CliAnswer}, Mcp),
+            ?assertEqual([1, 2], [maps:get(<<"arity">>, C) || C <- Candidates])
+        after
+            _ = file:del_dir_r(Root)
+        end
     end.
 
 ask_wrong_arity_is_unverifiable_not_wrong(_Setup) ->

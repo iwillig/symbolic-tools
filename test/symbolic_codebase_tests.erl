@@ -54,6 +54,7 @@ codebase_test_() ->
         fun query_undefined_predicate_is_error/1,
         fun query_bad_goal_is_error/1,
         fun parse_missing_dir_is_error/1,
+        fun extraction_failure_marks_scan_incomplete_and_ask_unknown/1,
         fun query_already_terminated_goal_works/1,
         fun query_non_integer_limit_falls_back_to_default/1,
         fun parse_reports_bash_by_extension/1,
@@ -195,6 +196,40 @@ parse_missing_dir_is_error(_Setup) ->
                      symbolic_codebase:parse("no/such/dir_zz"))
     end.
 
+extraction_failure_marks_scan_incomplete_and_ask_unknown(_Setup) ->
+    fun() ->
+        Root = filename:absname(filename:join(["_build", "ask_incomplete_scan"])),
+        Good = filename:join(Root, "good.ts"),
+        Bad = filename:join(Root, "broken.ts"),
+        _ = file:del_dir_r(Root),
+        ok = filelib:ensure_dir(Good),
+        ok = file:write_file(Good,
+            <<"function caller() { good(); }\\nfunction good() {}\\nfunction absent() {}\\n">>),
+        ok = file:write_file(Bad, <<"function broken() {}\\n">>),
+        meck:new(ts_extract, [passthrough]),
+        meck:expect(ts_extract, file, fun(Path) ->
+            case Path of
+                Bad -> error(extraction_boom);
+                _ -> meck:passthrough([Path])
+            end
+        end),
+        try
+            {ok, Meta} = symbolic_codebase:parse(Root),
+            ?assertEqual(false, maps:get(scan_complete, Meta)),
+            ?assertEqual([Bad], maps:get(failed_files, Meta)),
+            ?assertMatch({ok, #{<<"type">> := <<"unknown">>,
+                                <<"scope">> := #{<<"complete">> := false}}},
+                symbolic_codebase:ask("does caller/0 call absent/0?", Root)),
+            ?assertMatch({ok, #{<<"type">> := <<"yes_no">>,
+                                <<"answer">> := true,
+                                <<"evidence">> := [_]}},
+                symbolic_codebase:ask("does caller/0 call good/0?", Root))
+        after
+            meck:unload(ts_extract),
+            _ = file:del_dir_r(Root)
+        end
+    end.
+
 %% ensure_terminated/1's `true` branch (goal already ends in ".") vs.
 %% every other test here, which always relies on the `false` branch
 %% (auto-appending "."). Same result either way.
@@ -320,7 +355,7 @@ parse_crash_is_an_error_and_leaves_cache_and_process_untouched(_Setup) ->
         {ok, GoodMeta} = symbolic_codebase:parse(?FIXTURES),
         Pid = whereis(symbolic_codebase),
         meck:new(symbolic_parse, [passthrough]),
-        meck:expect(symbolic_parse, scan, fun(_Dir) -> error(boom) end),
+        meck:expect(symbolic_parse, scan_report, fun(_Dir) -> error(boom) end),
         try
             Result = symbolic_codebase:parse(?FIXTURES),
             ?assertMatch({error, {parse_crashed, {error, boom}}}, Result)
@@ -368,7 +403,10 @@ meta_reports_path_and_parse_ms(_Setup) ->
         {ok, Meta} = symbolic_codebase:parse(?FIXTURES),
         ?assertEqual(filename:absname(?FIXTURES), maps:get(path, Meta)),
         ?assert(is_integer(maps:get(parse_ms, Meta))),
-        ?assert(maps:get(parse_ms, Meta) >= 0)
+        ?assert(maps:get(parse_ms, Meta) >= 0),
+        ?assertEqual(true, maps:get(scan_complete, Meta)),
+        ?assertEqual([filename:absname(?FIXTURES)], maps:get(scan_paths, Meta)),
+        ?assertEqual([], maps:get(failed_files, Meta))
     end.
 
 %% Parsing DirB no longer evicts DirA's cache entry — both stay queryable
@@ -562,6 +600,9 @@ configured_database_is_shared_with_cli_query_and_refreshes_on_reparse(_Setup) ->
         try
             {ok, Meta} = symbolic_codebase:parse(Root),
             ?assertEqual(DbPath, maps:get(database, Meta)),
+            {ok, ScanMeta} = symbolic_fact_store:read_metadata(DbPath),
+            ?assertEqual(true, maps:get(<<"metadata_available">>, ScanMeta)),
+            ?assertEqual(true, maps:get(<<"complete">>, ScanMeta)),
             {solutions, _} = symbolic_query:run_result(DbPath, undefined,
                 "defines(hello, 0, _, _, _)"),
             ?assertMatch({ok, [_]}, symbolic_codebase:query("defines(hello, 0, _, _, _)")),

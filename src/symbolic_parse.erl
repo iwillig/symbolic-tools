@@ -3,7 +3,8 @@
 %%% JSON summary. See docs/tree-sitter-erlang.md, docs/prolog-store.md.
 -module(symbolic_parse).
 -include_lib("kernel/include/logger.hrl").
--export([run/1, run/2, run_config/2, scan/1, scan_paths/1]).
+-export([run/1, run/2, run_config/2, scan/1, scan_paths/1,
+         scan_report/1, scan_paths_report/1]).
 %% Exported for symbolic_parse_tests.erl only — run/1,2 halt() on every
 %% path and can't be called directly from EUnit; summary/2 and maybe_store/2
 %% are the halt-free parts of that same code worth testing in isolation.
@@ -17,23 +18,29 @@
 -spec scan(file:name()) ->
     {ok, {Files :: [file:name()], Facts :: [tuple()]}} | {error, term()}.
 scan(Dir) ->
+    case scan_report(Dir) of
+        {ok, Report} -> {ok, {maps:get(files, Report), maps:get(facts, Report)}};
+        Error -> Error
+    end.
+
+-spec scan_report(file:name()) -> {ok, map()} | {error, term()}.
+scan_report(Dir) ->
     case filelib:is_dir(Dir) of
+        false -> {error, {no_such_directory, Dir}};
         true ->
             case code:ensure_loaded(symbolic_ts) of
+                {error, Reason} -> {error, {nif_not_loadable, Reason}};
                 {module, symbolic_ts} ->
                     Files = scan_files(Dir),
                     ?LOG_INFO("parse: scanning ~p files under ~s", [length(Files), Dir]),
                     StartAll = erlang:monotonic_time(millisecond),
-                    Facts = lists:usort(parallel_extract(Files)),
+                    {Facts, FailedFiles} = parallel_extract(Files),
+                    Facts1 = lists:usort(Facts),
                     ElapsedAllMs = erlang:monotonic_time(millisecond) - StartAll,
                     ?LOG_INFO("parse: finished ~s - ~p files, ~p facts, ~p ms",
-                              [Dir, length(Files), length(Facts), ElapsedAllMs]),
-                    {ok, {Files, Facts}};
-                {error, Reason} ->
-                    {error, {nif_not_loadable, Reason}}
-            end;
-        false ->
-            {error, {no_such_directory, Dir}}
+                              [Dir, length(Files), length(Facts1), ElapsedAllMs]),
+                    {ok, scan_report_map([Dir], Files, Facts1, FailedFiles)}
+            end
     end.
 
 %% ts_extract:file/1 timed and logged per file — this is what lets an
@@ -61,19 +68,19 @@ scan(Dir) ->
 %% CLI's default log level, not silently swallowed.
 extract_file_timed(File) ->
     Start = erlang:monotonic_time(millisecond),
-    Facts = extract_file_safely(File),
+    {Facts, Failed} = extract_file_safely(File),
     ElapsedMs = erlang:monotonic_time(millisecond) - Start,
     ?LOG_INFO("parse: ~s - ~p facts, ~p ms", [File, length(Facts), ElapsedMs]),
-    Facts.
+    {File, Facts, Failed}.
 
 extract_file_safely(File) ->
-    try ts_extract:file(File)
+    try {ts_extract:file(File), false}
     catch
         Class:Reason:ST ->
             ?LOG_ERROR("parse: ~s - extraction crashed (~p:~p), skipping this "
                        "file's facts rather than failing the whole scan~n~p",
                        [File, Class, Reason, ST]),
-            []
+            {[], true}
     end.
 
 %% parallel_extract(Files) -> Facts (not usorted — every caller usorts
@@ -90,7 +97,10 @@ extract_file_safely(File) ->
 %%  — parallelizing the common (successful) case must not quietly change
 %%  what happens on the uncommon (crashing) one.
 parallel_extract(Files) ->
-    lists:append(parallel_map(fun extract_file_timed/1, Files)).
+    Results = parallel_map(fun extract_file_timed/1, Files),
+    Facts = lists:append([FileFacts || {_File, FileFacts, _Failed} <- Results]),
+    FailedFiles = [File || {File, _FileFacts, true} <- Results],
+    {Facts, FailedFiles}.
 
 %% parallel_map(Fun, Items) -> [Fun(Item)] (same order as Items).
 %%  One process per item, spawn_monitor'd; results are collected by
@@ -137,6 +147,13 @@ parallel_collect(Pid, Ref) ->
 -spec scan_paths([file:name()]) ->
     {ok, {Files :: [file:name()], Facts :: [tuple()]}} | {error, term()}.
 scan_paths(Paths) ->
+    case scan_paths_report(Paths) of
+        {ok, Report} -> {ok, {maps:get(files, Report), maps:get(facts, Report)}};
+        Error -> Error
+    end.
+
+-spec scan_paths_report([file:name()]) -> {ok, map()} | {error, term()}.
+scan_paths_report(Paths) ->
     case code:ensure_loaded(symbolic_ts) of
         {module, symbolic_ts} -> scan_each(Paths);
         {error, Reason} -> {error, {nif_not_loadable, Reason}}
@@ -157,15 +174,19 @@ scan_each(Paths) ->
     case lists:keyfind(error, 1, Results) of
         {error, _Reason} = Error -> Error;
         false ->
-            {FilesLists, FactsLists} = lists:unzip([FF || {ok, FF} <- Results]),
-            {ok, {lists:append(FilesLists), lists:usort(lists:append(FactsLists))}}
+            Reports = [Report || {ok, Report} <- Results],
+            Files = lists:append([maps:get(files, R) || R <- Reports]),
+            Facts = lists:usort(lists:append([maps:get(facts, R) || R <- Reports])),
+            FailedFiles = lists:append([maps:get(failed_files, R) || R <- Reports]),
+            {ok, scan_report_map(Paths, Files, Facts, FailedFiles)}
     end.
 
 scan_one(Path) ->
     case filelib:is_dir(Path) of
         true ->
             Files = scan_files(Path),
-            {ok, {Files, parallel_extract(Files)}};
+            {Facts, FailedFiles} = parallel_extract(Files),
+            {ok, #{files => Files, facts => lists:usort(Facts), failed_files => FailedFiles}};
         false ->
             case filelib:is_regular(Path) of
                 true -> scan_one_file(Path);
@@ -175,9 +196,16 @@ scan_one(Path) ->
 
 scan_one_file(Path) ->
     case lists:member(filename:extension(Path), ?SCAN_EXTENSIONS) of
-        true -> {ok, {[Path], extract_file_timed(Path)}};
+        true ->
+            {File, Facts, Failed} = extract_file_timed(Path),
+            FailedFiles = case Failed of true -> [File]; false -> [] end,
+            {ok, #{files => [Path], facts => Facts, failed_files => FailedFiles}};
         false -> {error, {unsupported_file, Path}}
     end.
+
+scan_report_map(Paths, Files, Facts, FailedFiles) ->
+    #{scan_paths => Paths, files => Files, facts => Facts,
+      failed_files => lists:usort(FailedFiles), complete => FailedFiles =:= []}.
 
 %% A real recursive walk, not filelib:wildcard's flat "**" glob — the
 %% previous form had no way to skip a directory before descending into
@@ -230,10 +258,10 @@ run(Dir) ->
 %% returns a plain term, and error_message/1 below turns that term into
 %% the exact text printed, so both are directly testable without it.
 run(Dir, DbPath) ->
-    case scan(Dir) of
-        {ok, {Files, Facts}} ->
-            maybe_store(DbPath, Facts),
-            print_summary(Files, Facts),
+    case scan_report(Dir) of
+        {ok, Report} ->
+            maybe_store_report(DbPath, Report),
+            print_summary_report(Report),
             halt(0);
         {error, Reason} ->
             io:put_chars(standard_error, error_message(Reason)),
@@ -282,10 +310,10 @@ choose_db(undefined, ConfigDb) -> ConfigDb;
 choose_db(DbPath, _ConfigDb) -> DbPath.
 
 run_paths(Paths, DbPath) ->
-    case scan_paths(Paths) of
-        {ok, {Files, Facts}} ->
-            maybe_store(DbPath, Facts),
-            print_summary(Files, Facts),
+    case scan_paths_report(Paths) of
+        {ok, Report} ->
+            maybe_store_report(DbPath, Report),
+            print_summary_report(Report),
             halt(0);
         {error, Reason} -> halt_error(Reason)
     end.
@@ -344,6 +372,26 @@ maybe_store(DbPath, Facts) ->
         _:_ -> ok
     end.
 
+maybe_store_report(undefined, _Report) -> ok;
+maybe_store_report(DbPath, Report) ->
+    ok = symbolic_fact_store:delete_metadata(DbPath),
+    ok = maybe_store(DbPath, maps:get(facts, Report)),
+    Metadata = #{<<"metadata_available">> => true,
+        <<"complete">> => maps:get(complete, Report),
+        <<"scan_paths">> => [unicode:characters_to_binary(filename:absname(Path))
+            || Path <- maps:get(scan_paths, Report)],
+        <<"files">> => length(maps:get(files, Report)),
+        <<"failed_files">> => [unicode:characters_to_binary(filename:absname(Path))
+            || Path <- maps:get(failed_files, Report)]},
+    ok = symbolic_fact_store:write_metadata(DbPath, Metadata).
+
+print_summary_report(Report) ->
+    Base = summary(maps:get(files, Report), maps:get(facts, Report)),
+    Summary = Base#{scan_complete => maps:get(complete, Report),
+                    failed_files => [filename:absname(P)
+                        || P <- maps:get(failed_files, Report)]},
+    io:format("~ts~n", [jsx:encode(Summary)]).
+
 %% The CLI response matches the documented `Parse a project` response.
 summary(Files, Facts) ->
     #{
@@ -351,9 +399,6 @@ summary(Files, Facts) ->
         languages => languages_from_files(Files),
         total_facts => length(Facts)
     }.
-
-print_summary(Files, Facts) ->
-    io:format("~ts~n", [jsx:encode(summary(Files, Facts))]).
 
 languages_from_files(Files) ->
     lists:usort([language_from_ext(filename:extension(File)) || File <- Files]).

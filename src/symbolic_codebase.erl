@@ -225,7 +225,7 @@ handle_call({parse, Dir, RulesOverride}, _From, State) ->
     safely(fun() ->
         StartMs = erlang:monotonic_time(millisecond),
         case own_config(Dir) of
-            undefined -> finish_parse(symbolic_parse:scan(Dir), normalize_dir(Dir), RulesOverride, StartMs, State, undefined, #{});
+            undefined -> finish_parse(symbolic_parse:scan_report(Dir), normalize_dir(Dir), RulesOverride, StartMs, State, undefined, #{});
             ConfigPath -> parse_from_config(ConfigPath, RulesOverride, StartMs, State)
         end
     end, State);
@@ -242,8 +242,8 @@ handle_call({ask, Question, Path}, _From, State) ->
     case resolve_cache_entry(Path, State) of
         {error, Reason} ->
             {reply, {error, Reason}, State};
-        {ok, #{facts := Facts}} ->
-            {reply, symbolic_ask:ask(Facts, Question), State}
+        {ok, #{facts := Facts, meta := Meta}} ->
+            {reply, symbolic_ask:ask(Facts, Question, Meta), State}
     end;
 
 handle_call({facts, Path}, _From, State) ->
@@ -409,7 +409,7 @@ parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
     case symbolic_config:read_settings(ConfigPath) of
         {ok, #{paths := Paths, database := DbPath}} ->
             ProjectRoot = symbolic_config:project_root(ConfigPath),
-            finish_parse(symbolic_parse:scan_paths(Paths), ProjectRoot,
+            finish_parse(symbolic_parse:scan_paths_report(Paths), ProjectRoot,
                 RulesOverride, StartMs, State, DbPath,
                 #{config_file => ConfigPath});
         {error, Reason} -> {reply, {error, Reason}, State}
@@ -425,15 +425,16 @@ parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
 %%  error" guarantee handle_call({parse,...}) documented before this was
 %%  factored out still holds, since both callers still route every error
 %%  branch through the same {reply, {error,_}, State} (State unchanged).
-finish_parse({ok, {Files, Facts}}, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta) ->
+finish_parse({ok, ScanReport}, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta) ->
+    Facts = maps:get(facts, ScanReport),
     RulesPath = resolve_rules(CacheKey, RulesOverride),
     case build_state(Facts, RulesPath) of
         {ok, Erl} ->
-            case persist_database(DbPath, Facts) of
+            case persist_database(DbPath, Facts, ScanReport) of
                 ok ->
                     ElapsedMs = erlang:monotonic_time(millisecond) - StartMs,
                     DbMeta = case DbPath of undefined -> #{}; _ -> #{database => DbPath} end,
-                    Meta = maps:merge(compute_meta(Files, Facts, RulesPath, CacheKey, ElapsedMs),
+                    Meta = maps:merge(compute_meta(ScanReport, RulesPath, CacheKey, ElapsedMs),
                                       maps:merge(ExtraMeta, DbMeta)),
                     Caches = maps:get(caches, State),
                     %% The memory cache is a snapshot of this parse. A later
@@ -452,10 +453,12 @@ finish_parse({ok, {Files, Facts}}, CacheKey, RulesOverride, StartMs, State, DbPa
 finish_parse({error, Reason}, _CacheKey, _RulesOverride, _StartMs, State, _DbPath, _ExtraMeta) ->
     {reply, {error, Reason}, State}.
 
-persist_database(undefined, _Facts) -> ok;
-persist_database(DbPath, Facts) ->
+persist_database(undefined, _Facts, _ScanReport) -> ok;
+persist_database(DbPath, Facts, ScanReport) ->
     try
+        ok = symbolic_fact_store:delete_metadata(DbPath),
         ok = symbolic_fact_store:write(DbPath, Facts),
+        ok = symbolic_fact_store:write_metadata(DbPath, scan_metadata(ScanReport)),
         try symbolic_search:write_index_cache(DbPath, Facts)
         catch _:_ -> ok
         end,
@@ -464,10 +467,25 @@ persist_database(DbPath, Facts) ->
         Class:Reason -> {error, {database_write_failed, DbPath, Class, Reason}}
     end.
 
-compute_meta(Files, Facts, RulesPath, NormDir, ElapsedMs) ->
+scan_metadata(Report) ->
+    #{<<"metadata_available">> => true,
+      <<"complete">> => maps:get(complete, Report),
+      <<"scan_paths">> => [unicode:characters_to_binary(filename:absname(Path))
+          || Path <- maps:get(scan_paths, Report)],
+      <<"files">> => length(maps:get(files, Report)),
+      <<"failed_files">> => [unicode:characters_to_binary(filename:absname(Path))
+          || Path <- maps:get(failed_files, Report)]}.
+
+compute_meta(ScanReport, RulesPath, NormDir, ElapsedMs) ->
+    Files = maps:get(files, ScanReport),
+    Facts = maps:get(facts, ScanReport),
     #{
         loaded => true,
         path => NormDir,
+        scan_paths => [filename:absname(P) || P <- maps:get(scan_paths, ScanReport)],
+        scan_complete => maps:get(complete, ScanReport),
+        scan_metadata_available => true,
+        failed_files => [filename:absname(P) || P <- maps:get(failed_files, ScanReport)],
         parse_ms => ElapsedMs,
         %% `files` is a count, not the full path list — a large project can
         %% have thousands of paths, and dumping every one into the MCP

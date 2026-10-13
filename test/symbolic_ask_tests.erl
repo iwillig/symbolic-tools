@@ -28,9 +28,11 @@ with_db(Facts, Body) ->
     Path = tmp_db(),
     try
         ok = symbolic_fact_store:write(Path, Facts),
+        ok = symbolic_fact_store:write_metadata(Path, #{<<"complete">> => true}),
         Body(Path)
     after
-        file:delete(Path)
+        file:delete(Path),
+        file:delete(Path ++ ".scan.json")
     end.
 
 %% --- rule 3: each shape answers in its own JSON type ---
@@ -64,6 +66,49 @@ yes_no_call_true_across_both_call_shapes_test() ->
                     <<"name">> => <<"halt">>, <<"arity">> => 1}}},
             RemoteWitness)
     end).
+
+legacy_database_without_scan_metadata_makes_negative_unknown_test() ->
+    with_db(facts(), fun(Db) ->
+        ok = file:delete(Db ++ ".scan.json"),
+        ?assertMatch({ok, #{<<"type">> := <<"unknown">>,
+                            <<"scope">> := #{<<"complete">> := false}}},
+            symbolic_ask:run_result(Db, "does baz/3 call halt/1?"))
+    end).
+
+complete_scan_negative_includes_its_scope_test() ->
+    Metadata = #{<<"complete">> => true,
+        <<"scan_paths">> => [<<"/project/src">>],
+        <<"files">> => 4, <<"failed_files">> => []},
+    {ok, Answer} = symbolic_ask:ask(facts(),
+        "does baz/3 call halt/1?", Metadata),
+    ?assertEqual(false, maps:get(<<"answer">>, Answer)),
+    ?assertEqual(#{<<"scan_paths">> => [<<"/project/src">>],
+                   <<"files">> => 4, <<"complete">> => true,
+                   <<"metadata_available">> => true,
+                   <<"failed_files">> => []}, maps:get(<<"scope">>, Answer)).
+
+incomplete_scan_makes_absence_unknown_but_keeps_positive_witness_test() ->
+    Metadata = #{<<"complete">> => false,
+        <<"scan_paths">> => [<<"/project/src">>],
+        <<"files">> => 4,
+        <<"failed_files">> => [<<"/project/src/broken.ts">>]},
+    {ok, Unknown} = symbolic_ask:ask(facts(),
+        "does baz/3 call halt/1?", Metadata),
+    ?assertEqual(<<"unknown">>, maps:get(<<"type">>, Unknown)),
+    ?assertEqual(#{<<"scan_paths">> => [<<"/project/src">>],
+                        <<"files">> => 4,
+                        <<"complete">> => false,
+                        <<"metadata_available">> => true,
+                        <<"failed_files">> => [<<"/project/src/broken.ts">>]},
+        maps:get(<<"scope">>, Unknown)),
+    {ok, Positive} = symbolic_ask:ask(facts(),
+        "does foo/2 call bar/1?", Metadata),
+    ?assertEqual(true, maps:get(<<"answer">>, Positive)),
+    ?assertEqual(1, length(maps:get(<<"evidence">>, Positive))),
+    ?assertMatch({ok, #{<<"type">> := <<"unknown">>}},
+        symbolic_ask:ask(facts(), "which functions call bar/1?", Metadata)),
+    ?assertMatch({ok, #{<<"type">> := <<"unknown">>}},
+        symbolic_ask:ask(facts(), "how many functions call bar/1?", Metadata)).
 
 yes_no_call_false_is_an_answer_not_an_error_test() ->
     with_db(facts(), fun(Db) ->
@@ -171,6 +216,42 @@ wrong_arity_callee_is_unverifiable_never_zero_test() ->
             symbolic_ask:run_result(Db, "does foo/2 call qb/1?")),
         ?assertEqual({error, {unverifiable, {wrong_arity, qb, 1}}},
             symbolic_ask:run_result(Db, "how many functions call qb/1?"))
+    end).
+
+overloaded_identifier_returns_candidates_instead_of_first_arity_test() ->
+    Facts = [{defines, lookup, 1, [], "lookup.ts", 1},
+             {defines, lookup, 2, [], "lookup.ts", 4}],
+    with_db(Facts, fun(Db) ->
+        {error, {ambiguous, Candidates}} = symbolic_ask:run_result(Db,
+            "is lookup defined?"),
+        ?assertEqual([#{<<"name">> => <<"lookup">>, <<"arity">> => 1,
+                        <<"file">> => <<"lookup.ts">>, <<"line">> => 1},
+                      #{<<"name">> => <<"lookup">>, <<"arity">> => 2,
+                        <<"file">> => <<"lookup.ts">>, <<"line">> => 4}], Candidates),
+        ?assertEqual(#{<<"type">> => <<"ambiguous">>,
+            <<"reason">> => <<"The name matches multiple functions. Choose one candidate or specify its arity.">>,
+            <<"candidates">> => Candidates}, symbolic_ask:ambiguity_answer(Candidates))
+    end).
+
+multiple_identifier_candidates_are_not_resolved_by_order_test() ->
+    Facts = [{defines, foo, 1, [], "x.ts", 1},
+             {defines, bar, 1, [], "x.ts", 2},
+             {defines, baz, 1, [], "x.ts", 3}],
+    with_db(Facts, fun(Db) ->
+        ?assertMatch({error, {ambiguous, [_, _]}},
+            symbolic_ask:run_result(Db, "does foo bar call baz?"))
+    end).
+
+relation_verb_lookalike_identifier_is_grounded_as_a_name_test() ->
+    Facts = [{defines, call, 0, [], "relation-word.ts", 1},
+             {defines, bar, 1, [], "relation-word.ts", 2},
+             {calls, call, 0, {local, bar, 1}, "relation-word.ts", 4}],
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does call/0 call bar/1?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        [Witness] = maps:get(<<"evidence">>, Answer),
+        ?assertEqual(4, maps:get(<<"line">>, Witness))
     end).
 
 unknown_subject_is_unverifiable_never_false_test() ->
@@ -450,6 +531,15 @@ catalog_discovery_describes_supported_inputs_and_answer_contracts_test() ->
     ?assertEqual(<<"witness">>, maps:get(<<"evidence_mode">>, CallsOp)),
     ?assertMatch(#{<<"properties">> := #{<<"evidence">> := #{<<"type">> := <<"array">>}}},
         maps:get(<<"answer_shape">>, CallsOp)),
+    ?assertMatch(#{<<"properties">> := #{<<"type">> :=
+        #{<<"const">> := <<"unknown">>}, <<"scope">> := _}},
+        maps:get(<<"incomplete_scan_answer_shape">>, CallsOp)),
+    {_, ProseOp} = lists:keyfind(<<"prose_search">>, 1,
+        [{maps:get(<<"id">>, Op), Op} || Op <- Operations]),
+    ?assertEqual(null, maps:get(<<"incomplete_scan_answer_shape">>, ProseOp)),
+    ?assertMatch(#{<<"properties">> := #{<<"type">> :=
+        #{<<"const">> := <<"ambiguous">>}, <<"candidates">> := _}},
+        maps:get(<<"ambiguity_answer_shape">>, symbolic_ask_catalog:describe())),
     ?assertMatch([#{<<"name">> := <<"caller">>, <<"type">> := <<"function">>},
                   #{<<"name">> := <<"callee">>, <<"type">> := <<"function">>}],
         maps:get(<<"inputs">>, CallsOp)),

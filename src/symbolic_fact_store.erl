@@ -12,7 +12,7 @@
 %%% `defines/3` fact directly — a free index by predicate, no wrapping
 %%% needed. `read/1` just wants the whole fact set back, via `foldl`.
 -module(symbolic_fact_store).
--export([write/2, read/1]).
+-export([write/2, read/1, write_metadata/2, read_metadata/1, delete_metadata/1]).
 
 %% `symbolic parse` fully regenerates the fact set every run (it's a
 %% deterministic function of the source files), so a write replaces
@@ -39,6 +39,36 @@ read(Path) ->
     after
         ok = dets:close(Table)
     end.
+
+-spec write_metadata(file:filename(), map()) -> ok | {error, term()}.
+write_metadata(Path, Metadata) ->
+    MetaPath = metadata_path(Path),
+    filelib:ensure_dir(MetaPath),
+    TempPath = MetaPath ++ ".tmp",
+    case file:write_file(TempPath, jsx:encode(Metadata)) of
+        ok -> file:rename(TempPath, MetaPath);
+        Error -> Error
+    end.
+
+-spec read_metadata(file:filename()) -> {ok, map()} | not_found | {error, term()}.
+read_metadata(Path) ->
+    case file:read_file(metadata_path(Path)) of
+        {ok, Json} ->
+            try {ok, jsx:decode(Json, [return_maps])}
+            catch _:_ -> {error, invalid_scan_metadata}
+            end;
+        {error, enoent} -> not_found;
+        {error, Reason} -> {error, Reason}
+    end.
+
+delete_metadata(Path) ->
+    case file:delete(metadata_path(Path)) of
+        ok -> ok;
+        {error, enoent} -> ok;
+        Error -> Error
+    end.
+
+metadata_path(Path) -> Path ++ ".scan.json".
 
 %% dets:open_file/2 registers Table (an atom) as a process-wide name,
 %% separate from the file path it's backed by — derived from the path so

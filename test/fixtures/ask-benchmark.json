@@ -1,0 +1,193 @@
+[
+  {
+    "id": "positive-local-call",
+    "source": "sample_ts",
+    "question": "does foo/1 call bar/1?",
+    "operation": "calls",
+    "slots": {"caller": "foo/1", "callee": "bar/1"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": true},
+    "evidence": [{"predicate": "calls", "file": "sample.ts", "line": 2}]
+  },
+  {
+    "id": "negative-local-call",
+    "source": "sample_ts",
+    "question": "does shout/1 call foo/1?",
+    "operation": "calls",
+    "slots": {"caller": "shout/1", "callee": "foo/1"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": false},
+    "evidence": []
+  },
+  {
+    "id": "enumerate-callers",
+    "source": "sample_ts",
+    "question": "which functions call bar/1?",
+    "operation": "callers",
+    "slots": {"callee": "bar/1"},
+    "expected": {"status": "answer", "type": "enumerate", "answer": ["foo/1", "other/0"]},
+    "evidence": [
+      {"predicate": "calls", "file": "sample.ts", "line": 2},
+      {"predicate": "calls", "file": "sample.ts", "line": 7}
+    ]
+  },
+  {
+    "id": "who-calls-alias",
+    "source": "sample_ts",
+    "question": "who calls bar/1?",
+    "operation": "callers",
+    "slots": {"callee": "bar/1"},
+    "expected": {"status": "answer", "type": "enumerate", "answer": ["foo/1", "other/0"]},
+    "evidence": [
+      {"predicate": "calls", "file": "sample.ts", "line": 2},
+      {"predicate": "calls", "file": "sample.ts", "line": 7}
+    ]
+  },
+  {
+    "id": "caller-count",
+    "source": "sample_ts",
+    "question": "how many functions call bar/1?",
+    "operation": "callers_count",
+    "slots": {"callee": "bar/1"},
+    "expected": {"status": "answer", "type": "count", "answer": 2},
+    "evidence": [
+      {"predicate": "calls", "file": "sample.ts", "line": 2},
+      {"predicate": "calls", "file": "sample.ts", "line": 7}
+    ]
+  },
+  {
+    "id": "exact-definition",
+    "source": "sample_ts",
+    "question": "is shout/1 defined?",
+    "operation": "defines",
+    "slots": {"function": "shout/1"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": true},
+    "evidence": [{"predicate": "defines", "file": "sample.ts", "line": 18}]
+  },
+  {
+    "id": "prose-evidence-only",
+    "source": "sample_ts",
+    "question": "where is exclamation mark documented?",
+    "operation": "prose_search",
+    "slots": {"query": "exclamation mark"},
+    "expected": {"status": "answer", "type": "prose"},
+    "evidence": [{"kind": "comment", "file": "sample.ts", "line": 15}]
+  },
+  {
+    "id": "wrong-arity-repair",
+    "source": "sample_ts",
+    "question": "does foo/2 call bar/1?",
+    "operation": "calls",
+    "slots": {"caller": "foo/2", "callee": "bar/1"},
+    "expected": {"status": "unverifiable"},
+    "evidence": []
+  },
+  {
+    "id": "unknown-subject-repair",
+    "source": "sample_ts",
+    "question": "does madeUp/1 call bar/1?",
+    "operation": "calls",
+    "slots": {"caller": "madeUp/1", "callee": "bar/1"},
+    "expected": {"status": "unverifiable"},
+    "evidence": []
+  },
+  {
+    "id": "incomplete-scan-negative",
+    "source": "sample_ts",
+    "scan": "incomplete",
+    "question": "does shout/1 call foo/1?",
+    "operation": "calls",
+    "slots": {"caller": "shout/1", "callee": "foo/1"},
+    "expected": {"status": "unknown"},
+    "evidence": []
+  },
+  {
+    "id": "real-ask-interpreter-delegation",
+    "plan_reference": "docs/plans/ask-expert-machine.md#1-make-the-operation-catalog-a-client-contract",
+    "source": "project_src",
+    "question": "does ask_detailed/3 call ask/3?",
+    "operation": "calls",
+    "slots": {"caller": "ask_detailed/3", "callee": "ask/3"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": true},
+    "evidence": [{"predicate": "calls", "file": "symbolic_ask.erl", "line": 114}]
+  },
+  {
+    "id": "real-scan-report-extraction",
+    "plan_reference": "docs/plans/ask-expert-machine.md#3-make-negative-and-unknown-answers-scope-aware",
+    "source": "project_src",
+    "question": "does scan_report/1 call parallel_extract/1?",
+    "operation": "calls",
+    "slots": {"caller": "scan_report/1", "callee": "parallel_extract/1"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": true},
+    "evidence": [{"predicate": "calls", "file": "symbolic_parse.erl", "line": 37}]
+  },
+  {
+    "id": "real-mcp-ambiguity-adapter",
+    "plan_reference": "docs/plans/ask-expert-machine.md#4-improve-entity-grounding-and-ambiguity-handling",
+    "source": "project_src",
+    "question": "does render_ask/1 call ambiguity_answer/1?",
+    "operation": "calls",
+    "slots": {"caller": "render_ask/1", "callee": "ambiguity_answer/1"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": true},
+    "evidence": [{"predicate": "calls", "file": "symbolic_serve.erl", "line": 425}]
+  },
+  {
+    "id": "real-metadata-persistence-callers",
+    "plan_reference": "docs/plans/ask-expert-machine.md#3-make-negative-and-unknown-answers-scope-aware",
+    "source": "project_src",
+    "question": "which functions call write_metadata/2?",
+    "operation": "callers",
+    "slots": {"callee": "write_metadata/2"},
+    "expected": {"status": "answer", "type": "enumerate", "answer": ["maybe_store_report/2", "persist_database/3"]},
+    "evidence": [
+      {"predicate": "calls", "file": "symbolic_codebase.erl", "line": 461},
+      {"predicate": "calls", "file": "symbolic_parse.erl", "line": 386}
+    ]
+  },
+  {
+    "id": "real-scope-scan-negative",
+    "plan_reference": "docs/plans/ask-expert-machine.md#3-make-negative-and-unknown-answers-scope-aware",
+    "source": "project_src",
+    "question": "does scan_report/1 call write_metadata/2?",
+    "operation": "calls",
+    "slots": {"caller": "scan_report/1", "callee": "write_metadata/2"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": false},
+    "evidence": []
+  },
+  {
+    "id": "nearby-name-is-not-an-alias",
+    "plan_reference": "docs/plans/ask-expert-machine.md#4-improve-entity-grounding-and-ambiguity-handling",
+    "source": "overloaded",
+    "question": "is lookupExtra/1 defined?",
+    "operation": "defines",
+    "slots": {"function": "lookupExtra/1"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": false},
+    "evidence": []
+  },
+  {
+    "id": "relation-word-identifier",
+    "plan_reference": "docs/plans/ask-expert-machine.md#4-improve-entity-grounding-and-ambiguity-handling",
+    "source": "relation_word",
+    "question": "does call/0 call bar/1?",
+    "operation": "calls",
+    "slots": {"caller": "call/0", "callee": "bar/1"},
+    "expected": {"status": "answer", "type": "yes_no", "answer": true},
+    "evidence": [{"predicate": "calls", "file": "relation-word.ts", "line": 4}]
+  },
+  {
+    "id": "overloaded-name-clarification",
+    "source": "overloaded",
+    "question": "is lookup defined?",
+    "operation": "defines",
+    "slots": {"function": "lookup"},
+    "expected": {"status": "ambiguous", "candidates": ["lookup/1", "lookup/2"]},
+    "evidence": []
+  },
+  {
+    "id": "unsupported-question",
+    "source": "sample_ts",
+    "question": "what does foo do?",
+    "operation": "unsupported",
+    "slots": {},
+    "expected": {"status": "unrecognized"},
+    "evidence": []
+  }
+]

@@ -223,7 +223,8 @@ register_tools() ->
           "Parses the question, verifies every entity against the fact "
           "base BEFORE proving (a wrong arity is reported as `unverifiable`, "
           "never silently answered), then proves and shapes the answer by "
-          "question type. Covered shapes (lowercase words only): "
+          "question type. Ambiguous names return candidate functions and "
+          "arities for clarification. Covered shapes (lowercase words only): "
           "`does X/N call Y/M?` -> {type: yes_no, answer: true|false}; "
           "`which functions call X/N?` / `who calls X/N?` -> {type: "
           "enumerate, answer: [\"name/arity\", ...]}; `how many functions "
@@ -231,7 +232,8 @@ register_tools() ->
           "`does X/N exist?` -> {type: yes_no, answer: true|false}; "
           "`where is ... documented?` / `where is ... discussed?` -> "
           "{type: prose, evidence: [ranked hits]} — prose returns evidence, "
-          "never a verdict. Unverifiable questions come back as "
+          "never a verdict. Ambiguous questions return `{type: ambiguous, "
+          "candidates: [{name, arity}, ...]}`. Unverifiable questions come back as "
           "{type: unverifiable, reason} naming the unresolvable entity; "
           "phrasings outside the grammar are an `unrecognized` error. "
           "Callers that need anything the grammar doesn't cover should "
@@ -419,6 +421,8 @@ handle_ask(Params) ->
 
 render_ask({ok, Answer}) ->
     json(#{ok => Answer});
+render_ask({error, {ambiguous, Candidates}}) ->
+    json(#{ok => symbolic_ask:ambiguity_answer(Candidates)});
 render_ask({error, {unverifiable, Reason}}) ->
     %% Unverifiable is an answer about the question, not a tool failure —
     %% the same JSON shape the CLI prints, with the reason naming the
@@ -516,6 +520,10 @@ meta_to_json(Meta) ->
         path => jstr(maps:get(path, Meta)),
         parse_ms => maps:get(parse_ms, Meta),
         files => maps:get(files, Meta),
+        scan_complete => maps:get(scan_complete, Meta),
+        scan_metadata_available => maps:get(scan_metadata_available, Meta),
+        scan_paths => [jstr(P) || P <- maps:get(scan_paths, Meta)],
+        failed_files => [jstr(P) || P <- maps:get(failed_files, Meta)],
         %% languages are Erlang charlists; jsx encodes a bare int-list as a
         %% number-array, so convert to binaries so they render as JSON strings.
         languages => [jstr(L) || L <- maps:get(languages, Meta)],

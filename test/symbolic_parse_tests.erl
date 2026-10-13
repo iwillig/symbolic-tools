@@ -31,7 +31,11 @@ extract_file_timed_survives_a_crashing_file_test() ->
         ?assert(lists:any(
             fun(Fact) -> element(1, Fact) =:= defines andalso element(2, Fact) =:= f end, Facts)),
         ?assertNot(lists:any(
-            fun(Fact) -> element(1, Fact) =:= defines andalso element(2, Fact) =:= g end, Facts))
+            fun(Fact) -> element(1, Fact) =:= defines andalso element(2, Fact) =:= g end, Facts)),
+        {ok, Report} = symbolic_parse:scan_report(Root),
+        ?assertEqual([Bad], maps:get(failed_files, Report)),
+        ?assertEqual(2, length(maps:get(files, Report))),
+        ?assertEqual(false, maps:get(complete, Report))
     after
         meck:unload(ts_extract),
         _ = file:del_dir_r(Root)

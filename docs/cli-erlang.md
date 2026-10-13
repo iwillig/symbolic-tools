@@ -80,14 +80,16 @@ The fix: a small wrapper script (`scripts/symbolic`, copied into
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 exec erl -pa "$DIR"/lib/*/ebin \
     -noshell \
-    -eval "symbolic_cli:main(init:get_plain_arguments())" \
+    -eval "symbolic_cli:main(init:get_plain_arguments()), halt()." \
     -extra "$@"
 ```
 
 This is the same shape the old escript invocation had — `main/1` receives
 argv, `argparse` (§2) dispatches — except it runs against the release's
 real on-disk `ebin`/`priv` directories instead of a zip, so `symbolic_ts`'s
-NIF loads correctly. `symbolic parse` now works from the built binary
+NIF loads correctly. The wrapper explicitly halts after dispatch: commands
+that return normally (notably `ask -catalog`) must still terminate the one-shot
+Erlang VM. `symbolic parse` now works from the built binary
 (`_build/default/rel/symbolic_tools/bin/symbolic`), verified end-to-end
 including composing `parse` and `query` against the configured database.
 
