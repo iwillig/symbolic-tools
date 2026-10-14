@@ -485,6 +485,15 @@ This is roughly the path actually followed, kept for reference:
   [`ikatyang/tree-sitter-yaml`](https://github.com/ikatyang/tree-sitter-yaml)
   was investigated but deliberately not vendored — see §5.1's C++
   blocker.
+
+The TSX grammar is a separate language, not the TypeScript grammar with a
+filename switch. It is vendored at `c_src/grammars/tsx/` from
+`tree-sitter-typescript` v0.20.6 (commit
+`b00b8eb44f0b9f02556da0b1a4e2f71faed7e61b`, MIT; see its local `LICENSE`).
+Its scanner uses the matching upstream `common/scanner.h` copy because its
+external-token layout differs from the TypeScript grammar. `.tsx` files use
+`tree_sitter_tsx/0`; `.ts` files continue to use `tree_sitter_typescript/0`.
+
 - [`cfclavijo/erl_ts`](https://github.com/cfclavijo/erl_ts) — the
   third-party binding this project's own NIF was ported from and now
   replaces; credit for the resource-wrapping shape `symbolic_ts` still

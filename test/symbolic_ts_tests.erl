@@ -69,7 +69,8 @@ node_text_is_undefined_for_a_null_node_test() ->
     ?assertEqual(undefined, symbolic_ts:node_text(NullNode, list_to_binary(Source))).
 
 language_loaders_return_language_resources_test() ->
-    Loaders = [tree_sitter_erlang, tree_sitter_typescript, tree_sitter_markdown,
+    Loaders = [tree_sitter_erlang, tree_sitter_typescript, tree_sitter_tsx,
+               tree_sitter_markdown,
                tree_sitter_toml, tree_sitter_json, tree_sitter_bash,
                tree_sitter_jsdoc, tree_sitter_rust, tree_sitter_clojure,
                tree_sitter_ruby],

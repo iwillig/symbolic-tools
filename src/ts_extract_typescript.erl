@@ -233,7 +233,7 @@ file(Path) ->
 -spec text(file:filename(), string() | binary()) -> [tuple()].
 text(Path, Src0) ->
     {ok, Parser} = symbolic_ts:parser_new(),
-    {ok, Lang} = symbolic_ts:tree_sitter_typescript(),
+    {ok, Lang} = language_for(Path),
     true = symbolic_ts:parser_set_language(Parser, Lang),
     %% parser_parse_string's NIF takes a binary — the source's actual UTF-8
     %% bytes, handed straight to tree-sitter (the old C NIF took a char list
@@ -274,6 +274,12 @@ text(Path, Src0) ->
         label_stmts(Lang, Root, Src, PathAtom) ++
         label_refs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
+
+language_for(Path) ->
+    case filename:extension(Path) of
+        ".tsx" -> symbolic_ts:tree_sitter_tsx();
+        _ -> symbolic_ts:tree_sitter_typescript()
+    end.
 
 defines(Lang, Root, Src, PathAtom) ->
     {Q, _, _} = symbolic_ts:query_new(Lang, ?DEF_QUERY),
@@ -1154,24 +1160,27 @@ parse_normalized_number(Text) ->
     catch error:badarg -> list_to_float(ensure_decimal_point(Text))
     end.
 
-%% Issue #4: JS/TS allows a bare-exponent mantissa with no decimal point
-%% at all (1e6, 2E10 — confirmed a real crash: list_to_float("1e6")
-%% badargs even though list_to_float("1.0e6") parses fine). Erlang float
-%% syntax requires a digit on both sides of a `.` in the mantissa even
-%% when an exponent follows, so insert ".0" right before the e/E when
-%% none is present — same normalize-before-the-BIF-sees-it shape
-%% parse_number/1 above already uses for `_`/radix/BigInt. A mantissa
-%% that already has a `.` (1.5e6) or has no exponent either (plain
-%% integer text that still badarg'd list_to_integer/1 for some other
-%% reason) is passed through unchanged and left to list_to_float/1's own
-%% error, same as before this fix.
+%% Erlang requires a digit on each side of the decimal point in a float,
+%% while JavaScript also permits `.1`, `214.`, and bare exponents such as
+%% `1e6`. Normalize only the mantissa before list_to_float/1; preserve the
+%% original token separately in the literal fact.
 ensure_decimal_point(Text) ->
-    case lists:member($., Text) of
-        true -> Text;
-        false ->
-            case lists:splitwith(fun(C) -> C =/= $e andalso C =/= $E end, Text) of
-                {_Mantissa, []} -> Text;
-                {Mantissa, Exponent} -> Mantissa ++ ".0" ++ Exponent
+    {Mantissa, Exponent} = lists:splitwith(
+        fun(C) -> C =/= $e andalso C =/= $E end, Text),
+    ensure_decimal_mantissa(Mantissa, Exponent) ++ Exponent.
+
+ensure_decimal_mantissa([$. | Rest], _Exponent) when Rest =/= [] ->
+    "0." ++ Rest;
+ensure_decimal_mantissa([], _Exponent) ->
+    [];
+ensure_decimal_mantissa(Mantissa, Exponent) ->
+    case lists:member($., Mantissa) of
+        false when Exponent =/= [] -> Mantissa ++ ".0";
+        false -> Mantissa;
+        true ->
+            case lists:last(Mantissa) of
+                $. -> Mantissa ++ "0";
+                _ -> Mantissa
             end
     end.
 

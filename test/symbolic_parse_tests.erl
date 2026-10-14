@@ -150,6 +150,21 @@ scan_paths_merges_a_directory_and_a_file_test() ->
 scan_paths_reports_a_missing_path_test() ->
     ?assertEqual({error, {no_such_path, "no/such/thing_zz"}},
         symbolic_parse:scan_paths(["no/such/thing_zz"])).
+tsx_child_text_with_decimal_looking_text_scans_without_errors_test() ->
+    File = filename:absname("test/fixtures/tsx_text_numbers.tsx"),
+    {ok, Report} = symbolic_parse:scan_paths_report([File]),
+    ?assertEqual([], maps:get(failed_files, Report)),
+    Facts = maps:get(facts, Report),
+    Path = list_to_atom(File),
+    ?assert(lists:any(fun
+        ({calls, renderStory, 0, {local, renderCard, 1}, Path0, _Line}) ->
+            Path0 =:= Path;
+        (_) -> false
+    end, Facts)),
+    NumberLiterals = lists:sort([{Raw, Value} ||
+        {literal, _Id, renderStory, 0, number, Value, Path0, _Line, Raw} <- Facts,
+        Path0 =:= Path]),
+    ?assertEqual([{<<".1">>, 0.1}, {<<"214.">>, 214.0}], NumberLiterals).
 
 scan_paths_reports_an_unsupported_file_extension_test() ->
     Path = filename:join(["_build", "parse_scan_paths_unsupported_scratch.txt"]),

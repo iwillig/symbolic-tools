@@ -70,6 +70,7 @@ atoms! {
     unable_to_create_new_parser,
     unable_to_create_language_erlang,
     unable_to_create_language_typescript,
+    unable_to_create_language_tsx,
     unable_to_create_language_markdown,
     unable_to_create_language_toml,
     unable_to_create_language_json,
@@ -239,6 +240,15 @@ fn tree_sitter_typescript(env: Env) -> Term {
         env,
         unsafe { ffi::tree_sitter_typescript() },
         unable_to_create_language_typescript(),
+    )
+}
+
+#[rustler::nif]
+fn tree_sitter_tsx(env: Env) -> Term {
+    make_language(
+        env,
+        unsafe { ffi::tree_sitter_tsx() },
+        unable_to_create_language_tsx(),
     )
 }
 

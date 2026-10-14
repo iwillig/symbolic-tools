@@ -19,6 +19,7 @@
 -export([
     tree_sitter_erlang/0,
     tree_sitter_typescript/0,
+    tree_sitter_tsx/0,
     tree_sitter_markdown/0,
     tree_sitter_toml/0,
     tree_sitter_json/0,
@@ -65,6 +66,7 @@ init() ->
 
 tree_sitter_erlang() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_typescript() -> erlang:nif_error(nif_not_loaded).
+tree_sitter_tsx() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_markdown() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_toml() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_json() -> erlang:nif_error(nif_not_loaded).

@@ -51,6 +51,7 @@ extern "C" {
     // Grammar entry points (compiled from c_src/grammars/*/parser.c).
     pub fn tree_sitter_erlang() -> *const TSLanguage;
     pub fn tree_sitter_typescript() -> *const TSLanguage;
+    pub fn tree_sitter_tsx() -> *const TSLanguage;
     pub fn tree_sitter_markdown() -> *const TSLanguage;
     pub fn tree_sitter_toml() -> *const TSLanguage;
     pub fn tree_sitter_json() -> *const TSLanguage;
