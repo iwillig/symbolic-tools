@@ -217,5 +217,35 @@ ask_handler_forwards_question_to_shared_answer_runner_test() ->
         meck:unload(symbolic_ask)
     end.
 
+source_checkout_launcher_runs_catalog_test() ->
+    {Status, Output} = run_source_launcher(["ask", "-catalog"]),
+    ?assertEqual(0, Status),
+    ?assertNotEqual(nomatch, binary:match(Output, <<"\"operations\"">>)).
+
+source_checkout_launcher_explains_missing_database_test() ->
+    Missing = filename:absname(filename:join(["_build",
+        "missing_ask_db_" ++ integer_to_list(erlang:unique_integer([positive]))])),
+    {Status, Output} = run_source_launcher([
+        "ask", "-db", Missing, "is foo/1 defined?"]),
+    ?assertEqual(1, Status),
+    ?assertNotEqual(nomatch, binary:match(Output, <<"run `symbolic parse` first">>)).
+
+run_source_launcher(Args) ->
+    Script = filename:absname("scripts/symbolic"),
+    Env = "/usr/bin/env",
+    Port = open_port({spawn_executable, Env}, [binary, exit_status, use_stdio,
+        stderr_to_stdout, {args, ["REBAR_PROFILE=test", Script | Args]}]),
+    collect_port(Port, []).
+
+collect_port(Port, Acc) ->
+    receive
+        {Port, {data, Data}} -> collect_port(Port, [Data | Acc]);
+        {Port, {exit_status, Status}} ->
+            {Status, iolist_to_binary(lists:reverse(Acc))}
+    after 15000 ->
+        port_close(Port),
+        {timeout, iolist_to_binary(lists:reverse(Acc))}
+    end.
+
 args_by_name(Args) ->
     maps:from_list([{maps:get(name, A), A} || A <- Args]).

@@ -69,7 +69,8 @@ parse_rejects_arguments_test() ->
 ask_catalog_tool_is_discoverable_and_returns_shared_catalog_test() ->
     meck:new(erlmcp_stdio, [non_strict]),
     meck:expect(erlmcp_stdio, add_tool,
-        fun(Name, _Description, Handler, Schema) ->
+        fun(Name, Description, Handler, Schema) ->
+            put({registered_tool_description, Name}, Description),
             put({registered_tool_schema, Name}, Schema),
             put({registered_tool_handler, Name}, Handler),
             ok
@@ -80,12 +81,16 @@ ask_catalog_tool_is_discoverable_and_returns_shared_catalog_test() ->
         ?assertEqual(#{}, maps:get(<<"properties">>, Schema)),
         ?assertEqual([], maps:get(<<"required">>, Schema)),
         ?assertEqual(false, maps:get(<<"additionalProperties">>, Schema)),
+        AskDescription = get({registered_tool_description, <<"ask">>}),
+        ?assertNotEqual(nomatch, binary:match(AskDescription, <<"case-insensitive">>)),
+        ?assertEqual(nomatch, binary:match(AskDescription, <<"lowercase words only">>)),
         Handler = get({registered_tool_handler, <<"ask_catalog">>}),
         Json = decode(Handler(#{})),
         ?assertEqual(#{<<"ok">> => symbolic_ask_catalog:describe()}, Json),
         ?assertMatch(#{<<"error">> := <<"ask_catalog accepts no arguments">>},
             decode(Handler(#{<<"unexpected">> => true})))
     after
+        erase({registered_tool_description, <<"ask">>}),
         erase({registered_tool_schema, <<"ask_catalog">>}),
         erase({registered_tool_handler, <<"ask_catalog">>}),
         meck:unload(erlmcp_stdio)
@@ -227,7 +232,7 @@ ask_yes_no_call_against_parsed_cache(#{root := Root}) ->
         %% The CLI runner and MCP adapter must expose the same shared answer
         %% map for both a positive witness and an empty-evidence negative.
         _ = decode(symbolic_serve:handle_parse(#{})),
-        PositiveQuestion = <<"does shout/1 call capitalize/1?">>,
+        PositiveQuestion = <<"Does shout/1 call capitalize/1?">>,
         PositiveJson = decode(symbolic_serve:handle_ask(#{
             <<"question">> => PositiveQuestion})),
         ?assertMatch(#{<<"ok">> := #{<<"type">> := <<"yes_no">>,
@@ -328,7 +333,9 @@ ask_unrecognized_shape_is_friendly_error(_Setup) ->
         Json = decode(symbolic_serve:handle_ask(#{
             <<"question">> => <<"what is the meaning of life">>})),
         ?assertMatch(#{<<"error">> := <<"unrecognized question shape", _/binary>>},
-            Json)
+            Json),
+        ?assertEqual(nomatch, binary:match(
+            maps:get(<<"error">>, Json), <<"lowercase words only">>))
     end.
 
 ask_with_unknown_path_is_friendly_error(_Setup) ->

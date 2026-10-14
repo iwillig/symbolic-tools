@@ -124,7 +124,8 @@ overview_cmd() ->
 
 ask_cmd() ->
     #{
-        help => "Answer a bounded English question or list supported ASK operations",
+        help => "Answer a bounded English question or list supported ASK operations. "
+                "Parse the project first if its fact database does not exist.",
         arguments => [
             #{name => db, long => "db", required => false,
               help => "Path to a fact database (.dets); defaults to the project's configured database"},

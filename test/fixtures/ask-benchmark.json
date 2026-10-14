@@ -107,7 +107,7 @@
     "operation": "calls",
     "slots": {"caller": "ask_detailed/3", "callee": "ask/3"},
     "expected": {"status": "answer", "type": "yes_no", "answer": true},
-    "evidence": [{"predicate": "calls", "file": "symbolic_ask.erl", "line": 114}]
+    "evidence": [{"predicate": "calls", "file": "symbolic_ask.erl", "line": 117}]
   },
   {
     "id": "real-scan-report-extraction",
@@ -127,7 +127,7 @@
     "operation": "calls",
     "slots": {"caller": "render_ask/1", "callee": "ambiguity_answer/1"},
     "expected": {"status": "answer", "type": "yes_no", "answer": true},
-    "evidence": [{"predicate": "calls", "file": "symbolic_serve.erl", "line": 427}]
+    "evidence": [{"predicate": "calls", "file": "symbolic_serve.erl", "line": 428}]
   },
   {
     "id": "real-metadata-persistence-callers",

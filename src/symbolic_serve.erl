@@ -226,7 +226,8 @@ register_tools() ->
           "base BEFORE proving (a wrong arity is reported as `unverifiable`, "
           "never silently answered), then proves and shapes the answer by "
           "question type. Ambiguous names return candidate functions and "
-          "arities for clarification. Covered shapes (lowercase words only): "
+          "arities for clarification. Question starters are case-insensitive. "
+          "Covered shapes include: "
           "`does X/N call Y/M?` -> {type: yes_no, answer: true|false}; "
           "`which functions call X/N?` / `who calls X/N?` -> {type: "
           "enumerate, answer: [\"name/arity\", ...]}; `how many functions "
@@ -439,7 +440,7 @@ render_ask(unrecognized) ->
           "who calls X/N? / how many functions call X/N? / "
           "is X/N defined? / does X/N exist? / "
           "where is ... documented? / where is ... discussed? "
-          "(lowercase words only). Write a `query` goal for anything "
+          "Write a `query` goal for anything "
           "else.">>});
 render_ask({error, {tokenize_error, Reason}}) ->
     json(#{error => iolist_to_binary(

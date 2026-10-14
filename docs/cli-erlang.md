@@ -74,24 +74,20 @@ started yet, which is exactly what a CLI needs.
 
 The fix: a small wrapper script (`scripts/symbolic`, copied into
 `bin/symbolic` in the release via the `overlay` config above) that runs
-`erl` directly against the release's own `lib/*/ebin` directories:
-
-```sh
-DIR="$(cd "$(dirname "$0")/.." && pwd)"
-exec erl -pa "$DIR"/lib/*/ebin \
-    -noshell \
-    -eval "symbolic_cli:main(init:get_plain_arguments()), halt()." \
-    -extra "$@"
-```
+`erl` directly against the release's own `lib/*/ebin` directories. From a
+source checkout it instead selects `_build/$REBAR_PROFILE/lib` (or
+`_build/default/lib`, then `_build/test/lib`); set `REBAR_PROFILE` when a
+specific rebar3 profile is needed. If no compiled beams exist, it instructs
+the user to run `rebar3 compile` or `rebar3 release` rather than failing with
+an `undef` for `symbolic_cli:main/1`.
 
 This is the same shape the old escript invocation had — `main/1` receives
-argv, `argparse` (§2) dispatches — except it runs against the release's
-real on-disk `ebin`/`priv` directories instead of a zip, so `symbolic_ts`'s
-NIF loads correctly. The wrapper explicitly halts after dispatch: commands
-that return normally (notably `ask -catalog`) must still terminate the one-shot
-Erlang VM. `symbolic parse` now works from the built binary
-(`_build/default/rel/symbolic_tools/bin/symbolic`), verified end-to-end
-including composing `parse` and `query` against the configured database.
+argv, `argparse` (§2) dispatches — except it runs against real on-disk
+`ebin`/`priv` directories instead of a zip, so `symbolic_ts`'s NIF loads
+correctly. The wrapper explicitly halts after dispatch: commands that return
+normally (notably `ask -catalog`) must still terminate the one-shot Erlang VM.
+`symbolic parse` works from the built release and from a compiled source
+checkout.
 
 ## 2. Entry point, subcommands, and argument parsing
 
@@ -171,8 +167,12 @@ shared DETS file, resolved relative to the project root. For example:
 and an explicit `-db` still overrides it for those commands. Parse and query
 commands discover the nearest project config from the current directory. If
 no configured database is found, database-backed commands require an explicit
-`-db`; existing configs without `database` remain valid. CLI and MCP do not
-coordinate concurrent DETS access; use the shared database sequentially.
+`-db`; existing configs without `database` remain valid. If `symbolic ask`
+cannot find the configured fact database, it explains that you must run
+`symbolic parse` first or pass `-db <path>`; it does not silently scan or
+write a database. ASK question starters are case-insensitive (`Does`, `Which`,
+`WHERE`, etc.), while code identifiers retain their original case. CLI and MCP
+do not coordinate concurrent DETS access; use the shared database sequentially.
 
 - `serve` starts the MCP server supervisor
   ([`erlang-mcp-design.md`](erlang-mcp-design.md)). **Implemented.**

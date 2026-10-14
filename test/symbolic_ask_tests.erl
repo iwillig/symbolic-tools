@@ -37,6 +37,16 @@ with_db(Facts, Body) ->
 
 %% --- rule 3: each shape answers in its own JSON type ---
 
+capitalized_question_starters_are_accepted_test() ->
+    with_db(facts(), fun(Db) ->
+        {ok, YesNo} = symbolic_ask:run_result(Db, "Does foo/2 call bar/1?"),
+        ?assertEqual(true, maps:get(<<"answer">>, YesNo)),
+        {ok, Enumerated} = symbolic_ask:run_result(Db,
+            "Which functions call bar/1?"),
+        ?assertEqual([<<"baz/3">>, <<"foo/2">>],
+            maps:get(<<"answer">>, Enumerated))
+    end).
+
 yes_no_call_true_across_both_call_shapes_test() ->
     with_db(facts(), fun(Db) ->
         %% The answer keeps its yes/no fields and cites a matching fact.

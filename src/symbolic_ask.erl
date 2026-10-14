@@ -66,6 +66,9 @@ run(DbPath, Question) ->
                 })
             ]),
             halt(2);
+        {error, {no_such_db, DbPath}} ->
+            fail("fact database not found: ~ts; run `symbolic parse` first "
+                 "or pass -db <path>", [DbPath]);
         {error, Reason} ->
             fail("cannot answer: ~p", [Reason])
     end.
@@ -119,21 +122,21 @@ ask_detailed(Facts, Question, Metadata) ->
 
 ask(Facts, Question, Metadata) ->
     erase({?MODULE, operation_trace}),
+    NormalizedQuestion = normalize_question_starter(Question),
     {ok, Pid} = prolog_session:start_link(),
     Result =
         case prolog_session:load_facts(Pid, Facts) of
             ok ->
                 case prolog_session:consult(Pid, grammar_file()) of
                     ok ->
-                        %% The DCG's tokenizer rejects capitalized and
-                        %% dotted tokens by design — those are exactly
-                        %% what the statistical tier handles, so a
-                        %% tokenize error falls through to it too.
-                        case symbolic_extract:tokenize(Question) of
+                        %% The leading question word is normalized before
+                        %% tokenization. Capitalized code identifiers and
+                        %% dotted tokens still use the statistical tier.
+                        case symbolic_extract:tokenize(NormalizedQuestion) of
                             {ok, TokensText} ->
-                                parse(Pid, TokensText, Question);
+                                parse(Pid, TokensText, NormalizedQuestion);
                             {error, _TokenizeReason} ->
-                                statistical_fallback(Pid, Question)
+                                statistical_fallback(Pid, NormalizedQuestion)
                         end;
                     {error, Reason} ->
                         {error, {grammar_error, Reason}}
@@ -141,6 +144,29 @@ ask(Facts, Question, Metadata) ->
         end,
     prolog_session:stop(Pid),
     scope_answer(Result, Metadata).
+
+normalize_question_starter(Question) ->
+    {LeadingSpace, Rest} = take_question_space(Question, []),
+    {Word, Tail} = take_question_word(Rest, []),
+    LowerWord = string:lowercase(Word),
+    case lists:member(LowerWord, ["does", "do", "is", "are", "where",
+                                  "which", "who", "what", "how"]) of
+        true -> LeadingSpace ++ LowerWord ++ Tail;
+        false -> Question
+    end.
+
+take_question_space([Char | Rest], Acc)
+        when Char =:= $ ; Char =:= $\t; Char =:= $\n; Char =:= $\r ->
+    take_question_space(Rest, [Char | Acc]);
+take_question_space(Rest, Acc) ->
+    {lists:reverse(Acc), Rest}.
+
+take_question_word([Char | Rest], Acc)
+        when (Char >= $a andalso Char =< $z) orelse
+             (Char >= $A andalso Char =< $Z) ->
+    take_question_word(Rest, [Char | Acc]);
+take_question_word(Rest, Acc) ->
+    {lists:reverse(Acc), Rest}.
 
 scope_answer({ok, #{<<"type">> := <<"unknown">>} = Answer}, Metadata) ->
     {ok, Answer#{<<"scope">> => scope_from_metadata(Metadata)}};

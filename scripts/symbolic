@@ -1,17 +1,9 @@
 #!/usr/bin/env sh
-# The `symbolic` CLI, run against a rebar3 release rather than relx's own
-# generated bin/symbolic_tools script — that script (start/stop/console/
-# rpc/eval/escript) is for managing a long-running node, and every one of
-# its one-shot-looking subcommands (`eval`, `escript`) actually RPCs into
-# an already-running node rather than running standalone. This wrapper
-# runs the CLI directly against the release's real on-disk ebin/priv
-# directories, the same shape our old escript build used, except the NIF
-# (symbolic_ts) actually works here since priv/ isn't inside a zip archive.
+# The `symbolic` CLI runs directly against on-disk ebin/priv directories,
+# not relx's generated node-management script (whose `eval`/`escript`
+# commands RPC into a running node). In a release, use its real `lib/`;
+# from a source checkout, use the requested rebar3 build profile.
 # See docs/cli-erlang.md §1/§1.1.
-# Resolve $0 through any symlinks first — a global install typically
-# symlinks this script into e.g. /opt/homebrew/bin, and a naive
-# `dirname "$0"` would then resolve relative to the symlink's location,
-# not this release's real lib/ directory.
 SOURCE="$0"
 while [ -h "$SOURCE" ]; do
     LINK_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
@@ -22,7 +14,36 @@ while [ -h "$SOURCE" ]; do
     esac
 done
 DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
-exec erl -pa "$DIR"/lib/*/ebin \
+
+if [ -d "$DIR/lib" ]; then
+    LIB_DIR="$DIR/lib"
+else
+    PROFILE="${REBAR_PROFILE:-default}"
+    if [ -d "$DIR/_build/$PROFILE/lib" ]; then
+        LIB_DIR="$DIR/_build/$PROFILE/lib"
+    elif [ -d "$DIR/_build/default/lib" ]; then
+        LIB_DIR="$DIR/_build/default/lib"
+    elif [ -d "$DIR/_build/test/lib" ]; then
+        LIB_DIR="$DIR/_build/test/lib"
+    else
+        printf '%s\n' "symbolic: compiled modules not found; run rebar3 compile or rebar3 release first" >&2
+        exit 127
+    fi
+fi
+
+FOUND_EBIN=false
+for APP_EBIN in "$LIB_DIR"/*/ebin; do
+    if [ -d "$APP_EBIN" ]; then
+        FOUND_EBIN=true
+        break
+    fi
+done
+if [ "$FOUND_EBIN" != true ]; then
+    printf '%s\n' "symbolic: no Erlang ebin directories found under $LIB_DIR" >&2
+    exit 127
+fi
+
+exec erl -pa "$LIB_DIR"/*/ebin \
     -noshell \
     -eval "symbolic_cli:main(init:get_plain_arguments()), halt()." \
     -extra "$@"
