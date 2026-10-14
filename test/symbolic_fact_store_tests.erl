@@ -41,6 +41,41 @@ empty_fact_set_round_trips_test() ->
     ?assertEqual([], symbolic_fact_store:read(Path)),
     file:delete(Path).
 
+write_bundle_replaces_facts_and_metadata_together_test() ->
+    Path = tmp_path(),
+    OldFacts = [{defines, old, 'a.ts', 1}],
+    NewFacts = [{defines, new, 'a.ts', 2}],
+    OldMeta = #{<<"typescript_analysis">> => #{<<"status">> => <<"disabled">>}},
+    NewMeta = #{<<"typescript_analysis">> => #{<<"status">> => <<"ok">>}},
+    try
+        ok = symbolic_fact_store:write_bundle(Path, OldFacts, OldMeta),
+        ok = symbolic_fact_store:write_bundle(Path, NewFacts, NewMeta),
+        ?assertEqual(NewFacts, symbolic_fact_store:read(Path)),
+        ?assertEqual({ok, NewMeta}, symbolic_fact_store:read_metadata(Path))
+    after
+        cleanup(Path)
+    end.
+
+write_bundle_stage_failure_preserves_the_previous_snapshot_test() ->
+    Path = tmp_path(),
+    Facts = [{defines, stable, 'a.ts', 1}],
+    Metadata = #{<<"complete">> => true},
+    try
+        ok = symbolic_fact_store:write_bundle(Path, Facts, Metadata),
+        ?assertMatch({error, {snapshot_stage_failed, _, _}},
+            symbolic_fact_store:write_bundle(Path, [not_a_fact_tuple],
+                #{<<"complete">> => false})),
+        ?assertEqual(Facts, symbolic_fact_store:read(Path)),
+        ?assertEqual({ok, Metadata}, symbolic_fact_store:read_metadata(Path))
+    after
+        cleanup(Path)
+    end.
+
+cleanup(Path) ->
+    lists:foreach(fun(File) -> _ = file:delete(File) end,
+                  filelib:wildcard(Path ++ "*")),
+    ok.
+
 tmp_path() ->
     Name = io_lib:format("symbolic_fact_store_test_~p.dets", [erlang:unique_integer([positive])]),
     filename:join(tmp_dir(), lists:flatten(Name)).

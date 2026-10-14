@@ -76,6 +76,7 @@ codebase_test_() ->
         fun parse_with_no_path_merges_config_paths/1,
         fun parse_with_no_path_and_no_config_is_error/1,
         fun path_is_a_project_root_uses_its_own_config/1,
+        fun configured_typescript_analysis_status_is_cached_and_queryable/1,
         fun configured_database_is_shared_with_cli_query_and_refreshes_on_reparse/1,
         fun two_projects_stay_independently_cached_via_their_own_roots/1,
         fun path_pointing_inside_a_configured_project_is_scanned_literally/1
@@ -103,7 +104,11 @@ parse_then_overview_reports_state(_Setup) ->
         %% overview reflects the same state parse reported.
         {ok, OV} = symbolic_codebase:overview(),
         ?assertEqual(maps:get(total_facts, Meta), maps:get(total_facts, OV)),
-        ?assertEqual(maps:get(files, Meta), maps:get(files, OV))
+        ?assertEqual(maps:get(files, Meta), maps:get(files, OV)),
+        ?assertEqual(disabled, maps:get(status, maps:get(type_analysis, Meta))),
+        ?assertEqual(maps:get(type_analysis, Meta), maps:get(type_analysis, OV)),
+        ?assertMatch({ok, [_]}, symbolic_codebase:query(
+            "ts_analysis(_, _, disabled, disabled)"))
     end.
 
 inline_doc_attribute_is_queryable(_Setup) ->
@@ -138,7 +143,9 @@ cache_matches_side_effect_free_scan(_Setup) ->
         {ok, {_Files, Facts}} = symbolic_parse:scan(?FIXTURES),
         ?assert(Facts =/= []),
         {ok, Meta} = symbolic_codebase:parse(?FIXTURES),
-        ?assertEqual(length(Facts), maps:get(total_facts, Meta))
+        ?assertEqual(length(Facts) + 1, maps:get(total_facts, Meta)),
+        ?assertMatch({ok, [_]}, symbolic_codebase:query(
+            "ts_analysis(_, _, disabled, disabled)"))
     end.
 
 query_all_solutions_match_scan(_Setup) ->
@@ -585,6 +592,42 @@ path_is_a_project_root_uses_its_own_config(_Setup) ->
 %% touches the other's entry, same guarantee two Dir-based parses
 %% already had (two_parsed_directories_stay_independently_cached above),
 %% now proven for config-driven parsing too.
+configured_typescript_analysis_status_is_cached_and_queryable(_Setup) ->
+    fun() ->
+        Root = filename:absname(filename:join(["_build", "codebase_ts_analysis_scratch"])),
+        _ = file:del_dir_r(Root),
+        ConfigPath = filename:join([Root, ".symbolic", "config.json"]),
+        TsConfig = filename:join(Root, "tsconfig.json"),
+        SourcePath = filename:join([Root, "src", "main.ts"]),
+        Package = filename:join([Root, "node_modules", "typescript"]),
+        ok = filelib:ensure_dir(ConfigPath),
+        ok = filelib:ensure_dir(SourcePath),
+        ok = filelib:ensure_dir(filename:join(Package, "placeholder")),
+        ok = file:write_file(ConfigPath,
+            <<"{\"paths\":[\"src\"],\"typescript\":{\"enabled\":true,"
+              "\"projects\":[\"tsconfig.json\"]}}\n">>),
+        ok = file:write_file(TsConfig, <<"{}\n">>),
+        ok = file:write_file(SourcePath,
+            <<"export const answer: number = 42;\n">>),
+        ok = file:write_file(filename:join(Package, "package.json"),
+            <<"{\"name\":\"typescript\",\"version\":\"7.0.2\",\"main\":\"index.js\"}\n">>),
+        ok = file:write_file(filename:join(Package, "index.js"),
+            <<"module.exports = { version: '7.0.2' };\n">>),
+        try
+            {ok, Meta} = symbolic_codebase:parse(Root),
+            TypeMeta = maps:get(type_analysis, Meta),
+            ?assertEqual(unavailable, maps:get(status, TypeMeta)),
+            ?assert(lists:member(maps:get(reason, TypeMeta),
+                [node_missing, unsupported_node, unsupported_compiler_api])),
+            ?assertMatch({ok, [_]}, symbolic_codebase:query(
+                "ts_analysis(_, _, unavailable, _)")),
+            ?assertMatch({ok, [_]}, symbolic_codebase:query(
+                "ts_syntax_type(_, variable, _, annotation, _, _, _, _)"))
+        after
+            _ = file:del_dir_r(Root)
+        end
+    end.
+
 configured_database_is_shared_with_cli_query_and_refreshes_on_reparse(_Setup) ->
     fun() ->
         Root = filename:absname(filename:join(["_build", "codebase_shared_db_project"])),

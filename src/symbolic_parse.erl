@@ -259,10 +259,7 @@ run(Dir) ->
 %% the exact text printed, so both are directly testable without it.
 run(Dir, DbPath) ->
     case scan_report(Dir) of
-        {ok, Report} ->
-            maybe_store_report(DbPath, Report),
-            print_summary_report(Report),
-            halt(0);
+        {ok, Report} -> complete_parse(Report, Dir, undefined, DbPath);
         {error, Reason} ->
             io:put_chars(standard_error, error_message(Reason)),
             halt(1)
@@ -279,8 +276,10 @@ run_config(ConfigOverride, DbPath) ->
     case resolve_config(ConfigOverride) of
         {ok, ConfigPath} ->
             case symbolic_config:read_settings(ConfigPath) of
-                {ok, #{paths := Paths, database := ConfigDb}} ->
-                    run_paths(Paths, choose_db(DbPath, ConfigDb));
+                {ok, Settings = #{paths := Paths, database := ConfigDb}} ->
+                    run_paths(Paths, choose_db(DbPath, ConfigDb),
+                              symbolic_config:project_root(ConfigPath),
+                              maps:get(typescript, Settings, undefined));
                 {error, Reason} -> halt_error(Reason)
             end;
         {error, Reason} -> halt_error(Reason)
@@ -309,13 +308,22 @@ resolve_config(undefined) ->
 choose_db(undefined, ConfigDb) -> ConfigDb;
 choose_db(DbPath, _ConfigDb) -> DbPath.
 
-run_paths(Paths, DbPath) ->
+run_paths(Paths, DbPath, ScopeRoot, TypeScriptSettings) ->
     case scan_paths_report(Paths) of
-        {ok, Report} ->
-            maybe_store_report(DbPath, Report),
-            print_summary_report(Report),
-            halt(0);
+        {ok, Report} -> complete_parse(Report, ScopeRoot, TypeScriptSettings, DbPath);
         {error, Reason} -> halt_error(Reason)
+    end.
+
+complete_parse(RawReport, ScopeRoot, TypeScriptSettings, DbPath) ->
+    case symbolic_ts_project:analyze(RawReport, ScopeRoot, TypeScriptSettings) of
+        {ok, Report} ->
+            case maybe_store_report(DbPath, Report) of
+                ok ->
+                    print_summary_report(Report),
+                    halt(0);
+                {error, Reason} -> halt_error({database_write_failed, DbPath, Reason})
+            end;
+        {error, Reason} -> halt_error({typescript_analysis_failed, Reason})
     end.
 
 halt_error(Reason) ->
@@ -374,22 +382,24 @@ maybe_store(DbPath, Facts) ->
 
 maybe_store_report(undefined, _Report) -> ok;
 maybe_store_report(DbPath, Report) ->
-    ok = symbolic_fact_store:delete_metadata(DbPath),
-    ok = maybe_store(DbPath, maps:get(facts, Report)),
     Metadata = #{<<"metadata_available">> => true,
         <<"complete">> => maps:get(complete, Report),
         <<"scan_paths">> => [unicode:characters_to_binary(filename:absname(Path))
             || Path <- maps:get(scan_paths, Report)],
         <<"files">> => length(maps:get(files, Report)),
         <<"failed_files">> => [unicode:characters_to_binary(filename:absname(Path))
-            || Path <- maps:get(failed_files, Report)]},
-    ok = symbolic_fact_store:write_metadata(DbPath, Metadata).
+            || Path <- maps:get(failed_files, Report)],
+        <<"typescript_analysis">> => symbolic_ts_project:summary_json(
+            maps:get(type_analysis, Report))},
+    symbolic_fact_store:write_bundle(DbPath, maps:get(facts, Report), Metadata).
 
 print_summary_report(Report) ->
     Base = summary(maps:get(files, Report), maps:get(facts, Report)),
     Summary = Base#{scan_complete => maps:get(complete, Report),
                     failed_files => [filename:absname(P)
-                        || P <- maps:get(failed_files, Report)]},
+                        || P <- maps:get(failed_files, Report)],
+                    type_analysis => symbolic_ts_project:summary_json(
+                        maps:get(type_analysis, Report))},
     io:format("~ts~n", [jsx:encode(Summary)]).
 
 %% The CLI response matches the documented `Parse a project` response.

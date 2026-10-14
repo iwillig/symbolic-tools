@@ -44,6 +44,17 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `last_switch_case/1` | TypeScript | That `switch_case`/`switch_default` has no case/default after it |
 | `braceless_body/5` | TypeScript | An `if`/`else`/`for`/`while` whose body is a single bare statement |
 | `return_stmt/5` | TypeScript | A `return`, and whether it specifies a value |
+| `ts_syntax_type/8` | TypeScript | Source-written type syntax and byte span; does not imply type checking |
+| `ts_analysis/4` | Parse pipeline | Type-analysis status for the scan scope |
+| `ts_project/7` | TypeScript project checker | Selected tsconfig, compiler/options provenance, and project status |
+| `ts_symbol/4` | TypeScript project checker | Checker-resolved symbol identity, name, and bounded kind |
+| `ts_declaration/6` | TypeScript project checker | Symbol declaration location and byte span |
+| `ts_declared_type/3` | TypeScript project checker | Checker type linked to a declaration |
+| `ts_type_node/4` | TypeScript project checker | Bounded type graph node and display text |
+| `ts_type_edge/4` | TypeScript project checker | Relationship between type graph nodes |
+| `ts_type_at/7` | TypeScript project checker | Checker type at a source location and byte span |
+| `ts_location_symbol/4` | TypeScript project checker | A checker-resolved symbol at a typed location |
+| `ts_diagnostic/7` | TypeScript project checker | Compiler diagnostic, category, message, and source location when available |
 | `heading/4` | Markdown | An ATX (`#`) heading |
 | `code_block/3` | Markdown | A fenced code block and its declared language |
 | `paragraph/3` | Markdown | A paragraph (or list-item) of body text |
@@ -57,6 +68,8 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `rust_visibility/5` | Rust | Explicit public visibility on selected item nodes, keyed by source span |
 | `rust_call/5` | Rust | Call site linked to its enclosing function's source-span identity |
 | `rust_macro/6` | Rust | Macro invocation site linked to its enclosing function when present |
+
+`ts_syntax_type/8` is emitted by the syntax parser regardless of Node/compiler availability. The `ts_*` checker facts are emitted only for explicitly configured, opt-in TypeScript projects; `ts_analysis/4` and persisted scan metadata distinguish disabled, no-project, unavailable, partial, and failed outcomes. The checker uses the project's resolved TypeScript package and records its version/configuration hash. Byte spans are UTF-8 byte offsets. Missing checker facts are not proof that a type is absent, and these facts describe static compiler analysis—not runtime values or general data flow.
 
 Three genuinely different *shapes* of fact live in this one schema:
 **code facts** (something with named definitions and call sites),

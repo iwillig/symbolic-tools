@@ -48,6 +48,37 @@ read_settings_allows_missing_database_test() ->
             symbolic_config:read_settings(ConfigPath))
     end).
 
+read_settings_resolves_explicit_typescript_projects_test() ->
+    with_scratch_config(
+        <<"{\"paths\":[\"src\"],\"typescript\":{\"enabled\":true,"
+          "\"projects\":[\"tsconfig.json\",\"packages/a/tsconfig.json\"]}}">>,
+        fun(Root, ConfigPath) ->
+            ?assertEqual(
+                {ok, #{paths => [filename:join(Root, "src")], database => undefined,
+                       typescript => #{enabled => true,
+                           projects => [filename:join(Root, "tsconfig.json"),
+                                        filename:join([Root, "packages", "a", "tsconfig.json"])]}}},
+                symbolic_config:read_settings(ConfigPath))
+        end).
+
+read_settings_rejects_invalid_typescript_settings_test() ->
+    with_scratch_config(
+        <<"{\"paths\":[\"src\"],\"typescript\":{\"enabled\":\"yes\","
+          "\"projects\":[\"tsconfig.json\"]}}">>,
+        fun(_Root, ConfigPath) ->
+            ?assertMatch({error, {invalid_config_typescript, ConfigPath, _}},
+                         symbolic_config:read_settings(ConfigPath))
+        end).
+
+read_settings_caps_explicit_project_count_test() ->
+    Projects = string:join(lists:duplicate(33, "\"tsconfig.json\""), ","),
+    Json = list_to_binary("{\"paths\":[\"src\"],\"typescript\":{" ++
+        "\"enabled\":true,\"projects\":[" ++ Projects ++ "]}}"),
+    with_scratch_config(Json, fun(_Root, ConfigPath) ->
+        ?assertMatch({error, {invalid_config_typescript, ConfigPath, _}},
+                     symbolic_config:read_settings(ConfigPath))
+    end).
+
 default_database_discovers_nearest_project_config_test() ->
     with_scratch_config(<<"{\"paths\": [\"src\"], \"database\": \".symbolic/facts.dets\"}">>,
         fun(Root, _ConfigPath) ->

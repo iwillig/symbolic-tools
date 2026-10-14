@@ -9,6 +9,41 @@ extracts_defines_test() ->
     ?assert(lists:member({defines, foo, 1, <<"(x: number)">>, Path, 1}, Facts)),
     ?assert(lists:member({defines, other, 0, <<"()">>, Path, 6}, Facts)).
 
+extracts_source_located_type_syntax_test() ->
+    Source =
+        "function convert(value: string): number {\n"
+        "  const enabled: boolean = true;\n"
+        "  return 1 as number;\n"
+        "}\n"
+        "type User = { name: string };\n"
+        "interface Box<T extends object> { value: T; }\n"
+        "const result = value satisfies User;\n",
+    Facts = ts_extract_typescript:text("types.ts", Source),
+    Path = 'types.ts',
+    SourceBin = list_to_binary(Source),
+    assert_type_fact(Facts, Path, parameter, <<"value">>, annotation, <<"string">>, 1, SourceBin),
+    assert_type_fact(Facts, Path, function, <<"convert">>, return_type, <<"number">>, 1, SourceBin),
+    assert_type_fact(Facts, Path, variable, <<"enabled">>, annotation, <<"boolean">>, 2, SourceBin),
+    assert_type_fact(Facts, Path, type_alias, <<"User">>, definition,
+                     <<"{ name: string }">>, 5, SourceBin),
+    assert_type_fact(Facts, Path, interface, <<"Box">>, body,
+                     <<"{ value: T; }">>, 6, SourceBin),
+    assert_type_fact(Facts, Path, type_parameter, <<"T">>, constraint,
+                     <<"object">>, 6, SourceBin),
+    assert_type_fact(Facts, Path, expression, undefined, assertion,
+                     <<"number">>, 3, SourceBin),
+    assert_type_fact(Facts, Path, expression, undefined, satisfies,
+                     <<"User">>, 7, SourceBin).
+
+assert_type_fact(Facts, Path, SubjectKind, SubjectName, Role, TypeText, Line, Source) ->
+    Matches = [{Start, End} ||
+        {ts_syntax_type, File, Kind, Name, FactRole, Text, Start, End, FactLine} <- Facts,
+        File =:= Path, Kind =:= SubjectKind, Name =:= SubjectName,
+        FactRole =:= Role, Text =:= TypeText, FactLine =:= Line],
+    ?assertEqual(1, length(Matches)),
+    [{Start, End}] = Matches,
+    ?assertEqual(TypeText, binary:part(Source, Start, End - Start)).
+
 extracts_normalized_function_declarations_test() ->
     Facts = ts_extract_typescript:text(
         "normalized.ts", "function ordinary(x: number) {}\nfunction* generated() {}"),

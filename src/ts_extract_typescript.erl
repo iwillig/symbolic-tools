@@ -172,6 +172,13 @@
 -define(IMPORT_QUERY, <<"(import_statement) @i">>).
 -define(EXPORT_QUERY, <<"(export_statement) @e">>).
 -define(COMMENT_QUERY, <<"(comment) @c">>).
+-define(TYPE_ANNOTATION_QUERY, <<"(type_annotation) @t">>).
+-define(TYPE_ALIAS_QUERY, <<"(type_alias_declaration) @t">>).
+-define(INTERFACE_QUERY, <<"(interface_declaration) @t">>).
+-define(TYPE_PARAMETER_QUERY, <<"(type_parameter) @t">>).
+-define(AS_EXPRESSION_QUERY, <<"(as_expression) @t">>).
+-define(TYPE_ASSERTION_QUERY, <<"(type_assertion) @t">>).
+-define(SATISFIES_EXPRESSION_QUERY, <<"(satisfies_expression) @t">>).
 
 %% Statement/block structure: one query per block-shaped construct —
 %% a real {} block, or a switch_case/switch_default, which have no
@@ -273,7 +280,8 @@ text(Path, Src0) ->
         object_keys(Lang, Root, Src, PathAtom) ++
         return_object_keys(Lang, Root, Src, PathAtom) ++
         label_stmts(Lang, Root, Src, PathAtom) ++
-        label_refs(Lang, Root, Src, PathAtom),
+        label_refs(Lang, Root, Src, PathAtom) ++
+        type_syntax_facts(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
 
 language_for(Path) ->
@@ -330,6 +338,151 @@ function_decl_fact(Node, Kind, Src, PathAtom) ->
     {function_decl, node_id(PathAtom, Node), typescript,
      to_atom(symbolic_ts:node_text(NameNode, Src)),
      symbolic_ts:node_named_child_count(ParamsNode), Kind, PathAtom, line(Node)}.
+
+%% Source-level TypeScript type syntax. These facts preserve the exact
+%% written type expression and byte span; they do not claim checker-resolved
+%% or inferred types. Owner names are binaries to avoid interning arbitrary
+%% source text as atoms. See docs/prolog-schema.md for the fact contract.
+type_syntax_facts(Lang, Root, Src, PathAtom) ->
+    type_annotations(Lang, Root, Src, PathAtom) ++
+    type_aliases(Lang, Root, Src, PathAtom) ++
+    interfaces(Lang, Root, Src, PathAtom) ++
+    type_parameter_constraints(Lang, Root, Src, PathAtom) ++
+    type_expressions(Lang, Root, Src, PathAtom, ?AS_EXPRESSION_QUERY, assertion) ++
+    type_assertion_facts(Lang, Root, Src, PathAtom) ++
+    type_expressions(Lang, Root, Src, PathAtom, ?SATISFIES_EXPRESSION_QUERY, satisfies).
+
+type_assertion_facts(Lang, Root, Src, PathAtom) ->
+    case filename:extension(atom_to_list(PathAtom)) of
+        ".tsx" -> [];
+        _ -> type_expressions(Lang, Root, Src, PathAtom, ?TYPE_ASSERTION_QUERY, assertion)
+    end.
+
+type_annotations(Lang, Root, Src, PathAtom) ->
+    Nodes = captures(Lang, Root, ?TYPE_ANNOTATION_QUERY, "t"),
+    lists:filtermap(fun(Node) -> type_annotation_fact(Node, Src, PathAtom) end, Nodes).
+
+type_annotation_fact(Node, Src, PathAtom) ->
+    Parent = symbolic_ts:node_parent(Node),
+    TypeNode = first_named_child(Node),
+    case {type_annotation_owner(Parent, Src), node_missing(TypeNode)} of
+        {skip, _} -> false;
+        {_, true} -> false;
+        {{SubjectKind, SubjectName, Role}, false} ->
+            {true, type_syntax_fact(PathAtom, SubjectKind, SubjectName, Role, TypeNode, Src)}
+    end.
+
+type_annotation_owner(Parent, Src) ->
+    case symbolic_ts:node_type(Parent) of
+        "required_parameter" -> parameter_owner(Parent, Src);
+        "optional_parameter" -> parameter_owner(Parent, Src);
+        "function_declaration" -> named_owner(function, return_type, Parent, Src);
+        "generator_function_declaration" -> named_owner(function, return_type, Parent, Src);
+        "method_definition" -> named_owner(method, return_type, Parent, Src);
+        "method_signature" -> named_owner(method, return_type, Parent, Src);
+        "function_signature" -> named_owner(function, return_type, Parent, Src);
+        "arrow_function" -> {function, undefined, return_type};
+        "variable_declarator" -> named_owner(variable, annotation, Parent, Src);
+        "property_signature" -> named_owner(property, annotation, Parent, Src);
+        "public_field_definition" -> named_owner(property, annotation, Parent, Src);
+        _ -> skip
+    end.
+
+parameter_owner(Parent, Src) ->
+    NameNode = first_named_child(Parent),
+    case node_missing(NameNode) of
+        true -> {parameter, undefined, annotation};
+        false -> {parameter, to_text(symbolic_ts:node_text(NameNode, Src)), annotation}
+    end.
+
+named_owner(Kind, Role, Node, Src) ->
+    NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+    Name = case node_missing(NameNode) of
+        true -> undefined;
+        false -> to_text(symbolic_ts:node_text(NameNode, Src))
+    end,
+    {Kind, Name, Role}.
+
+type_aliases(Lang, Root, Src, PathAtom) ->
+    Nodes = captures(Lang, Root, ?TYPE_ALIAS_QUERY, "t"),
+    lists:filtermap(fun(Node) ->
+        NameNode = symbolic_ts:node_named_child(Node, 0),
+        TypeNode = symbolic_ts:node_named_child(Node, 1),
+        case node_missing(TypeNode) of
+            true -> false;
+            false -> {true, type_syntax_fact(PathAtom, type_alias,
+                to_text(symbolic_ts:node_text(NameNode, Src)), definition, TypeNode, Src)}
+        end
+    end, Nodes).
+
+interfaces(Lang, Root, Src, PathAtom) ->
+    Nodes = captures(Lang, Root, ?INTERFACE_QUERY, "t"),
+    lists:filtermap(fun(Node) ->
+        NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+        BodyNode = symbolic_ts:node_child_by_field_name(Node, <<"body">>),
+        case node_missing(BodyNode) of
+            true -> false;
+            false -> {true, type_syntax_fact(PathAtom, interface,
+                to_text(symbolic_ts:node_text(NameNode, Src)), body, BodyNode, Src)}
+        end
+    end, Nodes).
+
+type_parameter_constraints(Lang, Root, Src, PathAtom) ->
+    Nodes = captures(Lang, Root, ?TYPE_PARAMETER_QUERY, "t"),
+    lists:filtermap(fun(Node) ->
+        NameNode = symbolic_ts:node_named_child(Node, 0),
+        Constraint = symbolic_ts:node_child_by_field_name(Node, <<"constraint">>),
+        TypeNode = last_named_child(Constraint),
+        case node_missing(TypeNode) of
+            true -> false;
+            false -> {true, type_syntax_fact(PathAtom, type_parameter,
+                to_text(symbolic_ts:node_text(NameNode, Src)), constraint, TypeNode, Src)}
+        end
+    end, Nodes).
+
+type_expressions(Lang, Root, Src, PathAtom, Query, Role) ->
+    Nodes = captures(Lang, Root, Query, "t"),
+    lists:filtermap(fun(Node) ->
+        TypeNode = symbolic_ts:node_named_child(Node, 1),
+        case node_missing(TypeNode) of
+            true -> false;
+            false -> {true, type_syntax_fact(PathAtom, expression, undefined,
+                                             Role, TypeNode, Src)}
+        end
+    end, Nodes).
+
+type_syntax_fact(Path, SubjectKind, SubjectName, Role, TypeNode, Src) ->
+    {ts_syntax_type, Path, SubjectKind, SubjectName, Role,
+     to_text(symbolic_ts:node_text(TypeNode, Src)),
+     symbolic_ts:node_start_byte(TypeNode), symbolic_ts:node_end_byte(TypeNode),
+     line(TypeNode)}.
+
+captures(Lang, Root, Query, CaptureName) ->
+    case symbolic_ts:query_new(Lang, Query) of
+        {undefined, _, _} -> [];
+        {Q, _, _} ->
+            lists:usort([Node || {Name, Node} <- symbolic_ts:query_capture(Root, Q),
+                                 Name =:= CaptureName])
+    end.
+
+first_named_child(Node) ->
+    case symbolic_ts:node_named_child_count(Node) of
+        0 -> undefined;
+        _ -> symbolic_ts:node_named_child(Node, 0)
+    end.
+
+last_named_child(Node) ->
+    case node_missing(Node) of
+        true -> undefined;
+        false ->
+            case symbolic_ts:node_named_child_count(Node) of
+                0 -> undefined;
+                Count -> symbolic_ts:node_named_child(Node, Count - 1)
+            end
+    end.
+
+node_missing(undefined) -> true;
+node_missing(Node) -> symbolic_ts:node_is_null(Node).
 
 %% async_function/4: a function_declaration with a literal `async` token
 %% child — Name/Arity read directly off the captured node's own fields,

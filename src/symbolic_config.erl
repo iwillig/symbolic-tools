@@ -56,8 +56,15 @@ validate(ConfigPath, #{<<"paths">> := Paths} = Json) when is_list(Paths), Paths 
             Root = project_root(ConfigPath),
             case database_path(ConfigPath, maps:get(<<"database">>, Json, undefined), Root) of
                 {ok, DbPath} ->
-                    {ok, #{paths => [filename:join(Root, binary_to_list(P)) || P <- Paths],
-                           database => DbPath}};
+                    case typescript_settings(ConfigPath, Json, Root) of
+                        {ok, undefined} ->
+                            {ok, #{paths => [filename:join(Root, binary_to_list(P)) || P <- Paths],
+                                   database => DbPath}};
+                        {ok, TypeScript} ->
+                            {ok, #{paths => [filename:join(Root, binary_to_list(P)) || P <- Paths],
+                                   database => DbPath, typescript => TypeScript}};
+                        Error -> Error
+                    end;
                 Error -> Error
             end;
         false ->
@@ -78,6 +85,44 @@ database_path(_ConfigPath, DbPath, Root) when is_binary(DbPath) ->
     {ok, filename:join(Root, binary_to_list(DbPath))};
 database_path(ConfigPath, _DbPath, _Root) ->
     {error, {invalid_config_database, ConfigPath, "database must be a string"}}.
+
+typescript_settings(_ConfigPath, Json, _Root) when not is_map_key(<<"typescript">>, Json) ->
+    {ok, undefined};
+typescript_settings(ConfigPath, Json, Root) ->
+    case maps:get(<<"typescript">>, Json) of
+        Settings when is_map(Settings) ->
+            Enabled = maps:get(<<"enabled">>, Settings, false),
+            Projects = maps:get(<<"projects">>, Settings, []),
+            case is_boolean(Enabled) andalso is_list(Projects) andalso
+                 length(Projects) =< 32 andalso lists:all(fun is_binary/1, Projects) of
+                false ->
+                    {error, {invalid_config_typescript, ConfigPath,
+                             "typescript.enabled must be a boolean and typescript.projects a list of at most 32 strings"}};
+                true ->
+                    case resolve_typescript_projects(ConfigPath, Root, Projects, []) of
+                        {ok, Resolved} -> {ok, #{enabled => Enabled, projects => Resolved}};
+                        Error -> Error
+                    end
+            end;
+        _ ->
+            {error, {invalid_config_typescript, ConfigPath,
+                     "typescript must be an object"}}
+    end.
+
+resolve_typescript_projects(_ConfigPath, _Root, [], Acc) ->
+    {ok, lists:reverse(Acc)};
+resolve_typescript_projects(ConfigPath, Root, [Project | Rest], Acc) ->
+    ProjectPath = binary_to_list(Project),
+    Parts = filename:split(ProjectPath),
+    case ProjectPath =/= "" andalso filename:pathtype(ProjectPath) =:= relative
+         andalso not lists:member("..", Parts) of
+        true ->
+            Absolute = filename:absname(filename:join(Root, ProjectPath)),
+            resolve_typescript_projects(ConfigPath, Root, Rest, [Absolute | Acc]);
+        false ->
+            {error, {invalid_config_typescript, ConfigPath,
+                     "typescript.projects entries must be non-empty relative paths without .."}}
+    end.
 
 %% The project root is two levels above .symbolic/config.json.
 -spec project_root(file:filename()) -> file:filename().

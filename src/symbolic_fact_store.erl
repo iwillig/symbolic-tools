@@ -12,7 +12,7 @@
 %%% `defines/3` fact directly — a free index by predicate, no wrapping
 %%% needed. `read/1` just wants the whole fact set back, via `foldl`.
 -module(symbolic_fact_store).
--export([write/2, read/1, write_metadata/2, read_metadata/1, delete_metadata/1]).
+-export([write/2, write_bundle/3, read/1, write_metadata/2, read_metadata/1, delete_metadata/1]).
 
 %% `symbolic parse` fully regenerates the fact set every run (it's a
 %% deterministic function of the source files), so a write replaces
@@ -29,6 +29,90 @@ write(Path, Facts) ->
     after
         ok = dets:close(Table)
     end.
+
+%% Stage the facts and metadata before replacing either persisted snapshot.
+%% A failed stage or rename leaves the previous database/metadata pair intact.
+-spec write_bundle(file:filename(), [tuple()], map()) -> ok | {error, term()}.
+write_bundle(Path, Facts, Metadata) ->
+    Suffix = ".stage." ++ integer_to_list(erlang:unique_integer([positive, monotonic])),
+    StagedDb = Path ++ Suffix,
+    StagedMeta = metadata_path(StagedDb),
+    try
+        ok = filelib:ensure_dir(Path),
+        ok = write(StagedDb, Facts),
+        ok = write_metadata(StagedDb, Metadata),
+        case replace_bundle([{StagedDb, Path}, {StagedMeta, metadata_path(Path)}]) of
+            ok ->
+                %% The text index is a disposable cache. If rebuilding fails,
+                %% remove any old index so it cannot masquerade as current.
+                refresh_text_index(Path, Facts);
+            Error -> Error
+        end
+    catch
+        Class:Reason -> {error, {snapshot_stage_failed, Class, Reason}}
+    after
+        _ = file:delete(StagedDb),
+        _ = file:delete(StagedMeta),
+        _ = file:delete(StagedMeta ++ ".tmp")
+    end.
+
+refresh_text_index(Path, Facts) ->
+    try symbolic_search:write_index_cache(Path, Facts) of
+        ok -> ok;
+        _ -> _ = file:delete(Path ++ ".text_idx"), ok
+    catch
+        _:_ -> _ = file:delete(Path ++ ".text_idx"), ok
+    end.
+
+replace_bundle(Pairs) ->
+    Token = integer_to_list(erlang:unique_integer([positive, monotonic])),
+    Backups = [{Final, Final ++ ".backup." ++ Token}
+               || {_Staged, Final} <- Pairs],
+    case backup_files(Backups, []) of
+        {ok, Saved} ->
+            case install_files(Pairs, []) of
+                ok ->
+                    delete_backups(Saved),
+                    ok;
+                {error, Reason, Installed} ->
+                    lists:foreach(fun({_Staged, Final}) -> _ = file:delete(Final) end,
+                                  Installed),
+                    restore_backups(Saved),
+                    {error, {snapshot_commit_failed, Reason}}
+            end;
+        {error, Reason, Saved} ->
+            restore_backups(Saved),
+            {error, {snapshot_backup_failed, Reason}}
+    end.
+
+backup_files([], Saved) -> {ok, Saved};
+backup_files([{Final, Backup} | Rest], Saved) ->
+    case filelib:is_regular(Final) of
+        true ->
+            case file:rename(Final, Backup) of
+                ok -> backup_files(Rest, [{Final, Backup} | Saved]);
+                {error, Reason} -> {error, {Final, Reason}, Saved}
+            end;
+        false ->
+            case file:read_file_info(Final) of
+                {error, enoent} -> backup_files(Rest, Saved);
+                {ok, _} -> {error, {Final, not_regular_file}, Saved};
+                {error, Reason} -> {error, {Final, Reason}, Saved}
+            end
+    end.
+
+install_files([], _Installed) -> ok;
+install_files([{Staged, Final} = Pair | Rest], Installed) ->
+    case file:rename(Staged, Final) of
+        ok -> install_files(Rest, [Pair | Installed]);
+        {error, Reason} -> {error, {Final, Reason}, Installed}
+    end.
+
+restore_backups(Saved) ->
+    lists:foreach(fun({Final, Backup}) -> _ = file:rename(Backup, Final) end, Saved).
+
+delete_backups(Saved) ->
+    lists:foreach(fun({_Final, Backup}) -> _ = file:delete(Backup) end, Saved).
 
 -spec read(file:filename()) -> [tuple()].
 read(Path) ->

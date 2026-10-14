@@ -161,6 +161,39 @@ shared DETS file, resolved relative to the project root. For example:
 {"paths": ["src", "test"], "database": ".symbolic/facts.dets"}
 ```
 
+TypeScript syntax facts are always extracted from scanned `.ts` and `.tsx`
+files. Compiler-backed analysis is opt-in and uses only the explicit project
+configs listed in the project config:
+
+```json
+{
+  "paths": ["src", "test"],
+  "database": ".symbolic/facts.dets",
+  "typescript": {
+    "enabled": true,
+    "projects": ["tsconfig.json", "packages/common/tsconfig.json"]
+  }
+}
+```
+
+`typescript.enabled` defaults to `false`; up to 32 project paths may be
+listed, and each must be a non-empty relative path from the repository root
+without `..`. The worker
+uses the system `node` executable and resolves `typescript` from each selected
+config's dependency context. It does not install packages or run project
+scripts. It requires Node 20 or newer and a compiler exposing the supported
+`readConfigFile`/`parseJsonConfigFileContent`/`createProgram` API. Treat this
+as trusted-repository functionality: requiring a project dependency executes
+its package initialization code, and the worker is resource-bounded but is not
+a security sandbox. The worker enforces a 30-second timeout, a 512 MiB V8
+heap cap, a 32 MiB stdout cap, and a 100,000-fact output cap; these are
+resource limits, not OS-level RSS or filesystem/network isolation. Referenced
+project configs are not implicitly selected—list each project to analyze it.
+Missing runtimes/packages, unsupported compiler APIs, config errors, timeouts,
+and partial output are explicit analysis statuses, not evidence of no types.
+`overview` reports the status and provenance. Type analysis remains separate
+from the syntax-scan completeness flag.
+
 `parse` always uses the discovered project config and writes to its
 `database` when one is set; it has no database override. `query`, `ask`,
 `overview`, `search`, and `check` use the configured database by default,

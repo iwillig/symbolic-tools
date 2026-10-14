@@ -407,11 +407,12 @@ own_config(Dir) ->
 %%  database, all keyed by the config's own project root.
 parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
     case symbolic_config:read_settings(ConfigPath) of
-        {ok, #{paths := Paths, database := DbPath}} ->
+        {ok, Settings = #{paths := Paths, database := DbPath}} ->
             ProjectRoot = symbolic_config:project_root(ConfigPath),
             finish_parse(symbolic_parse:scan_paths_report(Paths), ProjectRoot,
                 RulesOverride, StartMs, State, DbPath,
-                #{config_file => ConfigPath});
+                #{config_file => ConfigPath,
+                  typescript_settings => maps:get(typescript, Settings, undefined)});
         {error, Reason} -> {reply, {error, Reason}, State}
     end.
 
@@ -425,7 +426,20 @@ parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
 %%  error" guarantee handle_call({parse,...}) documented before this was
 %%  factored out still holds, since both callers still route every error
 %%  branch through the same {reply, {error,_}, State} (State unchanged).
-finish_parse({ok, ScanReport}, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta) ->
+finish_parse({ok, RawScanReport}, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta) ->
+    TypeScriptSettings = maps:get(typescript_settings, ExtraMeta, undefined),
+    PublicExtraMeta = maps:remove(typescript_settings, ExtraMeta),
+    case symbolic_ts_project:analyze(RawScanReport, CacheKey, TypeScriptSettings) of
+        {ok, ScanReport} ->
+            finish_parse_report(ScanReport, CacheKey, RulesOverride, StartMs,
+                                State, DbPath, PublicExtraMeta);
+        {error, Reason} ->
+            {reply, {error, {typescript_analysis_failed, Reason}}, State}
+    end;
+finish_parse({error, Reason}, _CacheKey, _RulesOverride, _StartMs, State, _DbPath, _ExtraMeta) ->
+    {reply, {error, Reason}, State}.
+
+finish_parse_report(ScanReport, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta) ->
     Facts = maps:get(facts, ScanReport),
     RulesPath = resolve_rules(CacheKey, RulesOverride),
     case build_state(Facts, RulesPath) of
@@ -449,22 +463,13 @@ finish_parse({ok, ScanReport}, CacheKey, RulesOverride, StartMs, State, DbPath, 
             end;
         {error, Reason} ->
             {reply, {error, {rules_error, RulesPath, Reason}}, State}
-    end;
-finish_parse({error, Reason}, _CacheKey, _RulesOverride, _StartMs, State, _DbPath, _ExtraMeta) ->
-    {reply, {error, Reason}, State}.
+    end.
 
 persist_database(undefined, _Facts, _ScanReport) -> ok;
 persist_database(DbPath, Facts, ScanReport) ->
-    try
-        ok = symbolic_fact_store:delete_metadata(DbPath),
-        ok = symbolic_fact_store:write(DbPath, Facts),
-        ok = symbolic_fact_store:write_metadata(DbPath, scan_metadata(ScanReport)),
-        try symbolic_search:write_index_cache(DbPath, Facts)
-        catch _:_ -> ok
-        end,
-        ok
-    catch
-        Class:Reason -> {error, {database_write_failed, DbPath, Class, Reason}}
+    case symbolic_fact_store:write_bundle(DbPath, Facts, scan_metadata(ScanReport)) of
+        ok -> ok;
+        {error, Reason} -> {error, {database_write_failed, DbPath, Reason}}
     end.
 
 scan_metadata(Report) ->
@@ -474,7 +479,9 @@ scan_metadata(Report) ->
           || Path <- maps:get(scan_paths, Report)],
       <<"files">> => length(maps:get(files, Report)),
       <<"failed_files">> => [unicode:characters_to_binary(filename:absname(Path))
-          || Path <- maps:get(failed_files, Report)]}.
+          || Path <- maps:get(failed_files, Report)],
+      <<"typescript_analysis">> => symbolic_ts_project:summary_json(
+          maps:get(type_analysis, Report))}.
 
 compute_meta(ScanReport, RulesPath, NormDir, ElapsedMs) ->
     Files = maps:get(files, ScanReport),
@@ -496,6 +503,7 @@ compute_meta(ScanReport, RulesPath, NormDir, ElapsedMs) ->
         languages => languages_from_files(Files),
         facts_by_predicate => counts_by_predicate(Facts),
         total_facts => length(Facts),
+        type_analysis => maps:get(type_analysis, ScanReport),
         rules_file => RulesPath
     }.
 

@@ -17,7 +17,25 @@ run_result(DbPath) ->
         false -> {error, {no_such_db, DbPath}};
         true ->
             Facts = symbolic_fact_store:read(DbPath),
-            {ok, #{total_facts => length(Facts), facts_by_predicate => counts(Facts)}}
+            Summary = #{total_facts => length(Facts), facts_by_predicate => counts(Facts)},
+            {ok, Summary#{typescript_analysis => type_analysis(DbPath, Facts)}}
+    end.
+
+type_analysis(DbPath, Facts) ->
+    case symbolic_fact_store:read_metadata(DbPath) of
+        {ok, Metadata} ->
+            case maps:get(<<"typescript_analysis">>, Metadata, undefined) of
+                undefined -> analysis_from_facts(Facts);
+                Summary -> Summary
+            end;
+        _ -> analysis_from_facts(Facts)
+    end.
+
+analysis_from_facts(Facts) ->
+    case [Status || {ts_analysis, _Id, _Scope, Status, _Reason} <- Facts] of
+        [Status | _] -> #{<<"status">> => atom_to_binary(Status, utf8)};
+        [] -> #{<<"status">> => <<"unknown">>,
+                <<"reason">> => <<"legacy_or_missing_status">>}
     end.
 
 counts(Facts) ->

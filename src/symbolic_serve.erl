@@ -79,8 +79,11 @@ register_tools() ->
     ok = erlmcp_stdio:add_tool(<<"parse">>,
         <<"Parse the paths in the project .symbolic/config.json found by "
           "walking up from this server's working directory. The parse tool "
-          "accepts no arguments; set paths, database, and rules in project "
-          "configuration instead. A configured database is shared with the "
+          "accepts no arguments; set paths, database, rules, and optional "
+          "TypeScript analysis settings in project configuration instead. "
+          "TypeScript checking is disabled by default; enable it with "
+          "typescript.enabled and list explicit typescript.projects paths. "
+          "A configured database is shared with the "
           "CLI. MCP queries use this parse-time snapshot; after a CLI write, "
           "call parse again to refresh it. Run one MCP server per project. "
           "Returns a summary of the parsed project, including its root, "
@@ -132,7 +135,12 @@ register_tools() ->
           "child's raw position among ALL a block's named children, not "
           "renumbered after excluding comments/a switch_case's own "
           "value), comment/3, heading/4, "
-          "paragraph/3, code_block/3, config_value/4, config_section/3. "
+          "paragraph/3, code_block/3, config_value/4, config_section/3, "
+          "and TypeScript facts ts_syntax_type/8, ts_analysis/4, "
+          "ts_project/7, ts_symbol/4, ts_declaration/6, ts_type_node/4, "
+          "ts_type_edge/4, ts_declared_type/3, ts_type_at/7, "
+          "ts_location_symbol/4, ts_diagnostic/7. Syntax facts preserve "
+          "written type text; checker facts require enabled project analysis. "
           "Prefer an existing derived "
           "predicate over reinventing it inline, when `parse`'s "
           "`rules_file` shows a library was consulted: callees/2, "
@@ -268,8 +276,10 @@ register_tools() ->
           <<"additionalProperties">> => false}),
     ok = erlmcp_stdio:add_tool(<<"overview">>,
         <<"Report the current state of a cached fact base: whether a "
-          "codebase is loaded, how many files/languages, and fact counts by "
-          "predicate. Call it after `parse`, or to check state before "
+          "codebase is loaded, how many files/languages, fact counts by "
+          "predicate, and TypeScript analysis status/provenance. "
+          "TypeScript analysis is disabled unless explicitly enabled in config. "
+          "Call it after `parse`, or to check state before "
           "`query`. Pass `path` to report on a specific cached directory "
           "(see `parse`); omit it to use whichever was most recently "
           "parsed.">>,
@@ -534,6 +544,7 @@ meta_to_json(Meta) ->
             #{atom_to_binary(K, utf8) => V
               || {K, V} <- maps:to_list(maps:get(facts_by_predicate, Meta))},
         total_facts => maps:get(total_facts, Meta),
+        type_analysis => symbolic_ts_project:summary_json(maps:get(type_analysis, Meta)),
         %% undefined -> null when no rules file was found/given, so an
         %% agent can tell "no derived predicates loaded" from "loaded but
         %% path unknown" apart at a glance, without guessing from count.
