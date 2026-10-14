@@ -1485,11 +1485,12 @@ definition_name(Node, Src) ->
             false
     end.
 
-%% Walk up to the nearest enclosing function_declaration to attribute a
-%% call site to the function it appears in — {Name, Arity}, or
-%% {undefined, undefined} if the call isn't inside any recognized
-%% definition. Arity comes from that same declaration's "parameters"
-%% field, same technique as define_fact/3.
+%% Walk up to the nearest named function declaration to attribute a
+%% call site to the function it appears in. An arrow callback passed to
+%% an exported factory call is attributed to that exported binding, using
+%% the callback's own parameter count; other anonymous functions keep
+%% walking outward as before. If neither identity is available, return
+%% {undefined, undefined} rather than inventing one.
 caller_info(Node, Src) ->
     case symbolic_ts:node_type(Node) of
         "function_declaration" ->
@@ -1507,11 +1508,96 @@ caller_info(Node, Src) ->
             NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
             {Arity, _Params} = args_shape(Node, <<"parameters">>, Src),
             {to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
-        _ ->
+        "arrow_function" ->
+            case exported_factory_handler(Node, Src) of
+                {ok, Name, Arity} -> {Name, Arity};
+                false -> caller_info_parent(Node, Src)
+            end;
+        _ -> caller_info_parent(Node, Src)
+    end.
+
+caller_info_parent(Node, Src) ->
+    Parent = symbolic_ts:node_parent(Node),
+    case symbolic_ts:node_is_null(Parent) of
+        true -> {undefined, undefined};
+        false -> caller_info(Parent, Src)
+    end.
+
+%% A top-level exported handler often has no named function declaration:
+%% `export const handle = inngest.createFunction(..., async (...) => {})`.
+%% Keep calls inside that callback under the exported handler identity.
+%% Stop at named functions so nested closures inside an ordinary function
+%% retain the existing nearest-function attribution.
+exported_factory_handler(Arrow, Src) ->
+    case exported_factory_binding(Arrow) of
+        {ok, NameNode, HandlerArrow} ->
+            case node_within(Arrow, HandlerArrow) of
+                true ->
+                    {Arity, _Params} = args_shape(HandlerArrow, <<"parameters">>, Src),
+                    {ok, to_atom(symbolic_ts:node_text(NameNode, Src)), Arity};
+                false -> false
+            end;
+        false -> false
+    end.
+
+exported_factory_binding(Node) ->
+    Parent = symbolic_ts:node_parent(Node),
+    case symbolic_ts:node_is_null(Parent) of
+        true -> false;
+        false ->
+            case symbolic_ts:node_type(Parent) of
+                "function_declaration" -> false;
+                "generator_function_declaration" -> false;
+                "variable_declarator" ->
+                    case exported_factory_variable(Parent) of
+                        {ok, NameNode, CallNode} ->
+                            case sole_factory_arrow(CallNode) of
+                                {ok, HandlerArrow} ->
+                                    {ok, NameNode, HandlerArrow};
+                                false -> exported_factory_binding(Parent)
+                            end;
+                        false -> exported_factory_binding(Parent)
+                    end;
+                _ -> exported_factory_binding(Parent)
+            end
+    end.
+
+exported_factory_variable(Variable) ->
+    NameNode = symbolic_ts:node_child_by_field_name(Variable, <<"name">>),
+    ValueNode = symbolic_ts:node_child_by_field_name(Variable, <<"value">>),
+    Declaration = symbolic_ts:node_parent(Variable),
+    Export = symbolic_ts:node_parent(Declaration),
+    case {symbolic_ts:node_type(NameNode), symbolic_ts:node_type(ValueNode),
+          symbolic_ts:node_type(Export)} of
+        {"identifier", "call_expression", "export_statement"} ->
+            {ok, NameNode, ValueNode};
+        _ -> false
+    end.
+
+%% More than one direct arrow argument leaves the handler role ambiguous;
+%% do not pick whichever callback appears first in the argument list.
+sole_factory_arrow(CallNode) ->
+    Arguments = symbolic_ts:node_child_by_field_name(CallNode, <<"arguments">>),
+    case symbolic_ts:node_named_child_count(Arguments) of
+        Count when is_integer(Count), Count > 0 ->
+            Children = [symbolic_ts:node_named_child(Arguments, I)
+                || I <- lists:seq(0, Count - 1)],
+            case [Child || Child <- Children,
+                    symbolic_ts:node_type(Child) =:= "arrow_function"] of
+                [Arrow] -> {ok, Arrow};
+                _ -> false
+            end;
+        _ -> false
+    end.
+
+node_within(Node, Ancestor) ->
+    case same_node(Node, Ancestor) of
+        true -> true;
+        false ->
             Parent = symbolic_ts:node_parent(Node),
             case symbolic_ts:node_is_null(Parent) of
-                true -> {undefined, undefined};
-                false -> caller_info(Parent, Src)
+                true -> false;
+                false -> node_within(Parent, Ancestor)
             end
     end.
 

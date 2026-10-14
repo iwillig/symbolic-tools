@@ -167,6 +167,25 @@ tsx_files_are_scanned_and_ask_can_verify_their_calls_test() ->
         _ = file:del_dir_r(Root)
     end.
 
+factory_wrapped_handler_calls_are_attributed_to_the_export_test() ->
+    Fixture = filename:absname("test/fixtures/wrapped_handler.ts"),
+    {ok, Report} = symbolic_parse:scan_paths_report([Fixture]),
+    Metadata = #{<<"complete">> => true,
+        <<"scan_paths">> => [list_to_binary(Fixture)],
+        <<"files">> => 1, <<"failed_files">> => []},
+    {ok, Answer} = symbolic_ask:ask(maps:get(facts, Report),
+        "which functions call findSmsDecision/1?", Metadata),
+    ?assertEqual(<<"enumerate">>, maps:get(<<"type">>, Answer)),
+    ?assertEqual([<<"handleSmsVoteCommand/1">>], maps:get(<<"answer">>, Answer)),
+    [Witness] = maps:get(<<"evidence">>, Answer),
+    ?assertEqual(18, maps:get(<<"line">>, Witness)),
+    ?assertEqual(list_to_binary(Fixture), maps:get(<<"file">>, Witness)),
+    {ok, Ambiguous} = symbolic_ask:ask(maps:get(facts, Report),
+        "which functions call findAmbiguousDecision/0?", Metadata),
+    ?assertEqual(<<"unknown">>, maps:get(<<"type">>, Ambiguous)),
+    ?assertEqual(<<"A call fact has no caller identity, so the caller list is unknown.">>,
+        maps:get(<<"reason">>, Ambiguous)).
+
 callers_with_unknown_typescript_arity_return_unknown_marker_test() ->
     Facts = [
         {defines, findSmsDecision, 1, <<"({ slug })">>, "findSmsDecision.ts", 1},
