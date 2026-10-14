@@ -774,6 +774,29 @@ pipeline_returns_multiline_object_key_test() ->
         ?assertEqual(4, maps:get(<<"key_line">>, maps:get(<<"fact">>, ReturnKey)))
     end).
 
+pipeline_returns_multiline_shorthand_object_key_test() ->
+    File = "src/findSmsDecision.ts",
+    Facts = ts_extract_typescript:text(File,
+        "function findSmsDecision(decision: Decision) {\n"
+        "  const currentPhase = decision.currentPhase;\n"
+        "  return {\n"
+        "    currentPhase,\n"
+        "  };\n"
+        "}"),
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does findSmsDecision/1 return currentPhase?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        ?assertEqual([{<<"object_key">>, 4},
+                      {<<"return_object_key">>, 3},
+                      {<<"return_stmt">>, 3}],
+            lists:sort([{maps:get(<<"predicate">>, E), maps:get(<<"line">>, E)}
+                || E <- maps:get(<<"evidence">>, Answer)])),
+        [ReturnKey] = [E || E <- maps:get(<<"evidence">>, Answer),
+            maps:get(<<"predicate">>, E) =:= <<"return_object_key">>],
+        ?assertEqual(4, maps:get(<<"key_line">>, maps:get(<<"fact">>, ReturnKey)))
+    end).
+
 pipeline_returns_does_not_join_an_unreturned_object_key_test() ->
     File = "src/findSmsDecision.ts",
     Facts = ts_extract_typescript:text(File,

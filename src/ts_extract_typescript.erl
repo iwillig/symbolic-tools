@@ -162,11 +162,12 @@
 %% widening that query itself — keeps calls/5's own "only calls" contract
 %% untouched.
 -define(MEMBER_EXPR_QUERY, <<"(member_expression object: (_) @obj property: (property_identifier) @prop) @m">>).
-%% Object-literal keys — `{ reason: "expired" }` — as pair nodes. A
-%% returned object's field names live here, NOT in expr_ref (a key is a
-%% property_identifier, never an identifier reference). return_object_key/6
-%% adds the AST link to the enclosing valued return when one exists.
+%% Object-literal keys — `{ reason: "expired" }` and `{ reason }` — as pair
+%% or shorthand-property nodes. A returned object's field names live here,
+%% NOT in expr_ref. return_object_key/6 adds the AST link to the enclosing
+%% valued return when one exists; destructuring patterns are not captured.
 -define(PAIR_KEY_QUERY, <<"(pair key: (property_identifier) @key) @p">>).
+-define(SHORTHAND_KEY_QUERY, <<"(shorthand_property_identifier) @key">>).
 -define(NEW_EXPR_QUERY, <<"(new_expression) @n">>).
 -define(IMPORT_QUERY, <<"(import_statement) @i">>).
 -define(EXPORT_QUERY, <<"(export_statement) @e">>).
@@ -475,14 +476,19 @@ member_read_fact(MemberNode, Src, PathAtom) ->
                 to_atom(symbolic_ts:node_text(PropNode, Src)), PathAtom, line(MemberNode)}}
     end.
 
-%% object_key/5: the key name of every object-literal pair —
-%% `{ reason: "expired" }` yields `reason`. Shorthand destructuring
-%% ({ message }) is shorthand_property_identifier, not a pair, and is
-%% deliberately out of scope here.
+%% Object-literal pairs and shorthand properties share the same fact shape.
+object_key_nodes(Lang, Root) ->
+    lists:usort(query_key_nodes(Lang, Root, ?PAIR_KEY_QUERY) ++
+                query_key_nodes(Lang, Root, ?SHORTHAND_KEY_QUERY)).
+
+query_key_nodes(Lang, Root, QueryText) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, QueryText),
+    [Node || {"key", Node} <- symbolic_ts:query_capture(Root, Q)].
+
+%% object_key/5: the key name of every object-literal pair or shorthand
+%% property. Shorthand destructuring uses a different node type and is excluded.
 object_keys(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = symbolic_ts:query_new(Lang, ?PAIR_KEY_QUERY),
-    Caps = symbolic_ts:query_capture(Root, Q),
-    Nodes = lists:usort([N || {"key", N} <- Caps]),
+    Nodes = object_key_nodes(Lang, Root),
     [begin
          {Caller, CallerArity} = caller_info(Node, Src),
          {object_key, Caller, CallerArity,
@@ -495,9 +501,7 @@ object_keys(Lang, Root, Src, PathAtom) ->
 %% Anonymous nested functions keep their own returns; they must not inherit
 %% the enclosing named function's identity for this relation.
 return_object_keys(Lang, Root, Src, PathAtom) ->
-    {Q, _, _} = symbolic_ts:query_new(Lang, ?PAIR_KEY_QUERY),
-    Caps = symbolic_ts:query_capture(Root, Q),
-    Nodes = lists:usort([N || {"key", N} <- Caps]),
+    Nodes = object_key_nodes(Lang, Root),
     lists:flatmap(fun(Node) ->
         return_object_key_fact(Node, Src, PathAtom)
     end, Nodes).
