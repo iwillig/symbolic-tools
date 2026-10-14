@@ -128,8 +128,8 @@ parallel_collect(Pid, Ref) ->
     end.
 
 %% Extensions matcher below to a language ts_extract:file/1 knows how to
-%% handle. Kept as a list (not a set) — 8 entries, checked once per file.
--define(SCAN_EXTENSIONS, [".erl", ".rs", ".ts", ".clj", ".rb", ".md", ".toml", ".json", ".sh", ".bash"]).
+%% handle. Kept as a list (not a set) — checked once per file.
+-define(SCAN_EXTENSIONS, [".erl", ".rs", ".ts", ".tsx", ".clj", ".rb", ".md", ".toml", ".json", ".sh", ".bash"]).
 
 %% scan_paths(Paths) -> {ok, {Files, Facts}} | {error, term()}.
 %%  Like scan/1, but over a LIST of paths — each entry may be a
@@ -406,6 +406,7 @@ languages_from_files(Files) ->
 language_from_ext(".erl") -> <<"erlang">>;
 language_from_ext(".rs") -> <<"rust">>;
 language_from_ext(".ts") -> <<"typescript">>;
+language_from_ext(".tsx") -> <<"typescript">>;
 language_from_ext(".clj") -> <<"clojure">>;
 language_from_ext(".rb") -> <<"ruby">>;
 language_from_ext(".md") -> <<"markdown">>;

@@ -142,6 +142,8 @@ ask(Facts, Question, Metadata) ->
     prolog_session:stop(Pid),
     scope_answer(Result, Metadata).
 
+scope_answer({ok, #{<<"type">> := <<"unknown">>} = Answer}, Metadata) ->
+    {ok, Answer#{<<"scope">> => scope_from_metadata(Metadata)}};
 scope_answer({ok, Answer}, Metadata) ->
     case metadata_complete(Metadata) of
         true ->
@@ -1331,7 +1333,7 @@ yes_no_calls(Pid, Caller, Callee) ->
 
 all_call_evidence(Pid, {'/', SName, SArity}, {'/', OName, OArity}) ->
     OArityText = call_arity(OArity),
-    CallerText = quoted_atom_name(SName) ++ ", " ++ integer_to_list(SArity),
+    CallerText = quoted_atom_name(SName) ++ ", " ++ caller_arity_text(SArity),
     LocalGoal = "findall(st(local, " ++ OArityText ++ ", F, L), calls(" ++ CallerText ++
         ", local(" ++ quoted_atom_name(OName) ++ ", " ++ OArityText ++
         "), F, L), L1)",
@@ -1559,22 +1561,30 @@ enumerate_callers(Pid, {'/', OName, OArity}) ->
             L2 = proplists:get_value('L2', Bindings),
             L3 = proplists:get_value('L3', Bindings, []),
             L4 = proplists:get_value('L4', Bindings, []),
-            Callers = lists:usort(
-                [render_ident(I) || I <- L1 ++ L2 ++ L3 ++ L4]
-            ),
-            case caller_evidence(Pid, Callers, {'/', OName, OArity}) of
-                {ok, Evidence, Complete} ->
-                    {ok, #{<<"type">> => <<"enumerate">>,
-                        <<"answer">> => Callers,
-                        <<"evidence">> => Evidence,
-                        <<"evidence_complete">> => Complete}};
-                Error -> Error
+            CallerIdentities = lists:usort(L1 ++ L2 ++ L3 ++ L4),
+            case lists:any(fun caller_name_unknown/1, CallerIdentities) of
+                true ->
+                    {ok, #{<<"type">> => <<"unknown">>,
+                        <<"reason">> => <<"A call fact has no caller identity, so the caller list is unknown.">>}};
+                false ->
+                    Callers = [render_ident(I) || I <- CallerIdentities],
+                    case caller_evidence(Pid, Callers, {'/', OName, OArity}) of
+                        {ok, Evidence, Complete} ->
+                            {ok, #{<<"type">> => <<"enumerate">>,
+                                <<"answer">> => Callers,
+                                <<"evidence">> => Evidence,
+                                <<"evidence_complete">> => Complete}};
+                        Error -> Error
+                    end
             end;
         no_solution ->
             {error, {findall_never_fails, callers_of}};
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end.
+
+caller_name_unknown({'-', undefined, _Arity}) -> true;
+caller_name_unknown(_) -> false.
 
 caller_evidence(Pid, Callers, Object) ->
     Covered = lists:sublist(Callers, ?CALLER_EVIDENCE_LIMIT),
@@ -1600,6 +1610,7 @@ caller_evidence_for(Pid, [Caller | Rest], Object, Acc) ->
 
 split_rendered_ident(Ident) when is_binary(Ident) ->
     case binary:split(Ident, <<"/">>) of
+        [Name, <<"?">>] -> {ok, {'/', Name, undefined}};
         [Name, ArityBin] ->
             try {ok, {'/', Name, binary_to_integer(ArityBin)}}
             catch error:badarg -> error end;
@@ -1645,10 +1656,14 @@ member_findall_tail(OName, OArityText) ->
 
 %% --- shaping helpers ---
 
-render_ident({'-', Name, Arity}) when is_atom(Name) ->
+render_ident({'-', Name, Arity}) when is_atom(Name), is_integer(Arity) ->
     iolist_to_binary([atom_to_list(Name), "/", integer_to_list(Arity)]);
-render_ident({'-', Name, Arity}) when is_binary(Name) ->
-    iolist_to_binary([Name, "/", integer_to_list(Arity)]).
+render_ident({'-', Name, _UnknownArity}) when is_atom(Name) ->
+    iolist_to_binary([atom_to_list(Name), "/?"]);
+render_ident({'-', Name, Arity}) when is_binary(Name), is_integer(Arity) ->
+    iolist_to_binary([Name, "/", integer_to_list(Arity)]);
+render_ident({'-', Name, _UnknownArity}) when is_binary(Name) ->
+    iolist_to_binary([Name, "/?"]).
 
 %% `any` (statistical tier, arity not pinned by the question) proves
 %% against an unbound Prolog variable — every arity counts.
@@ -1657,6 +1672,9 @@ arity_text(N) when is_integer(N) -> integer_to_list(N).
 
 call_arity(any) -> "A";
 call_arity(N) when is_integer(N) -> integer_to_list(N).
+
+caller_arity_text(N) when is_integer(N) -> integer_to_list(N);
+caller_arity_text(_UnknownArity) -> "undefined".
 
 %% The DCG hands erlog already-legal atoms (the tokenizer guarantees
 %% lowercase-start); the statistical tier hands binaries that may carry

@@ -446,8 +446,8 @@ evidence_limit(callers_count) -> 50;
 evidence_limit(_) -> undefined.
 
 operation_limits(callers) ->
-    <<"Cites at most 50 distinct callers; evidence_complete is false when that cap truncates citations. The answer list and count remain complete.">>;
+    <<"Callers with a known name but unknown arity appear as name/?. If any caller name is missing, returns unknown instead of a partial list. Cites at most 50 callers; evidence_complete reports citation truncation.">>;
 operation_limits(callers_count) ->
-    <<"Cites at most 50 distinct callers; evidence_complete is false when that cap truncates citations. The count remains complete.">>;
+    <<"Callers with a known name but unknown arity appear as name/?. If any caller name is missing, returns unknown instead of a partial count. Cites at most 50 callers; evidence_complete reports citation truncation.">>;
 operation_limits(_Id) ->
     <<"Results describe extracted facts in the configured scan; they do not establish behavior outside that scope.">>.

@@ -140,6 +140,71 @@ enumerate_lists_distinct_callers_sorted_test() ->
             Evidence))
     end).
 
+tsx_files_are_scanned_and_ask_can_verify_their_calls_test() ->
+    Fixture = filename:absname("test/fixtures/sample.tsx"),
+    Root = filename:join(["_build", "ask_tsx_scan_scratch"]),
+    _ = file:del_dir_r(Root),
+    Path = filename:join(Root, "sample.tsx"),
+    ok = filelib:ensure_dir(Path),
+    {ok, Source} = file:read_file(Fixture),
+    ok = file:write_file(Path, Source),
+    try
+        {ok, Report} = symbolic_parse:scan_paths_report([Root]),
+        ?assertEqual([Path], maps:get(files, Report)),
+        ?assertEqual(true, maps:get(complete, Report)),
+        ?assertEqual([], maps:get(failed_files, Report)),
+        Metadata = #{<<"complete">> => true,
+            <<"scan_paths">> => [list_to_binary(Root)],
+            <<"files">> => 1, <<"failed_files">> => []},
+        {ok, Answer} = symbolic_ask:ask(maps:get(facts, Report),
+            "does caller/0 call target/0?", Metadata),
+        ?assertEqual(<<"yes_no">>, maps:get(<<"type">>, Answer)),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        [Witness] = maps:get(<<"evidence">>, Answer),
+        ?assertEqual(2, maps:get(<<"line">>, Witness)),
+        ?assertEqual(list_to_binary(Path), maps:get(<<"file">>, Witness))
+    after
+        _ = file:del_dir_r(Root)
+    end.
+
+callers_with_unknown_typescript_arity_return_unknown_marker_test() ->
+    Facts = [
+        {defines, findSmsDecision, 1, <<"({ slug })">>, "findSmsDecision.ts", 1},
+        {calls, handleSmsVoteCommand, undefined,
+            {local, findSmsDecision, 1}, "handleSmsVoteCommand.ts", 20}
+    ],
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "which functions call findSmsDecision/1?"),
+        ?assertEqual([<<"handleSmsVoteCommand/?">>],
+            maps:get(<<"answer">>, Answer)),
+        [Witness] = maps:get(<<"evidence">>, Answer),
+        ?assertEqual(<<"handleSmsVoteCommand/?">>,
+            maps:get(<<"caller">>, maps:get(<<"fact">>, Witness))),
+        ?assertEqual(20, maps:get(<<"line">>, Witness)),
+        {ok, Count} = symbolic_ask:run_result(Db,
+            "how many functions call findSmsDecision/1?"),
+        ?assertEqual(1, maps:get(<<"answer">>, Count))
+    end).
+
+caller_without_identity_makes_list_and_count_unknown_test() ->
+    Facts = [
+        {defines, findSmsDecision, 1, <<"({ slug })">>, "findSmsDecision.ts", 1},
+        {calls, undefined, undefined, {local, findSmsDecision, 1},
+            "handleSmsVoteCommand.ts", 86}
+    ],
+    with_db(Facts, fun(Db) ->
+        {ok, Enumerated} = symbolic_ask:run_result(Db,
+            "which functions call findSmsDecision/1?"),
+        ?assertEqual(<<"unknown">>, maps:get(<<"type">>, Enumerated)),
+        ?assertEqual(<<"A call fact has no caller identity, so the caller list is unknown.">>,
+            maps:get(<<"reason">>, Enumerated)),
+        ?assertEqual(true, maps:get(<<"complete">>, maps:get(<<"scope">>, Enumerated))),
+        {ok, Counted} = symbolic_ask:run_result(Db,
+            "how many functions call findSmsDecision/1?"),
+        ?assertEqual(<<"unknown">>, maps:get(<<"type">>, Counted))
+    end).
+
 count_counts_distinct_functions_test() ->
     with_db(facts(), fun(Db) ->
         {ok, Answer} = symbolic_ask:run_result(Db,
@@ -548,6 +613,8 @@ catalog_discovery_describes_supported_inputs_and_answer_contracts_test() ->
     {_, CallersOp} = lists:keyfind(<<"callers">>, 1,
         [{maps:get(<<"id">>, Op), Op} || Op <- Operations]),
     ?assertEqual(50, maps:get(<<"evidence_limit">>, CallersOp)),
+    ?assertNotEqual(nomatch, binary:match(maps:get(<<"limits">>, CallersOp),
+        <<"caller name is missing">>)),
     ?assertEqual(<<"capped_matches">>, maps:get(<<"evidence_mode">>, CallersOp)),
     ?assertMatch(#{<<"properties">> := #{<<"evidence_complete">> := #{<<"type">> := <<"boolean">>}}},
         maps:get(<<"answer_shape">>, CallersOp)),

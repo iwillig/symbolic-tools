@@ -506,6 +506,7 @@ languages_from_files(Files) ->
 language_from_ext(".erl") -> "erlang";
 language_from_ext(".rs") -> "rust";
 language_from_ext(".ts") -> "typescript";
+language_from_ext(".tsx") -> "typescript";
 language_from_ext(".clj") -> "clojure";
 language_from_ext(".rb") -> "ruby";
 language_from_ext(".md") -> "markdown";
