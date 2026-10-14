@@ -273,7 +273,22 @@ returns_evidence_schema() ->
     #{<<"oneOf">> => [
         return_fact_schema(<<"return_stmt">>, <<"has_value">>),
         return_fact_schema(<<"expr_ref">>, <<"identifier">>),
-        return_fact_schema(<<"object_key">>, <<"key">>)]}.
+        return_fact_schema(<<"object_key">>, <<"key">>),
+        return_object_key_evidence_schema()]}.
+
+return_object_key_evidence_schema() ->
+    #{<<"type">> => <<"object">>,
+      <<"properties">> => #{
+          <<"predicate">> => #{<<"const">> => <<"return_object_key">>},
+          <<"file">> => #{<<"type">> => <<"string">>},
+          <<"line">> => #{<<"type">> => <<"integer">>},
+          <<"fact">> => #{<<"type">> => <<"object">>,
+              <<"properties">> => #{
+                  <<"function">> => #{<<"type">> => <<"string">>},
+                  <<"key">> => #{<<"type">> => <<"string">>},
+                  <<"key_line">> => #{<<"type">> => <<"integer">>}},
+              <<"required">> => [<<"function">>, <<"key">>, <<"key_line">>]}},
+      <<"required">> => [<<"predicate">>, <<"file">>, <<"line">>, <<"fact">>]}.
 
 return_fact_schema(Predicate, DetailField) ->
     #{<<"type">> => <<"object">>,
@@ -415,7 +430,7 @@ evidence_description(callers_count, source_location) ->
 evidence_description(calls, source_location) ->
     <<"Returns one deterministic matching calls fact as a source witness; false answers have no witness.">>;
 evidence_description(returns_mention, source_location) ->
-    <<"Returns a valued return_stmt and its matching same-line expr_ref or object_key. This is mention-level evidence, not value-flow proof.">>;
+    <<"Returns a valued return_stmt and its matching expr_ref or object_key. Multiline returned-object keys include a structural return_object_key witness. This is syntax-level mention evidence, not value-flow proof.">>;
 evidence_description(uses, source_location) ->
     <<"Returns one deterministic matching expr_ref fact as a source witness; false answers have no witness.">>;
 evidence_description(uses_in_file, source_location) ->

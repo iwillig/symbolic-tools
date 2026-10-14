@@ -419,7 +419,12 @@ extraction needed to add another scope-shaped lint check.
 
 `stmt_block(Id, Function, Arity, Kind, File, Line)` / `stmt(...)` /
 `return_stmt(Function, Arity, HasValue, File, Line)` — statement
-position within a block.
+position within a block. `object_key(Function, Arity, Key, File, KeyLine)`
+records an object-literal property name. `return_object_key(Function, Arity,
+Key, File, ReturnLine, KeyLine)` links that key to the valued return
+expression that structurally contains it, including when it is on another
+line. This is syntax structure, not proof of the property's value or runtime
+result.
 
 ```prolog
 ?- return_stmt(shout, Arity, HasValue, File, Line).

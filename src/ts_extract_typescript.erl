@@ -74,7 +74,10 @@
 %%%   braceless_body(Function, Arity, Kind, File, Line)  — Kind: if/else/for/while whose
 %%%                                                         body isn't a statement_block
 %%%   return_stmt(Function, Arity, HasValue, File, Line) — HasValue: true/false
-%%   async_function(Function, Arity, File, Line)       — a function_declaration
+%%%   return_object_key(Function, Arity, Key, File, ReturnLine, KeyLine) — an object
+%%%                                                         key structurally inside a
+%%%                                                         valued return expression
+%%%   async_function(Function, Arity, File, Line)       — a function_declaration
 %%                                                         with a literal `async`
 %%                                                         token child
 %%   generator_function(Function, Arity, File, Line)   — a generator_function_declaration
@@ -161,9 +164,8 @@
 -define(MEMBER_EXPR_QUERY, <<"(member_expression object: (_) @obj property: (property_identifier) @prop) @m">>).
 %% Object-literal keys — `{ reason: "expired" }` — as pair nodes. A
 %% returned object's field names live here, NOT in expr_ref (a key is a
-%% property_identifier, never an identifier reference), which is why
-%% "does X return reason?" needs this fact: the returns proof joins
-%% return_stmt against BOTH expr_ref and object_key.
+%% property_identifier, never an identifier reference). return_object_key/6
+%% adds the AST link to the enclosing valued return when one exists.
 -define(PAIR_KEY_QUERY, <<"(pair key: (property_identifier) @key) @p">>).
 -define(NEW_EXPR_QUERY, <<"(new_expression) @n">>).
 -define(IMPORT_QUERY, <<"(import_statement) @i">>).
@@ -268,6 +270,7 @@ text(Path, Src0) ->
         yield_exprs(Lang, Root, Src, PathAtom) ++
         member_reads(Lang, Root, Src, PathAtom) ++
         object_keys(Lang, Root, Src, PathAtom) ++
+        return_object_keys(Lang, Root, Src, PathAtom) ++
         label_stmts(Lang, Root, Src, PathAtom) ++
         label_refs(Lang, Root, Src, PathAtom),
     lists:usort(Facts).
@@ -479,6 +482,67 @@ object_keys(Lang, Root, Src, PathAtom) ->
          {object_key, Caller, CallerArity,
              to_atom(symbolic_ts:node_text(Node, Src)), PathAtom, line(Node)}
      end || Node <- Nodes].
+
+%% A returned object's key can be several lines below its return statement.
+%% Record the AST relationship rather than joining all function mentions to a
+%% return (which would pull in unrelated diagnostics later in the function).
+%% Anonymous nested functions keep their own returns; they must not inherit
+%% the enclosing named function's identity for this relation.
+return_object_keys(Lang, Root, Src, PathAtom) ->
+    {Q, _, _} = symbolic_ts:query_new(Lang, ?PAIR_KEY_QUERY),
+    Caps = symbolic_ts:query_capture(Root, Q),
+    Nodes = lists:usort([N || {"key", N} <- Caps]),
+    lists:flatmap(fun(Node) ->
+        return_object_key_fact(Node, Src, PathAtom)
+    end, Nodes).
+
+return_object_key_fact(Node, Src, PathAtom) ->
+    case enclosing_return_statement(Node) of
+        undefined -> [];
+        ReturnNode ->
+            {Caller, CallerArity} = caller_info(Node, Src),
+            case return_function_owner(ReturnNode, Src) of
+                {Caller, CallerArity} ->
+                    [{return_object_key, Caller, CallerArity,
+                      to_atom(symbolic_ts:node_text(Node, Src)), PathAtom,
+                      line(ReturnNode), line(Node)}];
+                _ -> []
+            end
+    end.
+
+return_function_owner(Node, Src) ->
+    Parent = symbolic_ts:node_parent(Node),
+    case symbolic_ts:node_is_null(Parent) of
+        true -> undefined;
+        false ->
+            case symbolic_ts:node_type(Parent) of
+                "function_declaration" -> caller_info(Parent, Src);
+                "generator_function_declaration" -> caller_info(Parent, Src);
+                "arrow_function" ->
+                    case exported_factory_handler(Parent, Src) of
+                        {ok, Name, Arity} -> {Name, Arity};
+                        false -> undefined
+                    end;
+                "function_expression" -> undefined;
+                "method_definition" -> undefined;
+                _ -> return_function_owner(Parent, Src)
+            end
+    end.
+
+enclosing_return_statement(Node) ->
+    Parent = symbolic_ts:node_parent(Node),
+    case symbolic_ts:node_is_null(Parent) of
+        true -> undefined;
+        false ->
+            case symbolic_ts:node_type(Parent) of
+                "return_statement" -> Parent;
+                "function_declaration" -> undefined;
+                "function_expression" -> undefined;
+                "arrow_function" -> undefined;
+                "generator_function_declaration" -> undefined;
+                _ -> enclosing_return_statement(Parent)
+            end
+    end.
 
 is_call_target(MemberNode) ->
     Parent = symbolic_ts:node_parent(MemberNode),

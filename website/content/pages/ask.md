@@ -6,6 +6,7 @@ Subtitle: Every question shape the ask tool answers, and a plan it can grade.
 <nav class="quicknav" aria-label="On this page">
 <a href="#grammar">The question grammar</a>
 <a href="#pipeline">How a question becomes an answer</a>
+<a href="#examples">Try it</a>
 <a href="#plan">Grading a plan</a>
 <a href="#refusals">What it refuses to do</a>
 </nav>
@@ -33,11 +34,11 @@ and the same answer shapes.
 | `how many functions call X/N?` | count | same proof, counted |
 | `is X/N defined?` / `does X/N exist?` | yes_no | defines/5 — `false` is an answer, not an error |
 | `does X/N use W?` / `does file F use W?` | yes_no | expr_ref/6 — any mention in the function or file |
-| `does X/N return W?` | yes_no | return_stmt on whose line W is mentioned (expr_ref or object_key) |
+| `does X/N return W?` | yes_no | a valued return with a same-line mention, or an object key structurally inside it; syntax-level mention, not value flow |
 | `does X/N handle W?` | yes_no | branch-level literal equal to W, case-insensitive |
 | `where is X/N called?` / `defined?` | sites | `{caller, file, line}` for every site, all call shapes merged |
 | `where is ... documented?` / `discussed?` | prose | BM25-ranked evidence over comments, headings, paragraphs |
-| `is file F scanned?` | yes_no | the basename appears in any fact's File field |
+| `is file F scanned?` | yes_no | a matching fact has that file; inputs accept a basename, relative path suffix, or exact absolute path |
 | `is config K defined?` | yes_no | exact dotted key against config_value/4 |
 
 Every identifier is a `Name/Arity` term; dotted paths
@@ -62,6 +63,106 @@ loudly:
    `unverifiable`, wrong arities are `wrong_arity`, and a question the
    mapper cannot express is `unrecognized`. Nothing is ever guessed.
 
+## Try it {: #examples }
+
+Parse the configured paths once, then inspect the supported operations:
+
+```sh
+symbolic parse
+symbolic ask -catalog
+```
+
+The catalog describes each operation's inputs, answer shape, evidence, limits,
+and example questions. MCP exposes the same catalog as `ask_catalog` (no
+arguments) and accepts the same question through `ask`. Output excerpts below
+shorten absolute file paths to repository-relative paths; full CLI responses
+include scan scope and other fields where applicable.
+
+### Find definitions and call sites
+
+```sh
+symbolic ask "where is ask/3 defined?"
+symbolic ask "where is ask/3 called?"
+```
+
+The first returns a `sites` answer with the exact function and definition
+location. The second lists call sites with caller, file, and line. For example,
+the definition answer includes `ask/3` at `src/symbolic_ask.erl:120`:
+
+```json
+{"type":"sites","answer":[{"function":"ask/3","file":"src/symbolic_ask.erl","line":120}]}
+```
+
+### Check a call, including within one file
+
+```sh
+symbolic ask "does file src/symbolic_ask.erl call to_bin/1?"
+```
+
+This returns `true` with a `calls` witness: `scope_from_metadata/1` calls
+`to_bin/1` at line 187. An abbreviated response looks like:
+
+```json
+{"type":"yes_no","answer":true,"evidence":[{"predicate":"calls","file":"src/symbolic_ask.erl","line":187,"fact":{"caller":"scope_from_metadata/1","call":{"kind":"local","name":"to_bin","arity":1}}}]}
+```
+
+The evidence identifies an extracted call site; it does not prove transitive
+calls or runtime behavior. File questions accept a basename, relative path
+suffix, or exact absolute path.
+
+### Explore callers and counts
+
+```sh
+symbolic ask "how many functions call to_bin/1?"
+```
+
+For this scan the answer is `25`, with `evidence_complete: true`:
+
+```json
+{"type":"count","answer":25,"evidence_complete":true}
+```
+
+The full response also includes source witnesses. Caller-list responses use the
+same evidence cap; `evidence_complete` tells you when citations were truncated.
+
+### Read a negative answer carefully
+
+```sh
+symbolic ask "does ask/3 call to_bin/1?"
+```
+
+This returns `false` with an empty evidence array and a complete-scan scope:
+
+```json
+{"type":"yes_no","answer":false,"evidence":[]}
+```
+
+It means no matching direct-call fact was found in that scope—not that the
+functions are unrelated at runtime. An incomplete scan can produce `unknown`
+instead. A question outside ASK's supported relations or with unresolved names
+can be `unrecognized` or `unverifiable`, rather than `false`.
+
+### Find relevant documentation
+
+```sh
+symbolic ask "where is the CLI release documented?"
+```
+
+This returns ranked prose evidence. The first hits in this scan are the
+`docs/cli-erlang.md` heading at line 1 and a passage in `docs/releasing.md` at
+line 128. The excerpt shows the top two hits:
+
+```json
+{"type":"prose","evidence":[{"file":"docs/cli-erlang.md","kind":"heading","line":1,"score":13.40},{"file":"docs/releasing.md","kind":"paragraph","line":128,"score":12.27}]}
+```
+
+Higher scores rank as more relevant. Prose search is discovery, not a truth
+verdict: no matching passages do not prove a claim false.
+
+MCP calls use the same questions, for example `ask` with
+`{"question":"does file src/symbolic_ask.erl call to_bin/1?"}`. MCP wraps the
+shared answer under `ok`; the CLI prints the answer directly.
+
 ## Grading a plan {: #plan }
 
 Here is a plan for this project, and the questions that grade it.
@@ -84,7 +185,9 @@ before-state checkable.
 > **Verification.** The claims below run against the parsed repository
 > before the fix. Claim 6 flips to true after it.
 
-The claims, answered by `ask` against this repository's own fact base:
+The claims below were answered by `ask` against this repository's fact base.
+For readability, their JSON snippets show the key answer fields; full responses
+also include evidence and scan scope where applicable:
 
 **1. The defect is where the plan says it is.**
 
@@ -200,14 +303,18 @@ ran against the fact base — no model wrote these answers.
 
 ## What it refuses to do {: #refusals }
 
-Three states, all loud:
+ASK keeps distinct outcomes distinct:
 
 - `unrecognized` — the phrasing is outside the grammar and the mapper
   will not invent a relation.
 - `unverifiable` — the question parses but names something the fact
   base cannot resolve (`no_such_function`, `wrong_arity`,
   `ambiguous_arity`, `no_such_file`). The asker repairs the question.
-- `false` / `0` / `[]` — answers, not errors. The proof ran and failed.
+- `unknown` — an absence-based answer cannot be trusted because scan
+  metadata is missing or extraction failed.
+- `false` / `0` / `[]` — answers, not errors. The proof ran and found no
+  matching fact in the complete indexed scope; positive answers carry
+  source witnesses.
 
 Multi-word synonyms ("the auth hook") are the known open gap: the
 plans that cover this are honest about it, and the gate reports them

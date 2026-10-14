@@ -48,9 +48,13 @@ MCP: call `query` with the same `goal`.
 
 ```sh
 symbolic ask "who calls capitalize/1?"
+symbolic ask -catalog
 ```
 
-MCP: call `ask` with the same `question`.
+MCP: call `ask` with the same `question`; use `ask_catalog` (no arguments) to
+discover the supported operations and their evidence contracts. See [Using
+ask](ask.html) for examples of source citations, file-scoped questions, counts,
+and incomplete-scan outcomes.
 
 ## Overview
 

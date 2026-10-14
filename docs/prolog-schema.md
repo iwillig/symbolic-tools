@@ -29,6 +29,8 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `expr_operand/3` | Erlang, TypeScript | One operand's role/argument-index and which node fills it |
 | `literal/7` | Erlang, TypeScript | A literal value used as an operand or passed as a call argument |
 | `expr_ref/6` | Erlang, TypeScript | A bare identifier used as an operand or passed as a call argument |
+| `object_key/5` | TypeScript | A property name on an object-literal pair |
+| `return_object_key/6` | TypeScript | An object key structurally inside a valued return expression, with both source lines |
 | `scope/4` | TypeScript | A function/block/module scope exists |
 | `var_decl/6` | TypeScript | A variable/parameter is declared |
 | `var_ref/6` | TypeScript | A variable is read and/or written |
@@ -645,6 +647,12 @@ Erlang has no brace-optional `if`/`for`/`while`, and no separate
   control-flow-path analysis: real `consistent-return` semantics just
   check whether every `return` in *one function* agrees on whether it
   specifies a value, not whether every code path returns one.
+- **`return_object_key(Fun, Arity, Key, File, ReturnLine, KeyLine)`** —
+  present when an object's property key is structurally inside a valued
+  `return_statement`, before crossing a nested function boundary. It
+  links a multiline return to the key's own line without joining every
+  mention in the function to every return. This is syntax structure only;
+  it says nothing about the property's value, data flow, or runtime result.
 
 Same `existence_error`-on-zero-clauses guard as every other fact family
 above — one sentinel clause per predicate in `.symbolic/rules.pl`.

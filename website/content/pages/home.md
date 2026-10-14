@@ -152,7 +152,7 @@ MCP `ask` returns shaped JSON for the same question.
 }
 ```
 
-See [CLI and MCP parity](interfaces.html) for all paired commands.
+See [CLI and MCP parity](interfaces.html) for all paired commands, and [Using ask](ask.html) for more examples with evidence and scan scope.
 
 ## Status {: #status }
 

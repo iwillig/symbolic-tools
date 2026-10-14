@@ -710,7 +710,7 @@ build_relation(Pid, {yes_no, {calls, SWords, OWords}}) ->
             %% three call shapes.
             case file_scanned_check(Pid, FileWords) of
                 {ok, true} ->
-                    FileBin = file_segment(FileWords),
+                    FileBin = span_text(FileWords),
                     case resolve_object(Pid, OWords) of
                         {ok, Object} ->
                             answer(Pid, yes_no, {calls_file, FileBin, Object});
@@ -718,7 +718,7 @@ build_relation(Pid, {yes_no, {calls, SWords, OWords}}) ->
                             Error
                     end;
                 {ok, false} ->
-                    {error, {unverifiable, {no_such_file, file_segment(FileWords)}}};
+                    {error, {unverifiable, {no_such_file, span_text(FileWords)}}};
                 Error ->
                     Error
             end;
@@ -754,10 +754,10 @@ build_relation(Pid, {yes_no, {uses, SWords, OWords}}) ->
         {file, FileWords} ->
             case file_scanned_check(Pid, FileWords) of
                 {ok, true} ->
-                    FileBin = file_segment(FileWords),
+                    FileBin = span_text(FileWords),
                     answer(Pid, yes_no, {uses_file, FileBin, name_candidates(OWords)});
                 {ok, false} ->
-                    {error, {unverifiable, {no_such_file, file_segment(FileWords)}}};
+                    {error, {unverifiable, {no_such_file, span_text(FileWords)}}};
                 Error ->
                     Error
             end;
@@ -815,11 +815,13 @@ subject_kind(Words) -> {ident, Words}.
 name_candidates(OWords) ->
     [C || C <- ident_candidates(OWords)].
 
-%% The file name: dot-glued segments joined; the first candidate is the
-%% full dotted name (JoinAccountModal.ts), which is what a scan check
-%% matches on.
-file_segment(FileWords) ->
-    case ident_candidates(FileWords) of
+%% Reassemble a source span from its tokens. For file paths, keep slash
+%% separators intact so relative suffixes and absolute paths can match.
+span_text(FileWords) ->
+    iolist_to_binary([Word || {Word, _Tag} <- FileWords]).
+
+config_key(KeyWords) ->
+    case ident_candidates(KeyWords) of
         [First | _] -> First;
         [] -> <<>>
     end.
@@ -986,21 +988,19 @@ execute_answer(Pid, yes_no, {uses, Subject, Candidates}) ->
         {ok, Evidence} -> {ok, yes_no_evidence_from_witness(Evidence)};
         Error -> Error
     end;
-%% uses with a file subject — any expr_ref of the name in a file whose
-%% basename matches the question's file name.
+%% uses with a file subject — any expr_ref of the name in a file that
+%% matches the question's basename, relative path suffix, or absolute path.
 execute_answer(Pid, yes_no, {uses_file, FileBin, Candidates}) ->
     case file_expr_ref_evidence(Pid, Candidates, FileBin, []) of
         {ok, Evidence} -> {ok, yes_no_evidence_from_witness(Evidence)};
         Error -> Error
     end;
-%% returns — a valued return statement in the subject that references
-%% the name: the return_stmt ∧ expr_ref join from the plan, mention
-%% level by design (checks the claim, not value-flow).
-%% returns — a valued return statement whose OWN LINE mentions the
-%% name. Line-scoped deliberately: a function-level mention join would
-%% answer true for a logger diagnostic that happens to name the field,
-%% defeating the very true→false flip the claims check. Multi-line
-%% return expressions are the accepted v1 blind spot.
+%% returns — a valued return statement whose own line mentions the name,
+%% or an object_key structurally contained in that return expression via
+%% return_object_key/6. The line scope prevents a function-wide mention join
+%% from matching an unrelated logger diagnostic. This remains syntax-level
+%% mention evidence, not value-flow or runtime proof; multiline expr_ref
+%% mentions outside returned-object keys are still not joined.
 execute_answer(Pid, yes_no, {returns, Subject, Candidates}) ->
     case return_mention_evidence(Pid, Subject, Candidates) of
         {ok, []} -> {ok, yes_no_evidence(false, [])};
@@ -1075,24 +1075,24 @@ execute_answer(Pid, sites, {def_site_of, {'/', SName, SArity}}) ->
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end;
-%% calls with a file subject — preserve the basename match semantics,
-%% and return one matching calls fact when the answer is positive.
+%% calls with a file subject — match the basename, relative path suffix,
+%% or absolute path, and return one matching calls fact when positive.
 execute_answer(Pid, yes_no, {calls_file, FileBin, Object}) ->
     case call_evidence_in_file(Pid, Object, FileBin) of
         {ok, []} -> {ok, yes_no_evidence(false, [])};
         {ok, [Witness | _]} -> {ok, yes_no_evidence(true, [Witness])};
         Error -> Error
     end;
-%% is file F scanned? — the gate IS the proof: the basename appears in
-%% any fact's File field (defines, comments, paragraphs, config).
+%% is file F scanned? — the gate IS the proof: a fact path matches F
+%% (defines, comments, paragraphs, or config).
 execute_answer(Pid, yes_no, {file_scanned, FileWords}) ->
-    case file_scanned_evidence(Pid, file_segment(FileWords)) of
+    case file_scanned_evidence(Pid, span_text(FileWords)) of
         {ok, Evidence} -> {ok, yes_no_evidence_from_witness(Evidence)};
         Error -> Error
     end;
 %% is config K defined? — exact dotted key against config_value/4.
 execute_answer(Pid, yes_no, {config_defined, KeyWords}) ->
-    Key = file_segment(KeyWords),
+    Key = config_key(KeyWords),
     Goal = "findall(st(F, V, L), config_value(F, " ++ quoted_atom_name(Key) ++
         ", V, L), ConfigFacts)",
     case prolog_session:query(Pid, Goal) of
@@ -1141,7 +1141,7 @@ definition_site_entry(_Other) ->
     #{}.
 
 file_scanned_check(Pid, FileWords) ->
-    case file_scanned_evidence(Pid, file_segment(FileWords)) of
+    case file_scanned_evidence(Pid, span_text(FileWords)) of
         {ok, []} -> {ok, false};
         {ok, _Evidence} -> {ok, true};
         Error -> Error
@@ -1157,7 +1157,7 @@ file_scanned_evidence(Pid, Base) ->
         fun({'st', F, L, T}) -> source_evidence(<<"comment">>, F, L,
             #{<<"text">> => to_bin(T)}) end),
     Paragraphs = source_fact_entries(Pid,
-        "findall(st(F, Line, T), paragraph(F, Line, T), L)",
+        "findall(st(F, Line, T), paragraph(F, T, Line), L)",
         fun({'st', F, L, T}) -> source_evidence(<<"paragraph">>, F, L,
             #{<<"text">> => to_bin(T)}) end),
     Config = source_fact_entries(Pid,
@@ -1174,14 +1174,46 @@ source_fact_entries(Pid, Goal, Convert) ->
         _ -> []
     end.
 
-file_matches(File, BaseBin) when is_binary(BaseBin) ->
-    Base = binary_to_list(BaseBin),
-    case File of
-        B when is_binary(B) -> filename:basename(binary_to_list(B)) =:= Base;
-        L when is_list(L) -> filename:basename(lists:flatten(L)) =:= Base;
-        A when is_atom(A) -> filename:basename(atom_to_list(A)) =:= Base;
-        _ -> false
+%% Match a basename as before, a relative path as a suffix, and an
+%% absolute path exactly. Normalize `.` and `..` components without
+%% resolving symlinks; indexed and requested paths are textual paths.
+file_matches(File, RequestedBin) when is_binary(RequestedBin) ->
+    case file_path_text(File) of
+        undefined -> false;
+        FilePath ->
+            RequestedPath = binary_to_list(RequestedBin),
+            FileParts = normalized_path_parts(FilePath),
+            RequestedParts = normalized_path_parts(RequestedPath),
+            case {filename:pathtype(RequestedPath), RequestedParts} of
+                {absolute, _} -> FileParts =:= RequestedParts;
+                {relative, []} -> false;
+                {relative, [RequestedName]} ->
+                    case lists:reverse(FileParts) of
+                        [RequestedName | _] -> true;
+                        _ -> false
+                    end;
+                {relative, _} -> path_has_suffix(FileParts, RequestedParts)
+            end
     end.
+
+file_path_text(B) when is_binary(B) -> binary_to_list(B);
+file_path_text(L) when is_list(L) -> lists:flatten(L);
+file_path_text(A) when is_atom(A) -> atom_to_list(A);
+file_path_text(_) -> undefined.
+
+normalized_path_parts(Path) ->
+    lists:reverse(lists:foldl(fun normalize_path_part/2, [], filename:split(Path))).
+
+normalize_path_part(".", Parts) -> Parts;
+normalize_path_part("..", ["/" | _] = Parts) -> Parts;
+normalize_path_part("..", [Part | Rest]) when Part =/= ".." -> Rest;
+normalize_path_part("..", Parts) -> [".." | Parts];
+normalize_path_part(Part, Parts) -> [Part | Parts].
+
+path_has_suffix(PathParts, SuffixParts) ->
+    SuffixLength = length(SuffixParts),
+    length(PathParts) >= SuffixLength andalso
+        lists:nthtail(length(PathParts) - SuffixLength, PathParts) =:= SuffixParts.
 
 flatten_value(V) when is_atom(V) -> atom_to_list(V);
 flatten_value(V) when is_binary(V) -> binary_to_list(V);
@@ -1216,14 +1248,21 @@ return_mention_evidence(Pid, {'/', Name, Arity}, Candidates) ->
         ", " ++ ArityText ++ ", Identifier, F, Line), RefFacts)",
     KeyGoal = "findall(st(Key, F, Line), object_key(" ++ NameText ++ ", " ++
         ArityText ++ ", Key, F, Line), KeyFacts)",
+    ReturnKeyGoal = "findall(st(Key, F, ReturnLine, KeyLine), " ++
+        "return_object_key(" ++ NameText ++ ", " ++ ArityText ++
+        ", Key, F, ReturnLine, KeyLine), ReturnKeyFacts)",
     case query_fact_list(Pid, ReturnGoal, 'ReturnFacts') of
         {ok, ReturnFacts} ->
             case query_fact_list(Pid, RefGoal, 'RefFacts') of
                 {ok, RefFacts} ->
                     case query_fact_list(Pid, KeyGoal, 'KeyFacts') of
                         {ok, KeyFacts} ->
-                            {ok, return_witness_pair(Name, Arity, Candidates,
-                                ReturnFacts, RefFacts, KeyFacts)};
+                            case query_fact_list(Pid, ReturnKeyGoal, 'ReturnKeyFacts') of
+                                {ok, ReturnKeyFacts} ->
+                                    {ok, return_witness_pair(Name, Arity, Candidates,
+                                        ReturnFacts, RefFacts, KeyFacts, ReturnKeyFacts)};
+                                Error -> Error
+                            end;
                         Error -> Error
                     end;
                 Error -> Error
@@ -1239,24 +1278,35 @@ query_fact_list(Pid, Goal, Binding) ->
         {error, Reason} -> {error, Reason}
     end.
 
-return_witness_pair(Name, Arity, Candidates, ReturnFacts, RefFacts, KeyFacts) ->
+return_witness_pair(Name, Arity, Candidates, ReturnFacts, RefFacts, KeyFacts,
+        ReturnKeyFacts) ->
     CandidateSet = [to_bin(Candidate) || Candidate <- Candidates],
     MentionFacts =
         [{<<"expr_ref">>, Identifier, File, Line}
          || {'st', Identifier, File, Line} <- RefFacts,
-            lists:member(to_bin(Identifier), CandidateSet)] ++
-        [{<<"object_key">>, Key, File, Line}
-         || {'st', Key, File, Line} <- KeyFacts,
-            lists:member(to_bin(Key), CandidateSet)],
-    Pairs = [[return_stmt_evidence(Name, Arity, ReturnFile, ReturnLine),
+            lists:member(to_bin(Identifier), CandidateSet)],
+    SameLinePairs = [[return_stmt_evidence(Name, Arity, ReturnFile, ReturnLine),
               return_mention_fact(Name, Arity, Predicate, NameOrKey, File, Line)]
         || {'st', ReturnFile, ReturnLine} <- ReturnFacts,
            {Predicate, NameOrKey, File, Line} <- MentionFacts,
            ReturnLine =:= Line],
+    ReturnedKeyPairs = [[return_stmt_evidence(Name, Arity, File, ReturnLine),
+              return_object_key_evidence(Name, Arity, Key, File, ReturnLine, KeyLine),
+              return_mention_fact(Name, Arity, <<"object_key">>, Key, File, KeyLine)]
+        || {'st', Key, File, ReturnLine, KeyLine} <- ReturnKeyFacts,
+           lists:member(to_bin(Key), CandidateSet),
+           lists:member({'st', File, ReturnLine}, ReturnFacts),
+           lists:member({'st', Key, File, KeyLine}, KeyFacts)],
+    Pairs = SameLinePairs ++ ReturnedKeyPairs,
     case lists:sort([lists:sort(fun evidence_before/2, Pair) || Pair <- Pairs]) of
         [] -> [];
         [WitnessPair | _] -> WitnessPair
     end.
+
+return_object_key_evidence(Name, Arity, Key, File, ReturnLine, KeyLine) ->
+    source_evidence(<<"return_object_key">>, File, ReturnLine,
+        #{<<"function">> => render_ident({'-', Name, Arity}),
+          <<"key">> => to_bin(Key), <<"key_line">> => KeyLine}).
 
 return_stmt_evidence(Name, Arity, File, Line) ->
     source_evidence(<<"return_stmt">>, File, Line,

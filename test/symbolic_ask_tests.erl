@@ -167,6 +167,45 @@ tsx_files_are_scanned_and_ask_can_verify_their_calls_test() ->
         _ = file:del_dir_r(Root)
     end.
 
+file_scoped_asks_resolve_relative_and_absolute_paths_test() ->
+    File = filename:absname("test/fixtures/sample.tsx"),
+    Relative = "test/fixtures/sample.tsx",
+    {ok, Report} = symbolic_parse:scan_paths_report([File]),
+    Metadata = #{<<"complete">> => true,
+        <<"scan_paths">> => [list_to_binary(File)],
+        <<"files">> => 1, <<"failed_files">> => []},
+    Facts = maps:get(facts, Report),
+    {ok, RelativeAnswer} = symbolic_ask:ask(Facts,
+        "does file " ++ Relative ++ " call target/0?", Metadata),
+    ?assertEqual(true, maps:get(<<"answer">>, RelativeAnswer)),
+    {ok, AbsoluteAnswer} = symbolic_ask:ask(Facts,
+        "does file " ++ File ++ " call target/0?", Metadata),
+    ?assertEqual(true, maps:get(<<"answer">>, AbsoluteAnswer)),
+    [AbsoluteWitness] = maps:get(<<"evidence">>, AbsoluteAnswer),
+    ?assertEqual(list_to_binary(File), maps:get(<<"file">>, AbsoluteWitness)),
+    with_db(Facts, fun(Db) ->
+        ?assertEqual({ok, RelativeAnswer}, symbolic_ask:run_result(Db,
+            "does file " ++ Relative ++ " call target/0?")),
+        ?assertEqual({ok, AbsoluteAnswer}, symbolic_ask:run_result(Db,
+            "does file " ++ File ++ " call target/0?"))
+    end).
+
+file_scoped_queries_handle_markdown_paragraph_facts_test() ->
+    Path = "/work/project/src/example.ts",
+    Facts = [
+        {defines, caller, 0, [], Path, 1},
+        {calls, caller, 0, {local, bar, 0}, Path, 2},
+        {defines, bar, 0, [], Path, 3},
+        {paragraph, "/work/project/docs/guide.md", <<"unrelated text">>, 4}
+    ],
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does file src/example.ts call bar/0?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        [Witness] = maps:get(<<"evidence">>, Answer),
+        ?assertEqual(list_to_binary(Path), maps:get(<<"file">>, Witness))
+    end).
+
 factory_wrapped_handler_calls_are_attributed_to_the_export_test() ->
     Fixture = filename:absname("test/fixtures/wrapped_handler.ts"),
     {ok, Report} = symbolic_parse:scan_paths_report([Fixture]),
@@ -641,7 +680,7 @@ catalog_discovery_describes_supported_inputs_and_answer_contracts_test() ->
         [{maps:get(<<"id">>, Op), Op} || Op <- Operations]),
     ?assertEqual(<<"witness_pair">>, maps:get(<<"evidence_mode">>, ReturnsOp)),
     ?assertMatch(#{<<"properties">> := #{<<"evidence">> :=
-        #{<<"items">> := #{<<"oneOf">> := [_, _, _]}}}},
+        #{<<"items">> := #{<<"oneOf">> := [_, _, _, _]}}}},
         maps:get(<<"answer_shape">>, ReturnsOp)),
     {_, CallsInFileOp} = lists:keyfind(<<"calls_in_file">>, 1,
         [{maps:get(<<"id">>, Op), Op} || Op <- Operations]),
@@ -685,7 +724,8 @@ pipeline_returns_object_key_test() ->
     Facts = [
         {defines, verifyCode, 1, [], 'supabaseOtp.ts', 1},
         {return_stmt, verifyCode, 1, true, 'supabaseOtp.ts', 2},
-        {object_key, verifyCode, 1, reason, 'supabaseOtp.ts', 2}
+        {object_key, verifyCode, 1, reason, 'supabaseOtp.ts', 2},
+        {return_object_key, verifyCode, 1, reason, 'supabaseOtp.ts', 2, 2}
     ],
     with_db(Facts, fun(Db) ->
         {ok, Answer} = symbolic_ask:run_result(Db,
@@ -696,6 +736,10 @@ pipeline_returns_object_key_test() ->
               <<"file">> => <<"supabaseOtp.ts">>, <<"line">> => 2,
               <<"fact">> => #{<<"function">> => <<"verifyCode/1">>,
                               <<"key">> => <<"reason">>}},
+            #{<<"predicate">> => <<"return_object_key">>,
+              <<"file">> => <<"supabaseOtp.ts">>, <<"line">> => 2,
+              <<"fact">> => #{<<"function">> => <<"verifyCode/1">>,
+                              <<"key">> => <<"reason">>, <<"key_line">> => 2}},
             #{<<"predicate">> => <<"return_stmt">>,
               <<"file">> => <<"supabaseOtp.ts">>, <<"line">> => 2,
               <<"fact">> => #{<<"function">> => <<"verifyCode/1">>,
@@ -704,6 +748,59 @@ pipeline_returns_object_key_test() ->
             {maps:get(<<"predicate">>, A), maps:get(<<"file">>, A)} =<
             {maps:get(<<"predicate">>, B), maps:get(<<"file">>, B)}
         end, maps:get(<<"evidence">>, Answer)))
+    end).
+
+pipeline_returns_multiline_object_key_test() ->
+    File = "src/findSmsDecision.ts",
+    Facts = ts_extract_typescript:text(File,
+        "function findSmsDecision(decision: Decision) {\n"
+        "  return {\n"
+        "    id: decision.id,\n"
+        "    currentPhase: decision.currentPhase,\n"
+        "  };\n"
+        "}"),
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does findSmsDecision/1 return currentPhase?"),
+        ?assertEqual(true, maps:get(<<"answer">>, Answer)),
+        Evidence = maps:get(<<"evidence">>, Answer),
+        ?assertEqual([{<<"object_key">>, 4},
+                      {<<"return_object_key">>, 2},
+                      {<<"return_stmt">>, 2}],
+            lists:sort([{maps:get(<<"predicate">>, E), maps:get(<<"line">>, E)}
+                || E <- Evidence])),
+        [ReturnKey] = [E || E <- Evidence,
+            maps:get(<<"predicate">>, E) =:= <<"return_object_key">>],
+        ?assertEqual(4, maps:get(<<"key_line">>, maps:get(<<"fact">>, ReturnKey)))
+    end).
+
+pipeline_returns_does_not_join_an_unreturned_object_key_test() ->
+    File = "src/findSmsDecision.ts",
+    Facts = ts_extract_typescript:text(File,
+        "function findSmsDecision(decision: Decision) {\n"
+        "  const logEntry = { currentPhase: decision.currentPhase };\n"
+        "  return { id: decision.id };\n"
+        "}"),
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does findSmsDecision/1 return currentPhase?"),
+        ?assertEqual(false, maps:get(<<"answer">>, Answer)),
+        ?assertEqual([], maps:get(<<"evidence">>, Answer))
+    end).
+
+pipeline_returns_does_not_join_nested_function_return_key_test() ->
+    File = "src/findSmsDecision.ts",
+    Facts = ts_extract_typescript:text(File,
+        "function findSmsDecision(decision: Decision) {\n"
+        "  return { handler: () => {\n"
+        "    return { currentPhase: decision.currentPhase };\n"
+        "  } };\n"
+        "}"),
+    with_db(Facts, fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "does findSmsDecision/1 return currentPhase?"),
+        ?assertEqual(false, maps:get(<<"answer">>, Answer)),
+        ?assertEqual([], maps:get(<<"evidence">>, Answer))
     end).
 
 pipeline_returns_expr_ref_includes_both_witness_facts_test() ->
