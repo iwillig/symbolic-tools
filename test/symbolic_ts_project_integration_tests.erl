@@ -19,12 +19,16 @@ native_tsgo_analyzes_configured_project_without_node_worker() ->
                     #{enabled => true, projects => [ConfigPath]}),
                 TypeAnalysis = maps:get(type_analysis, Enriched),
                 ?assert(lists:member(maps:get(status, TypeAnalysis), [ok, partial])),
+                SharedTimings = maps:get(timings_ms, TypeAnalysis),
+                ?assert(is_integer(maps:get(<<"location_fact_index">>, SharedTimings))),
                 [ProjectSummary] = maps:get(projects, TypeAnalysis),
                 Timings = maps:get(timings_ms, ProjectSummary),
                 ?assert(lists:all(fun(Key) ->
                     is_integer(maps:get(Key, Timings, -1)) andalso maps:get(Key, Timings) >= 0
                 end, [<<"initialize">>, <<"parse_config">>, <<"update_snapshot">>,
-                      <<"source_files">>, <<"diagnostics">>, <<"locations">>,
+                      <<"source_files">>, <<"diagnostics">>, <<"syntactic_diagnostics">>,
+                      <<"semantic_diagnostics">>, <<"locations">>, <<"location_selection">>,
+                      <<"offset_conversion">>, <<"type_queries">>, <<"symbol_queries">>,
                       <<"type_graph">>, <<"result_conversion">>,
                       <<"worker_total">>, <<"normalize">>])),
                 Facts = maps:get(facts, Enriched),
@@ -102,12 +106,20 @@ checker_enriches_shared_facts_and_keeps_diagnostics_source_located_test() ->
                         when Origin =:= declared; Origin =:= inferred -> true;
                 (_) -> false
             end, Facts)),
+            UnionTypeIds = [Id || {ts_type_node, _, Id, union, _} <- Facts],
+            ?assert(lists:any(fun
+                ({ts_type_at, _Project, _Location, TypeId, _Origin, File, Start, End}) ->
+                    File =:= list_to_atom(SourcePath) andalso
+                    binary:match(binary:part(Source, Start, End - Start), <<"choice">>) =/= nomatch
+                        andalso lists:member(TypeId, UnionTypeIds);
+                (_) -> false
+            end, Facts)),
             Diagnostics = [D || {ts_diagnostic, _, _, _, _, _, _, _} = D <- Facts],
             ?assert(lists:any(fun
                 ({ts_diagnostic, _Project, 2322, error, File, Start, Length, _Message}) ->
                     File =:= list_to_atom(SourcePath) andalso
                     Start >= 0 andalso Length > 0 andalso
-                    binary:part(Source, Start, Length) =/= <<>>;
+                    binary:part(Source, Start, Length) =:= <<"invalid">>;
                 (_) -> false
             end, Diagnostics))
         end)

@@ -27,19 +27,25 @@ analyze_safe(Report, ScopeRoot, Settings0) ->
     Settings = normalize_settings(Settings0),
     ScopeId = unicode:characters_to_binary(filename:absname(ScopeRoot)),
     AnalysisId = analysis_id(ScopeId),
-    {Status, Reason, ProjectFacts, ProjectSummaries} =
+    {Status, Reason, ProjectFacts, ProjectSummaries, Timings} =
         case maps:get(enabled, Settings) of
-            false -> {disabled, disabled, [], []};
+            false -> {disabled, disabled, [], [], #{}};
             true -> analyze_projects(maps:get(projects, Settings), Report, AnalysisId)
         end,
     AnalysisFact = {ts_analysis, AnalysisId, ScopeId, Status, Reason},
     Facts = lists:usort(maps:get(facts, Report) ++ [AnalysisFact | ProjectFacts]),
-    Summary = #{status => Status, reason => Reason, projects => ProjectSummaries},
+    Summary = #{status => Status, reason => Reason, projects => ProjectSummaries,
+                timings_ms => Timings},
     {ok, Report#{facts => Facts, type_analysis => Summary}}.
 
-summary_json(#{status := Status, reason := Reason, projects := Projects}) ->
-    #{status => atom_to_binary(Status, utf8), reason => atom_to_binary(Reason, utf8),
-      projects => [project_summary_json(Project) || Project <- Projects]}.
+summary_json(#{status := Status, reason := Reason, projects := Projects} = Analysis) ->
+    Summary = #{status => atom_to_binary(Status, utf8),
+                reason => atom_to_binary(Reason, utf8),
+                projects => [project_summary_json(Project) || Project <- Projects]},
+    case maps:find(timings_ms, Analysis) of
+        {ok, Timings} -> Summary#{timings_ms => Timings};
+        error -> Summary
+    end.
 
 project_summary_json(Project) ->
     maps:map(fun(Key, Value) -> summary_value(Key, Value) end, Project).
@@ -63,15 +69,37 @@ analysis_id(ScopeId) ->
     <<ScopeId/binary, "#", (integer_to_binary(erlang:unique_integer([positive, monotonic])))/binary>>.
 
 analyze_projects([], _Report, _AnalysisId) ->
-    {no_project, no_project, [], []};
+    {no_project, no_project, [], [], #{}};
 analyze_projects(Projects, Report, AnalysisId) ->
-    Results = [analyze_project(Project, Report, AnalysisId) || Project <- Projects],
+    {IndexMicroseconds, LocationFactsByFile} = timer:tc(fun() ->
+        index_location_facts(maps:get(facts, Report, []))
+    end),
+    IndexedReport = Report#{typescript_location_facts_by_file => LocationFactsByFile},
+    Results = [analyze_project(Project, IndexedReport, AnalysisId) || Project <- Projects],
     Statuses = [maps:get(status, Result) || Result <- Results],
     Aggregate = aggregate_status(Statuses),
     Reason = aggregate_reason(Aggregate, Results),
     Facts = lists:append([maps:get(facts, Result) || Result <- Results]),
     Summaries = [maps:get(summary, Result) || Result <- Results],
-    {Aggregate, Reason, Facts, Summaries}.
+    Timings = #{<<"location_fact_index">> => (IndexMicroseconds + 500) div 1000},
+    {Aggregate, Reason, Facts, Summaries, Timings}.
+
+index_location_facts(Facts) ->
+    Reversed = lists:foldl(fun(Fact, Acc) ->
+        case location_index_file(Fact) of
+            undefined -> Acc;
+            File ->
+                Path = filename:absname(atom_to_list(File)),
+                maps:update_with(Path, fun(Items) -> [Fact | Items] end, [Fact], Acc)
+        end
+    end, #{}, Facts),
+    maps:map(fun(_Path, Items) -> lists:reverse(Items) end, Reversed).
+
+location_index_file({var_decl, {File, _, _}, _, _, _, File, _}) when is_atom(File) -> File;
+location_index_file({var_ref, {File, _, _}, _, _, _, File, _}) when is_atom(File) -> File;
+location_index_file({function_decl, {File, _, _}, _, _, _, _, File, _}) when is_atom(File) -> File;
+location_index_file({ts_syntax_type, File, _, _, _, _, _, _, _}) when is_atom(File) -> File;
+location_index_file(_) -> undefined.
 
 analyze_project(ConfigPath, Report, AnalysisId) ->
     ProjectId = unicode:characters_to_binary(filename:absname(ConfigPath)),

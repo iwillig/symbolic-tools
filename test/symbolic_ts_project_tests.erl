@@ -3,16 +3,19 @@
 
 summary_json_preserves_project_timing_fields_test() ->
     Timings = #{<<"locations">> => 30000, <<"worker_total">> => 30005},
+    SharedTimings = #{<<"location_fact_index">> => 7},
     Summary = symbolic_ts_project:summary_json(
-        #{status => partial, reason => timeout,
+        #{status => partial, reason => timeout, timings_ms => SharedTimings,
           projects => [#{config => "_build/ts_project_timing/tsconfig.json",
                          status => unavailable, reason => timeout,
                          failed_stage => <<"locations">>, timings_ms => Timings}]}),
     [Project] = maps:get(projects, Summary),
+    ?assertEqual(SharedTimings, maps:get(timings_ms, Summary)),
     ?assertEqual(Timings, maps:get(timings_ms, Project)),
     ?assertEqual(<<"locations">>, maps:get(failed_stage, Project)),
     Json = jsx:decode(jsx:encode(Summary), [return_maps]),
     [JsonProject] = maps:get(<<"projects">>, Json),
+    ?assertEqual(SharedTimings, maps:get(<<"timings_ms">>, Json)),
     ?assertEqual(Timings, maps:get(<<"timings_ms">>, JsonProject)).
 
 disabled_analysis_is_explicit_and_preserves_syntax_facts_test() ->

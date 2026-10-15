@@ -129,30 +129,42 @@ add_worker_total_timing(Result, _TotalMs) ->
 collect_diagnostics(Port, Buffer0, Deadline, Context, Files) ->
     lists:foldl(fun(File, {Acc, Buffer}) ->
         FileContext = Context#{<<"file">> => filename_binary(File)},
-        {Syntactic, Buffer1} = rpc(
-            Port, Buffer, Deadline, "getSyntacticDiagnostics", FileContext),
-        {Semantic, Buffer2} = rpc(
-            Port, Buffer1, Deadline, "getSemanticDiagnostics", FileContext),
+        {Syntactic, Buffer1} = timed_stage(syntactic_diagnostics, fun() ->
+            rpc(Port, Buffer, Deadline, "getSyntacticDiagnostics", FileContext)
+        end),
+        {Semantic, Buffer2} = timed_stage(semantic_diagnostics, fun() ->
+            rpc(Port, Buffer1, Deadline, "getSemanticDiagnostics", FileContext)
+        end),
         {Semantic ++ Syntactic ++ Acc, Buffer2}
     end, {[], Buffer0}, Files).
 
 query_locations(Port, Buffer0, Deadline, Context, Report, Files) ->
-    Facts = maps:get(facts, Report, []),
-    SourceMap = read_sources(Files),
-    RawLocations = lists:append([
-        variable_locations(Facts), reference_locations(Facts), function_locations(Facts, SourceMap)
-    ]),
-    InScope = maps:from_list([{F, true} || F <- Files]),
-    Locations0 = unique_locations([L || L <- RawLocations,
-                                         maps:is_key(maps:get(file, L), InScope)]),
-    {Locations, Truncated} = limit_list(Locations0, ?MAX_LOCATIONS),
-    ByFile = group_locations(Locations),
+    {SourceMap, ByFile, Truncated} = timed_stage(location_selection, fun() ->
+        InScope = maps:from_list([{filename:absname(F), true} || F <- Files]),
+        Facts = location_facts_for_project(Report, Files, InScope),
+        SourceMap = read_sources(Files),
+        RawLocations = lists:append([
+            variable_locations(Facts), reference_locations(Facts),
+            function_locations(Facts, SourceMap)
+        ]),
+        Locations0 = unique_locations([L || L <- RawLocations,
+                                             maps:is_key(maps:get(file, L), InScope)]),
+        {Locations, WasTruncated} = limit_list(Locations0, ?MAX_LOCATIONS),
+        {SourceMap, group_locations(Locations), WasTruncated}
+    end),
     {TypesRev, Buffer, Truncated2} = maps:fold(fun(File, FileLocations, {Acc, Buf, Trunc}) ->
         Source = maps:get(File, SourceMap, <<>>),
-        Positions = [byte_to_utf16(Source, Start) || #{start := Start} <- FileLocations],
+        Starts = [Start || #{start := Start} <- FileLocations],
+        Positions = timed_stage(offset_conversion, fun() ->
+            byte_offsets_to_utf16(Source, Starts)
+        end),
         Params = Context#{<<"file">> => filename_binary(File), <<"positions">> => Positions},
-        {Types, NextBuf} = rpc(Port, Buf, Deadline, "getTypesAtPositions", Params),
-        {Symbols, NextBuf2} = rpc(Port, NextBuf, Deadline, "getSymbolsAtPositions", Params),
+        {Types, NextBuf} = timed_stage(type_queries, fun() ->
+            rpc(Port, Buf, Deadline, "getTypesAtPositions", Params)
+        end),
+        {Symbols, NextBuf2} = timed_stage(symbol_queries, fun() ->
+            rpc(Port, NextBuf, Deadline, "getSymbolsAtPositions", Params)
+        end),
         true = is_list(Types) andalso is_list(Symbols),
         true = length(Types) =:= length(FileLocations),
         true = length(Symbols) =:= length(FileLocations),
@@ -161,6 +173,30 @@ query_locations(Port, Buffer0, Deadline, Context, Report, Files) ->
          NextBuf2, Trunc}
     end, {[], Buffer0, Truncated}, ByFile),
     {lists:reverse(TypesRev), Buffer, Truncated2, SourceMap}.
+
+location_facts_for_project(Report, Files, InScope) ->
+    case maps:get(typescript_location_facts_by_file, Report, undefined) of
+        Index when is_map(Index) ->
+            lists:append([maps:get(filename:absname(File), Index, []) || File <- Files]);
+        _ -> project_location_facts(maps:get(facts, Report, []), InScope)
+    end.
+
+project_location_facts(Facts, InScope) ->
+    [Fact || Fact <- Facts,
+             case location_fact_path(Fact) of
+                 undefined -> false;
+                 Path -> maps:is_key(Path, InScope)
+             end].
+
+location_fact_path({var_decl, {File, _, _}, _, _, _, File, _}) when is_atom(File) ->
+    filename:absname(atom_to_list(File));
+location_fact_path({var_ref, {File, _, _}, _, _, _, File, _}) when is_atom(File) ->
+    filename:absname(atom_to_list(File));
+location_fact_path({function_decl, {File, _, _}, _, _, _, _, File, _}) when is_atom(File) ->
+    filename:absname(atom_to_list(File));
+location_fact_path({ts_syntax_type, File, _, _, _, _, _, _, _}) when is_atom(File) ->
+    filename:absname(atom_to_list(File));
+location_fact_path(_) -> undefined.
 
 variable_locations(Facts) ->
     ExplicitAnnotations = explicit_variable_annotations(Facts),
@@ -539,6 +575,54 @@ byte_to_utf16(Source, ByteOffset) when ByteOffset =< byte_size(Source) ->
         _ -> 0
     end;
 byte_to_utf16(Source, _ByteOffset) -> byte_to_utf16(Source, byte_size(Source)).
+
+byte_offsets_to_utf16(_Source, []) -> [];
+byte_offsets_to_utf16(Source, Offsets) ->
+    Size = byte_size(Source),
+    Normalized = [normalize_byte_offset(Offset, Size) || Offset <- Offsets],
+    Requested = lists:usort(Normalized),
+    Mapping = try build_utf16_offsets(Source, Requested, 0, 0, #{})
+    catch
+        error:badarg -> fallback_byte_offsets(Source, Normalized);
+        error:function_clause -> fallback_byte_offsets(Source, Normalized)
+    end,
+    case Mapping of
+        Values when is_map(Values) -> [maps:get(Offset, Values, 0) || Offset <- Normalized];
+        Values when is_list(Values) -> Values
+    end.
+
+normalize_byte_offset(Offset, _Size) when Offset =< 0 -> 0;
+normalize_byte_offset(Offset, Size) when Offset >= Size -> Size;
+normalize_byte_offset(Offset, _Size) -> Offset.
+
+build_utf16_offsets(<<>>, Requested, ByteOffset, Units, Acc) ->
+    map_eof_offsets(Requested, ByteOffset, Units, Acc);
+build_utf16_offsets(<<Codepoint/utf8, Rest/binary>>, Requested, ByteOffset, Units, Acc) ->
+    NextByteOffset = ByteOffset + utf8_width(Codepoint),
+    NextUnits = Units + if Codepoint > 16#FFFF -> 2; true -> 1 end,
+    {Remaining, NextAcc} = map_offsets_before(
+        Requested, NextByteOffset, ByteOffset, Units, Acc),
+    build_utf16_offsets(Rest, Remaining, NextByteOffset, NextUnits, NextAcc).
+
+map_offsets_before([Offset | Rest], NextByteOffset, ByteOffset, Units, Acc)
+        when Offset < NextByteOffset ->
+    Value = case Offset =:= ByteOffset of true -> Units; false -> 0 end,
+    map_offsets_before(Rest, NextByteOffset, ByteOffset, Units, maps:put(Offset, Value, Acc));
+map_offsets_before(Requested, _NextByteOffset, _ByteOffset, _Units, Acc) ->
+    {Requested, Acc}.
+
+map_eof_offsets([], _ByteOffset, _Units, Acc) -> Acc;
+map_eof_offsets([Offset | Rest], ByteOffset, Units, Acc) ->
+    Value = case Offset =:= ByteOffset of true -> Units; false -> 0 end,
+    map_eof_offsets(Rest, ByteOffset, Units, maps:put(Offset, Value, Acc)).
+
+utf8_width(Codepoint) when Codepoint =< 16#7F -> 1;
+utf8_width(Codepoint) when Codepoint =< 16#7FF -> 2;
+utf8_width(Codepoint) when Codepoint =< 16#FFFF -> 3;
+utf8_width(_) -> 4.
+
+fallback_byte_offsets(Source, Offsets) ->
+    [byte_to_utf16(Source, Offset) || Offset <- Offsets].
 
 utf16_to_byte(_Source, Position) when Position =< 0 -> 0;
 utf16_to_byte(Source, Position) ->
