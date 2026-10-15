@@ -69,7 +69,7 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `rust_call/5` | Rust | Call site linked to its enclosing function's source-span identity |
 | `rust_macro/6` | Rust | Macro invocation site linked to its enclosing function when present |
 
-`ts_syntax_type/8` is emitted by the syntax parser regardless of Node/compiler availability. The `ts_*` checker facts are emitted only for explicitly configured, opt-in TypeScript projects; `ts_analysis/4` and persisted scan metadata distinguish disabled, no-project, unavailable, partial, and failed outcomes. The checker uses the project's resolved TypeScript package and records its version/configuration hash. Byte spans are UTF-8 byte offsets. Missing checker facts are not proof that a type is absent, and these facts describe static compiler analysis—not runtime values or general data flow.
+`ts_syntax_type/8` is emitted by the syntax parser regardless of Node/compiler availability. The `ts_*` checker facts are emitted only for explicitly configured, opt-in TypeScript projects; `ts_analysis/4` and persisted scan metadata distinguish disabled, no-project, unavailable, partial, and failed outcomes. The native adapter currently supports the version-matched TypeScript 7.0.2 binary on selected platforms; an optional Node worker handles older supported compiler APIs. Native compiler/options provenance may be incomplete (`OptionsHash` is unknown). Byte spans are UTF-8 byte offsets. Missing checker facts are not proof that a type is absent, and these facts describe static compiler analysis—not runtime values or general data flow.
 
 Three genuinely different *shapes* of fact live in this one schema:
 **code facts** (something with named definitions and call sites),

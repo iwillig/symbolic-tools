@@ -74,9 +74,23 @@ analyze_project(ConfigPath, Report, AnalysisId) ->
     ProjectId = unicode:characters_to_binary(filename:absname(ConfigPath)),
     case filelib:is_regular(ConfigPath) of
         false -> project_failure(ProjectId, AnalysisId, ConfigPath, failed, bad_config);
-        true ->
+        true -> run_project_analyzer(ProjectId, AnalysisId, ConfigPath, Report)
+    end.
+
+run_project_analyzer(ProjectId, AnalysisId, ConfigPath, Report) ->
+    case symbolic_tsgo:resolve(ConfigPath) of
+        {ok, Compiler} ->
+            case symbolic_tsgo:analyze(Report, ConfigPath, Compiler) of
+                {ok, Json} -> normalize_worker_result(Json, ProjectId, AnalysisId, ConfigPath);
+                {error, Error} ->
+                    Reason = worker_error_code(Error),
+                    project_failure(ProjectId, AnalysisId, ConfigPath,
+                                    worker_status(Reason), Reason)
+            end;
+        {error, NativeReason} ->
             case os:find_executable("node") of
-                false -> project_failure(ProjectId, AnalysisId, ConfigPath, unavailable, node_missing);
+                false -> project_failure(ProjectId, AnalysisId, ConfigPath,
+                                         unavailable, NativeReason);
                 Node -> run_worker(Node, ProjectId, AnalysisId, ConfigPath, Report)
             end
     end.

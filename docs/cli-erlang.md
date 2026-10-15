@@ -178,19 +178,26 @@ configs listed in the project config:
 
 `typescript.enabled` defaults to `false`; up to 32 project paths may be
 listed, and each must be a non-empty relative path from the repository root
-without `..`. The worker
-uses the system `node` executable and resolves `typescript` from each selected
-config's dependency context. It does not install packages or run project
-scripts. It requires Node 20 or newer and a compiler exposing the supported
-`readConfigFile`/`parseJsonConfigFileContent`/`createProgram` API. Treat this
-as trusted-repository functionality: requiring a project dependency executes
-its package initialization code, and the worker is resource-bounded but is not
-a security sandbox. The worker enforces a 30-second timeout, a 512 MiB V8
-heap cap, a 32 MiB stdout cap, and a 100,000-fact output cap; these are
-resource limits, not OS-level RSS or filesystem/network isolation. Referenced
-project configs are not implicitly selected—list each project to analyze it.
-Missing runtimes/packages, unsupported compiler APIs, config errors, timeouts,
-and partial output are explicit analysis statuses, not evidence of no types.
+without `..`. For TypeScript 7.0.2 on supported native platforms, Symbolic resolves and
+launches the project's version-matched `@typescript/typescript-<platform>`
+compiler directly through its native API. This path uses an Erlang client for
+the API's MessagePack/JSON protocol; it does not require Node or TypeScript
+source code in Symbolic. The protocol is unversioned, so this adapter is
+intentionally pinned to the tested 7.0.2 package version. For other compiler
+versions, an optional legacy Node worker is used when available; Node is not a
+requirement for syntax parsing or for the native 7.0.2 path. Neither adapter
+installs packages or runs project scripts. Treat semantic analysis as
+trusted-repository functionality: a compiler process is not a security
+sandbox. The native client enforces a 30-second project timeout, a 32 MiB
+per-message cap, limits of 20,000 queried locations, 10,000 type nodes,
+50,000 type edges, and type-graph depth 12, plus a 768 MiB Go soft memory
+target (`GOMEMLIMIT`). Diagnostics are collected only for files in the
+current Symbolic scan, not unscanned files in the compiler project. The legacy worker has its
+own V8 heap/output limits. These are resource limits, not OS-level RSS or
+filesystem/network isolation. Referenced project configs
+are not implicitly selected—list each project to analyze it. Missing binaries,
+unsupported compiler APIs, config errors, timeouts, and partial output are
+explicit analysis statuses, not evidence of no types.
 `overview` reports the status and provenance. Type analysis remains separate
 from the syntax-scan completeness flag.
 

@@ -79,6 +79,12 @@ The AI-facing layer should expose only catalogued operations, not arbitrary gene
 
 TypeScript is structurally typed, and its compatibility rules include documented unsound cases; compiler options also change behavior ([Type Compatibility](https://www.typescriptlang.org/docs/handbook/type-compatibility.html), [TSConfig reference](https://www.typescriptlang.org/tsconfig/)). Therefore an answer must say “assignable under project X's TypeScript version/options,” not make a universal claim about runtime safety. Keep existing syntax-level claims—calls, object keys, return structure—separate from compiler-type claims and runtime behavior.
 
+## Native TypeScript 7 adapter follow-up
+
+A direct TypeScript 7.0.2 API client has since been prototyped in Erlang. It launches the project's platform-specific native compiler and speaks the compiler package's MessagePack-framed JSON protocol; the prototype successfully loaded `packages/common/tsconfig.json`, retrieved diagnostics, and resolved a function type without using the Node API client. This avoids making Node a requirement and adds no TypeScript source to Symbolic.
+
+The protocol is explicitly unversioned, so the adapter currently allowlists the tested package version rather than assuming compatibility across releases. Its current fact coverage uses Tree-sitter source positions for identifiers and declarations, emits bounded type displays and union/intersection/reference-argument edges, and retrieves compiler diagnostics. It does not yet provide arbitrary call-expression result types or the full type/declaration graph from the legacy worker. See [`src/symbolic_tsgo.erl`](../src/symbolic_tsgo.erl) and the implementation-status notes in [`plans/typescript-type-system.md`](plans/typescript-type-system.md).
+
 ## Suggested staged plan
 
 1. **Inventory and contracts:** identify TypeScript projects/configs in target repositories; choose exact ASK questions and define `unknown` behavior for missing or failed checker runs.
