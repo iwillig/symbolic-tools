@@ -1,6 +1,20 @@
 -module(symbolic_ts_project_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+summary_json_preserves_project_timing_fields_test() ->
+    Timings = #{<<"locations">> => 30000, <<"worker_total">> => 30005},
+    Summary = symbolic_ts_project:summary_json(
+        #{status => partial, reason => timeout,
+          projects => [#{config => "_build/ts_project_timing/tsconfig.json",
+                         status => unavailable, reason => timeout,
+                         failed_stage => <<"locations">>, timings_ms => Timings}]}),
+    [Project] = maps:get(projects, Summary),
+    ?assertEqual(Timings, maps:get(timings_ms, Project)),
+    ?assertEqual(<<"locations">>, maps:get(failed_stage, Project)),
+    Json = jsx:decode(jsx:encode(Summary), [return_maps]),
+    [JsonProject] = maps:get(<<"projects">>, Json),
+    ?assertEqual(Timings, maps:get(<<"timings_ms">>, JsonProject)).
+
 disabled_analysis_is_explicit_and_preserves_syntax_facts_test() ->
     Existing = [{ts_syntax_type, 'src/a.ts', parameter, <<"x">>, annotation,
                  <<"string">>, 0, 6, 1}],

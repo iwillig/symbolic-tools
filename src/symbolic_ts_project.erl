@@ -56,6 +56,9 @@ normalize_settings(#{enabled := Enabled, projects := Projects}) ->
     #{enabled => Enabled, projects => Projects};
 normalize_settings(_) -> #{enabled => false, projects => []}.
 
+elapsed_ms(StartedMicroseconds) ->
+    (erlang:monotonic_time(microsecond) - StartedMicroseconds + 500) div 1000.
+
 analysis_id(ScopeId) ->
     <<ScopeId/binary, "#", (integer_to_binary(erlang:unique_integer([positive, monotonic])))/binary>>.
 
@@ -82,6 +85,11 @@ run_project_analyzer(ProjectId, AnalysisId, ConfigPath, Report) ->
         {ok, Compiler} ->
             case symbolic_tsgo:analyze(Report, ConfigPath, Compiler) of
                 {ok, Json} -> normalize_worker_result(Json, ProjectId, AnalysisId, ConfigPath);
+                {error, {tsgo_stage, Stage, Error, Timings}} ->
+                    Reason = worker_error_code(Error),
+                    project_failure_with_timings(ProjectId, AnalysisId, ConfigPath,
+                                                 worker_status(Reason), Reason,
+                                                 Stage, Timings);
                 {error, Error} ->
                     Reason = worker_error_code(Error),
                     project_failure(ProjectId, AnalysisId, ConfigPath,
@@ -100,6 +108,13 @@ project_failure(ProjectId, AnalysisId, ConfigPath, Status, Reason) ->
     #{status => Status, reason => Reason, facts => [Fact],
       summary => #{project => ProjectId, config => ConfigPath,
                    status => Status, reason => Reason}}.
+
+project_failure_with_timings(ProjectId, AnalysisId, ConfigPath, Status, Reason,
+                              Stage, Timings) ->
+    Result = project_failure(ProjectId, AnalysisId, ConfigPath, Status, Reason),
+    Summary = maps:get(summary, Result),
+    Result#{summary => Summary#{failed_stage => atom_to_binary(Stage, utf8),
+                                timings_ms => Timings}}.
 
 run_worker(Node, ProjectId, AnalysisId, ConfigPath, Report) ->
     Request = #{<<"schemaVersion">> => 1,
@@ -186,6 +201,7 @@ normalize_worker_result(Json, ProjectId, AnalysisId, ConfigPath) ->
     end.
 
 normalize_success_or_failure(Json, ProjectId, AnalysisId, ConfigPath, Status, Reason) ->
+    NormalizeStarted = erlang:monotonic_time(microsecond),
     Version = json_binary(maps:get(<<"compilerVersion">>, Json, undefined), unknown),
     OptionsHash = json_binary(maps:get(<<"optionsHash">>, Json, undefined), unknown),
     FactResult = case Status of
@@ -195,12 +211,15 @@ normalize_success_or_failure(Json, ProjectId, AnalysisId, ConfigPath, Status, Re
     end,
     case FactResult of
         {ok, Facts} ->
+            NormalizeMs = elapsed_ms(NormalizeStarted),
             ProjectFact = project_fact(ProjectId, AnalysisId, ConfigPath, Version, OptionsHash,
                                        Status, Reason),
+            Timings0 = maps:get(<<"timingsMs">>, Json, #{}),
             Summary = #{project => ProjectId, config => ConfigPath,
                         compiler_version => Version, options_hash => OptionsHash,
                         status => Status, reason => Reason,
-                        files_processed => maps:get(<<"filesProcessed">>, Json, 0)},
+                        files_processed => maps:get(<<"filesProcessed">>, Json, 0),
+                        timings_ms => Timings0#{<<"normalize">> => NormalizeMs}},
             #{status => Status, reason => Reason,
               facts => [ProjectFact | Facts], summary => Summary};
         {error, _} -> project_failure(ProjectId, AnalysisId, ConfigPath, failed, invalid_worker_output)
@@ -357,6 +376,7 @@ diagnostic_category(<<"warning">>) -> warning;
 diagnostic_category(<<"suggestion">>) -> suggestion;
 diagnostic_category(_) -> message.
 
+worker_error_code({tsgo_stage, _Stage, Reason, _Timings}) -> worker_error_code(Reason);
 worker_error_code(timeout) -> timeout;
 worker_error_code(output_limit) -> output_limit;
 worker_error_code({worker_start, _}) -> worker_start;

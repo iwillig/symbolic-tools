@@ -26,10 +26,11 @@ resolve(ConfigPath) ->
 
 -spec analyze(map(), file:filename(), map()) -> {ok, map()} | {error, term()}.
 analyze(Report, ConfigPath, Compiler) ->
+    Started = erlang:monotonic_time(microsecond),
     Exe = maps:get(executable, Compiler),
     Cwd = filename:dirname(filename:absname(ConfigPath)),
     Args = ["--api", "--cwd", Cwd],
-    try open_port({spawn_executable, Exe},
+    Result = try open_port({spawn_executable, Exe},
             [binary, exit_status, use_stdio, hide, {args, Args},
              {env, [{"GOMEMLIMIT", "768MiB"}]}]) of
         Port ->
@@ -39,37 +40,91 @@ analyze(Report, ConfigPath, Compiler) ->
             end
     catch
         error:Reason -> {error, {worker_start, Reason}}
-    end.
+    end,
+    add_worker_total_timing(Result, elapsed_ms(Started)).
 
 analyze_port(Port, Report, ConfigPath, Version) ->
     Deadline = erlang:monotonic_time(millisecond) + ?TIMEOUT_MS,
+    put(symbolic_tsgo_current_stage, initialize),
+    put(symbolic_tsgo_stage_timings, #{}),
     try
-        {Init, Buffer1} = rpc(Port, <<>>, Deadline, "initialize", null),
+        {Init, Buffer1} = timed_stage(initialize, fun() ->
+            rpc(Port, <<>>, Deadline, "initialize", null)
+        end),
         true = is_map(Init),
-        {_Parsed, Buffer2} = rpc(Port, Buffer1, Deadline, "parseConfigFile",
-                                #{<<"file">> => filename_binary(ConfigPath)}),
-        {Snapshot, Buffer3} = rpc(Port, Buffer2, Deadline, "updateSnapshot",
-            #{<<"openProjects">> => [filename_binary(ConfigPath)]}),
+        {_Parsed, Buffer2} = timed_stage(parse_config, fun() ->
+            rpc(Port, Buffer1, Deadline, "parseConfigFile",
+                #{<<"file">> => filename_binary(ConfigPath)})
+        end),
+        {Snapshot, Buffer3} = timed_stage(update_snapshot, fun() ->
+            rpc(Port, Buffer2, Deadline, "updateSnapshot",
+                 #{<<"openProjects">> => [filename_binary(ConfigPath)]})
+        end),
         SnapshotId = required_json_value(Snapshot, <<"snapshot">>),
         [Project | _] = required_json_value(Snapshot, <<"projects">>),
         ProjectId = required_json_value(Project, <<"id">>),
         Context = #{<<"snapshot">> => SnapshotId, <<"project">> => ProjectId},
-        {SourceFileNames, Buffer4} = rpc(Port, Buffer3, Deadline, "getSourceFileNames", Context),
+        {SourceFileNames, Buffer4} = timed_stage(source_files, fun() ->
+            rpc(Port, Buffer3, Deadline, "getSourceFileNames", Context)
+        end),
         ProjectFiles = intersect_files(SourceFileNames, maps:get(files, Report, [])),
-        {Diagnostics0, Buffer5} = collect_diagnostics(
-            Port, Buffer4, Deadline, Context, ProjectFiles),
-        {LocationTypes, Buffer6, Truncated, SourceMap} = query_locations(
-            Port, Buffer5, Deadline, Context, Report, ProjectFiles),
-        {Graph, _Buffer7, GraphTruncated} = build_type_graph(
-            Port, Buffer6, Deadline, Context, LocationTypes),
-        Result = make_result(Version, Snapshot, ProjectFiles, SourceMap, Diagnostics0,
-                             LocationTypes, Graph, Truncated orelse GraphTruncated),
-        {ok, Result}
+        {Diagnostics0, Buffer5} = timed_stage(diagnostics, fun() ->
+            collect_diagnostics(Port, Buffer4, Deadline, Context, ProjectFiles)
+        end),
+        {LocationTypes, Buffer6, Truncated, SourceMap} = timed_stage(locations, fun() ->
+            query_locations(Port, Buffer5, Deadline, Context, Report, ProjectFiles)
+        end),
+        {Graph, _Buffer7, GraphTruncated} = timed_stage(type_graph, fun() ->
+            build_type_graph(Port, Buffer6, Deadline, Context, LocationTypes)
+        end),
+        Result = timed_stage(result_conversion, fun() ->
+            make_result(Version, Snapshot, ProjectFiles, SourceMap, Diagnostics0,
+                        LocationTypes, Graph, Truncated orelse GraphTruncated)
+        end),
+        {ok, Result#{<<"timingsMs">> => stage_timings()}}
     catch
-        throw:{tsgo, Reason} -> {error, Reason};
-        error:{badmatch, _} -> {error, invalid_worker_output};
-        error:Reason -> {error, {worker_crash, Reason}}
+        throw:{tsgo, Reason} ->
+            {error, {tsgo_stage, get(symbolic_tsgo_current_stage), Reason, stage_timings()}};
+        error:{badmatch, _} ->
+            {error, {tsgo_stage, get(symbolic_tsgo_current_stage),
+                     invalid_worker_output, stage_timings()}};
+        error:Reason ->
+            {error, {tsgo_stage, get(symbolic_tsgo_current_stage),
+                     {worker_crash, Reason}, stage_timings()}}
+    after
+        erase(symbolic_tsgo_current_stage),
+        erase(symbolic_tsgo_stage_timings)
     end.
+
+timed_stage(Stage, Fun) ->
+    put(symbolic_tsgo_current_stage, Stage),
+    Started = erlang:monotonic_time(microsecond),
+    try Fun()
+    after
+        Duration = elapsed_ms(Started),
+        Timings = stage_timings(),
+        StageKey = atom_to_binary(Stage, utf8),
+        put(symbolic_tsgo_stage_timings,
+            maps:update_with(StageKey, fun(Previous) -> Previous + Duration end,
+                             Duration, Timings))
+    end.
+
+stage_timings() ->
+    case get(symbolic_tsgo_stage_timings) of
+        Timings when is_map(Timings) -> Timings;
+        _ -> #{}
+    end.
+
+elapsed_ms(StartedMicroseconds) ->
+    (erlang:monotonic_time(microsecond) - StartedMicroseconds + 500) div 1000.
+
+add_worker_total_timing({ok, Json}, TotalMs) ->
+    Timings = maps:get(<<"timingsMs">>, Json, #{}),
+    {ok, Json#{<<"timingsMs">> => Timings#{<<"worker_total">> => TotalMs}}};
+add_worker_total_timing({error, {tsgo_stage, Stage, Reason, Timings}}, TotalMs) ->
+    {error, {tsgo_stage, Stage, Reason, Timings#{<<"worker_total">> => TotalMs}}};
+add_worker_total_timing(Result, _TotalMs) ->
+    Result.
 
 collect_diagnostics(Port, Buffer0, Deadline, Context, Files) ->
     lists:foldl(fun(File, {Acc, Buffer}) ->

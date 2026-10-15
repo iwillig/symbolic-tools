@@ -17,8 +17,16 @@ native_tsgo_analyzes_configured_project_without_node_worker() ->
                 {ok, Enriched} = symbolic_ts_project:analyze(
                     Report, filename:dirname(ConfigPath),
                     #{enabled => true, projects => [ConfigPath]}),
-                ?assert(lists:member(maps:get(status, maps:get(type_analysis, Enriched)),
-                                     [ok, partial])),
+                TypeAnalysis = maps:get(type_analysis, Enriched),
+                ?assert(lists:member(maps:get(status, TypeAnalysis), [ok, partial])),
+                [ProjectSummary] = maps:get(projects, TypeAnalysis),
+                Timings = maps:get(timings_ms, ProjectSummary),
+                ?assert(lists:all(fun(Key) ->
+                    is_integer(maps:get(Key, Timings, -1)) andalso maps:get(Key, Timings) >= 0
+                end, [<<"initialize">>, <<"parse_config">>, <<"update_snapshot">>,
+                      <<"source_files">>, <<"diagnostics">>, <<"locations">>,
+                      <<"type_graph">>, <<"result_conversion">>,
+                      <<"worker_total">>, <<"normalize">>])),
                 Facts = maps:get(facts, Enriched),
                 ?assert(lists:any(fun
                     ({ts_project, _, _, _, <<"7.0.2">>, _, Status, _})
