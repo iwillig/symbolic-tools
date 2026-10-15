@@ -193,6 +193,34 @@ external_doc_attributes_extract_facts_test() ->
         <<"# External fixture module\n\nAdds values for extractor tests.">>}, Facts)),
     ?assert(lists:member({doc, add, 2, Path, 7, <<"Adds two integers.">>}, Facts)).
 
+compiled_module_docs_are_present_test() ->
+    assert_compiled_module_doc(symbolic_version, <<"Build identity of the *running*">>),
+    assert_compiled_module_doc(ts_extract_common, <<"Tree-walk helpers that several">>).
+
+assert_compiled_module_doc(Module, ExpectedText) ->
+    {ok, {docs_v1, _, erlang, <<"text/markdown">>, #{<<"en">> := Text}, _, _}} =
+        code:get_doc(Module),
+    ?assertNotEqual(nomatch, binary:match(Text, ExpectedText)).
+
+inline_moduledoc_attribute_extracts_module_doc_fact_test() ->
+    Src =
+        "-module(inline_moduledoc_fixture).\n"
+        "-moduledoc \"\"\"\n"
+        "Inline module summary.\n"
+        "\n"
+        "Multiline module details.\n"
+        "\"\"\".\n"
+        "-export([value/0]).\n"
+        "value() -> ok.\n",
+    Facts = ts_extract_erlang:text("inline_moduledoc_fixture.erl", Src),
+    Path = 'inline_moduledoc_fixture.erl',
+    [{module_doc, inline_moduledoc_fixture, Path, DocLine, DocText}] =
+        [Fact || {module_doc, inline_moduledoc_fixture, Path0, _, _} = Fact <- Facts,
+                 Path0 =:= Path],
+    ?assertEqual(2, DocLine),
+    ?assertNotEqual(nomatch, binary:match(DocText, <<"Inline module summary.">>)),
+    ?assertNotEqual(nomatch, binary:match(DocText, <<"Multiline module details.">>)).
+
 inline_doc_attribute_extracts_function_doc_fact_test() ->
     Src =
         "-module(inline_doc_fixture).\n"

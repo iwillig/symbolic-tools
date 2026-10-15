@@ -1,15 +1,17 @@
-%%% @doc Build identity of the *running* symbolic_tools code itself —
-%%% distinct from any parsed project's own metadata (that's `path`,
-%%% `files`, `languages`, ... in symbolic_codebase:compute_meta/5).
-%%%
-%%% The MCP server / released CLI is a long-running BEAM node: after a
-%%% source change, `rebar3 compile`/`release` produces new beam files,
-%%% but the already-running node keeps the old ones loaded until it is
-%%% restarted. `info/0` gives an agent (or a person) a way to tell,
-%%% from a `parse`/`overview` response alone, whether the connected
-%%% server has actually picked up a given commit yet — compare
-%%% `git_sha` here against `git rev-parse HEAD` in a checkout.
 -module(symbolic_version).
+-moduledoc """
+Build identity of the *running* symbolic_tools code itself —
+distinct from any parsed project's own metadata (that's `path`,
+`files`, `languages`, ... in symbolic_codebase:compute_meta/5).
+
+The MCP server / released CLI is a long-running BEAM node: after a
+source change, `rebar3 compile`/`release` produces new beam files,
+but the already-running node keeps the old ones loaded until it is
+restarted. `info/0` gives an agent (or a person) a way to tell,
+from a `parse`/`overview` response alone, whether the connected
+server has actually picked up a given commit yet — compare
+`git_sha` here against `git rev-parse HEAD` in a checkout.
+""".
 
 -export([info/0, vsn/0, git_sha/0]).
 

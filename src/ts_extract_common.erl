@@ -1,21 +1,23 @@
-%%% @doc Tree-walk helpers that several `ts_extract_*` extractors share
-%%% VERBATIM — moved here from their per-module copies rather than kept
-%%% triplicated.
-%%%
-%%% The bar for entry is deliberately strict: a helper belongs here only
-%%% when every copy was byte-identical (source text AND macro expansion —
-%%% e.g. `comment_nodes/2`'s `"(comment) @c"` query is the same literal in
-%%% the bash, erlang, and typescript grammars). Helpers that merely LOOK
-%%% duplicated but differ per language — `line/1`, `text/2`, `clean_line/1`,
-%%% `docs/4`, `branch_fact/4`, and the whole per-node-type walk layer —
-%%% stay in their own modules; see docs/tree-sitter-*.md for that split.
-%%% The duplicate-name report (`all_duplicate_names/1` in
-%%% .symbolic/rules.pl) is what found these.
-%%%
-%%% Callers reach these by full qualification (`ts_extract_common:...`),
-%%% so a module reading its own walkers stays self-contained about
-%%% everything that IS language-specific.
 -module(ts_extract_common).
+-moduledoc """
+Tree-walk helpers that several `ts_extract_*` extractors share
+VERBATIM — moved here from their per-module copies rather than kept
+triplicated.
+
+The bar for entry is deliberately strict: a helper belongs here only
+when every copy was byte-identical (source text AND macro expansion —
+e.g. `comment_nodes/2`'s `"(comment) @c"` query is the same literal in
+the bash, erlang, and typescript grammars). Helpers that merely LOOK
+duplicated but differ per language — `line/1`, `text/2`, `clean_line/1`,
+`docs/4`, `branch_fact/4`, and the whole per-node-type walk layer —
+stay in their own modules; see docs/tree-sitter-*.md for that split.
+The duplicate-name report (`all_duplicate_names/1` in
+.symbolic/rules.pl) is what found these.
+
+Callers reach these by full qualification (`ts_extract_common:...`),
+so a module reading its own walkers stays self-contained about
+everything that IS language-specific.
+""".
 
 -export([comment_nodes/2, is_run_start/1, collect_run/3,
          find_named_child_by_type/4, join_path/2]).
