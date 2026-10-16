@@ -11,6 +11,7 @@ Use these tools:
 - `symbolic_overview { path? }` reports the loaded fact base.
 - `symbolic_ask { question, path? }` is retained for compatibility; do not use it in the claim-validation workflow.
 - `symbolic_search { query, limit?, path? }` searches cached prose facts.
+- `symbolic_search_functions { query, limit?, path? }` searches parsed function definitions by name or identifier terms.
 - `symbolic_extract { sentence, model? }` extracts a bounded claim.
 - `symbolic_check { sentence, model?, path? }` extracts and checks a claim.
 - `symbolic_analyze_text { text }` returns sentence/token analysis plus bounded
@@ -25,11 +26,14 @@ Use these tools:
 3. Choose the tool by this precedence:
    - Fresh cache: `parse` the requested directory before evidence queries.
    - Cache/schema question, or checking an unlisted predicate: `overview`.
+   - Finding a function definition by name or identifier terms:
+     `search_functions`; use the returned definition location as discovery
+     evidence, then use `query` when a relational fact is needed.
    - Documentation wording: `search`.
    - Fact-checking an assertion or claim (especially one produced by an
      LLM): use the `analyze_text` → LLM goal construction → `query` workflow.
-   - Ordinary code questions: `query` with the most direct goal supported by
-     the schema.
+   - Ordinary relational code questions: `query` with the most direct goal
+     supported by the schema.
 4. Do not use `ask` in the claim-validation workflow. It remains available for
    compatibility; use `query` directly for ordinary code questions.
 5. Use `search` for documentation wording and prose evidence.
@@ -62,10 +66,21 @@ use the project root; omit `path` only when server-side project discovery is
 intended. A project config may scan several paths, so preserve its root when
 the request is about the configured project as a whole.
 
-Use `query` for definitions, calls, dependencies, complexity, dead code, and lint results.
+Use `search_functions` to discover function definitions by exact or partial
+name, or by identifier terms. It searches parsed `defines/5` facts and returns
+only definitions, with function name, arity, file, line, and relevance score.
+Exact normalized names rank before prefixes, substrings, and BM25 token
+matches. It supports snake_case/camelCase forms and split identifier words;
+a query ending in `/N` (for example, `handle_event/2`) requires an exact name
+and arity. Search results are for discovery; use `query` to answer structural
+questions about calls, dependencies, or other fact relationships.
+
+Use `query` for relational questions about definitions, calls, dependencies,
+complexity, dead code, and lint results.
 
 Use `overview` for cache state and schema questions (which predicates exist,
-fact counts). Use `search` for comments, Markdown, and other indexed prose.
+fact counts). Use `search` for comments, Markdown, and other indexed prose;
+prose search does not return function-definition results.
 
 For a code assertion or claim that must be fact-checked (especially one
 produced by an LLM), first call `analyze_text` on the exact claim. Use any `query_frames` JSON objects as

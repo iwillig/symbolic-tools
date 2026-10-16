@@ -1,13 +1,14 @@
 # Symbolic fact-base workflow
 
-This repository has a Symbolic MCP server, which scans source and docs into facts and answers relational Prolog queries. Use its tools for repository/codebase questions rather than relying only on language-model recollection or shell searches. ECA exposes MCP tools as `server__tool`; for this server use `symbolic__parse`, `symbolic__query`, `symbolic__overview`, `symbolic__search`, `symbolic__analyze_text`, `symbolic__extract`, and `symbolic__check`.
+This repository has a Symbolic MCP server, which scans source and docs into facts and answers relational Prolog queries. Use its tools for repository/codebase questions rather than relying only on language-model recollection or shell searches. ECA exposes MCP tools as `server__tool`; for this server use `symbolic__parse`, `symbolic__query`, `symbolic__overview`, `symbolic__search`, `symbolic__search_functions`, `symbolic__analyze_text`, `symbolic__extract`, and `symbolic__check`.
 
 ## Cache and tool selection
 
 - On a fresh cache, call `symbolic__parse` before `query`, `search`, or `check`.
 - Use `symbolic__overview` for cache state, fact counts, schema/predicate availability, or an unfamiliar predicate.
-- Use `symbolic__search` for documentation wording, comments, Markdown, and other indexed prose.
-- Use `symbolic__query` for definitions, calls, dependencies, complexity, dead code, and lint results.
+- Use `symbolic__search_functions` to find function definitions by name or identifier terms. It searches parsed `defines/5` facts and returns only definitions with function name, arity, file, line, and score. Exact normalized names rank before prefixes, substrings, and token matches; `name/N` requires an exact name and arity. It can match snake_case/camelCase variants and split identifier words.
+- Use `symbolic__search` for documentation wording, comments, Markdown, and other indexed prose. Prose search is separate and does not return function-definition results.
+- Use `symbolic__query` for relational questions about definitions, callers/callees, dependencies, complexity, dead code, and lint results; search is for discovery, while query is for structured relationships.
 - For claim validation, analyze the exact claim with `symbolic__analyze_text`, map its bounded frames to known predicates, then construct a goal yourself and query it. Frames are suggestions, not proof. Do not run arbitrary model-generated Prolog. Use `symbolic__check` only when specifically asked for its built-in extract-and-check operation.
 - `symbolic__ask` is compatibility-only; use direct queries for ordinary code questions and do not use `ask` in claim validation.
 
