@@ -13,7 +13,7 @@
 
 cli_structure_test() ->
     #{commands := Commands} = symbolic_cli:cli(),
-    ?assertEqual(["analyze", "ask", "check", "extract", "overview", "parse", "query", "search", "serve"],
+    ?assertEqual(["analyze", "ask", "check", "extract", "overview", "parse", "query", "search", "search-functions", "serve"],
         lists:sort(maps:keys(Commands))).
 
 query_cmd_allows_configured_db_and_requires_goal_test() ->
@@ -74,6 +74,16 @@ overview_handler_forwards_db_test() ->
     Handler(#{db => "facts.dets"}),
     ?assert(meck:called(symbolic_overview, run, ["facts.dets"])),
     meck:unload(symbolic_overview).
+
+search_functions_handler_forwards_query_and_limit_test() ->
+    meck:new(symbolic_search),
+    meck:expect(symbolic_search, run_functions,
+        fun("facts.dets", "handleUser", 5) -> ok end),
+    #{commands := #{"search-functions" := #{handler := Handler}}} = symbolic_cli:cli(),
+    Handler(#{db => "facts.dets", query => "handleUser", limit => 5}),
+    ?assert(meck:called(symbolic_search, run_functions,
+        ["facts.dets", "handleUser", 5])),
+    meck:unload(symbolic_search).
 
 parse_handler_uses_only_discovered_project_config_test() ->
     meck:new(symbolic_parse),

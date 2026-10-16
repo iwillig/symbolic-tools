@@ -2,7 +2,8 @@
 
 **Status: implemented** — `native/symbolic_text` (Rustler NIF),
 `src/symbolic_text.erl` (wrapper), `src/symbolic_search.erl` + the
-`symbolic search` CLI command, the `text_search/2,3` Prolog predicate
+`symbolic search` and `symbolic search-functions` CLI commands, the MCP
+`search` and `search_functions` tools, the `text_search/2,3` Prolog predicate
 (`src/symbolic_prolog_lib.erl`), and the parse-time sidecar cache for
 the project's configured database. This document records what was built,
 the stack decision behind it, and the rejected alternatives.
@@ -28,6 +29,35 @@ the same one-shot "start fresh, do work, tear down" shape as
 **except** when `symbolic parse` already wrote the sidecar cache for the
 configured database (below), in which case search loads the prebuilt index
 instead.
+
+## Function-name search
+
+Prose search remains prose-only. For definitions, use
+`symbolic search-functions "query"` (CLI) or the MCP `search_functions`
+tool. This searches `defines/5` facts, so results always refer to actual
+indexed definitions rather than prose mentions:
+
+```
+$ symbolic search-functions -limit 5 "handleUserEvent"
+[{"kind":"function","function":"handle_user_event","arity":2,
+  "file":".../events.ts","line":42,"score":1000000000.0}]
+```
+
+The symbol index feeds the existing BM25 engine with each identifier and
+identifier-aware word forms; this lets `handle_user_event` be discovered by
+`handleUserEvent` or `user event`. Exact normalized identifier matches rank
+first, followed by prefixes, then substrings, then BM25 token matches. A
+query ending in `/N` (for example `handle_user_event/2`) requires an exact
+name and arity. Results contain `kind`, `function`, `arity`, `file`, `line`,
+and `score`; no prose is mixed into this result set. The CLI and MCP each
+respect their requested result limit.
+
+The function-name index is separate from the prose index to avoid changing
+existing prose relevance or result shapes. Both snapshots are written into
+the parse-time `.text_idx` sidecar. Older sidecars without the symbol index,
+or missing, stale, corrupt, or unreadable sidecars, fall back to building
+from the facts. MCP function search uses the same index builder over its
+cached facts.
 
 ## The stack, and why
 
@@ -99,13 +129,14 @@ here.
 
 When the project config sets a database, `symbolic parse` also writes
 `<database>.text_idx` — one
-`term_to_binary` container holding the BM25 snapshot bytes plus the doc
-metadata — from the same fact list as the DETS store itself
-(`symbolic_parse:maybe_store/2`, best-effort: a failed sidecar write
-never fails a parse). `symbolic search` loads it when the sidecar
-exists, decodes, and is at least as new as the DETS store; every other
-state (missing, stale mtime, corrupt, wrong shape) degrades silently
-to the build-from-facts path, never an error.
+`term_to_binary` container holding the prose BM25 snapshot and metadata,
+plus a versioned function-name snapshot and definition metadata — from the
+same fact list as the DETS store itself (`symbolic_parse:maybe_store/2`,
+best-effort: a failed sidecar write never fails a parse). `symbolic search`
+and `symbolic search-functions` load their respective cached index when
+the sidecar exists, decodes successfully, and is at least as new as the
+DETS store; every other state (missing, stale mtime, corrupt, wrong shape)
+degrades silently to the build-from-facts path, never an error.
 
 One caveat the tests pin: filesystem mtimes have second granularity, so
 an index re-written in the same second as the database is

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "symbolic": {
+      "command": "symbolic",
+      "args": ["serve"]
+    }
+  },
+  "toolCall": {
+    "approval": {
+      "byDefault": "ask",
+      "allow": {
+        "symbolic": {},
+        "edit_file": {},
+        "write_file": {},
+        "move_file": {},
+        "shell_command": {}
+      }
+    }
+  }
+}

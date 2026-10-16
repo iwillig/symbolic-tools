@@ -63,6 +63,48 @@ paragraph_argument_order_is_handled_test() ->
         file:delete(Path)
     end.
 
+function_search_ranks_exact_before_prefix_and_text_hits_test() ->
+    Facts = [
+        {defines, handle_user_event, 2, [], <<"src/exact.erl">>, 10},
+        {defines, handle_user_events, 2, [], <<"src/prefix.erl">>, 20}
+    ],
+    {ok, Results} = symbolic_search:run_functions_facts(Facts, "handleUserEvent", 10),
+    ?assertEqual(2, length(Results)),
+    ?assertEqual(<<"handle_user_event">>, maps:get(<<"function">>, hd(Results))),
+    ?assertEqual(<<"function">>, maps:get(<<"kind">>, hd(Results))),
+    ?assertEqual(<<"src/exact.erl">>, maps:get(<<"file">>, hd(Results))),
+    ?assert(maps:get(<<"score">>, hd(Results)) > maps:get(<<"score">>, lists:nth(2, Results))).
+
+function_search_supports_arity_and_camel_snake_matching_test() ->
+    Facts = [
+        {defines, handle_user_event, 1, [], <<"src/one.erl">>, 1},
+        {defines, handle_user_event, 2, [], <<"src/two.erl">>, 2},
+        {defines, user_event_handler, 2, [], <<"src/words.erl">>, 3},
+        {defines, userEventHandler, 1, [], <<"src/camel.erl">>, 4}
+    ],
+    {ok, [Exact]} = symbolic_search:run_functions_facts(Facts, "handle_user_event/2", 10),
+    ?assertEqual(2, maps:get(<<"arity">>, Exact)),
+    ?assertEqual(<<"src/two.erl">>, maps:get(<<"file">>, Exact)),
+    {ok, WordResults} = symbolic_search:run_functions_facts(Facts, "user event", 10),
+    ?assert(lists:any(fun(Result) ->
+        maps:get(<<"function">>, Result) =:= <<"user_event_handler">>
+    end, WordResults)),
+    {ok, CamelTerms} = symbolic_search:run_functions_facts(Facts, "user handler", 10),
+    ?assert(lists:any(fun(Result) ->
+        maps:get(<<"function">>, Result) =:= <<"userEventHandler">>
+    end, CamelTerms)).
+
+function_search_honors_limit_and_empty_facts_test() ->
+    Facts = [
+        {defines, process_alpha, 1, [], <<"a.erl">>, 1},
+        {defines, process_alpine, 1, [], <<"b.erl">>, 2},
+        {comment, <<"c.erl">>, 1, <<"process alpha">>}
+    ],
+    {ok, Results} = symbolic_search:run_functions_facts(Facts, "process_al", 1),
+    ?assertEqual(1, length(Results)),
+    ?assertEqual({ok, []}, symbolic_search:run_functions_facts(Facts, "missing_symbol_xyz", 10)),
+    ?assertEqual({ok, []}, symbolic_search:run_functions_facts([], "anything", 10)).
+
 limit_truncates_results_test() ->
     Path = tmp_db(),
     try
@@ -150,6 +192,38 @@ cache_metadata_is_what_search_reports_test() ->
         ?assertEqual(<<"comment">>, maps:get(<<"kind">>, Best)),
         ?assertEqual(<<"doc_comments">>, maps:get(<<"file">>, Best)),
         ?assertEqual(10, maps:get(<<"line">>, Best))
+    after
+        file:delete(Path),
+        file:delete(Path ++ ".text_idx")
+    end.
+
+function_search_uses_cached_symbol_index_test() ->
+    Path = tmp_db(),
+    Facts = [{defines, handle_user_event, 2, [], <<"src/events.erl">>, 17}],
+    try
+        ok = symbolic_fact_store:write(Path, Facts),
+        ok = symbolic_search:write_index_cache(Path, Facts),
+        {ok, [Result]} = symbolic_search:run_functions_result(Path, "handleUserEvent", 10),
+        ?assertEqual(<<"handle_user_event">>, maps:get(<<"function">>, Result)),
+        ?assertEqual(2, maps:get(<<"arity">>, Result)),
+        ?assertEqual(17, maps:get(<<"line">>, Result))
+    after
+        file:delete(Path),
+        file:delete(Path ++ ".text_idx")
+    end.
+
+function_search_old_sidecar_falls_back_to_facts_test() ->
+    Path = tmp_db(),
+    Facts = [{defines, refresh_cache, 0, [], <<"src/cache.erl">>, 9}],
+    try
+        ok = symbolic_fact_store:write(Path, Facts),
+        ok = symbolic_search:write_index_cache(Path, Facts),
+        {ok, CacheBin} = file:read_file(Path ++ ".text_idx"),
+        Cache = binary_to_term(CacheBin),
+        OldCache = maps:without([function_docs, function_snapshot, function_schema], Cache),
+        ok = file:write_file(Path ++ ".text_idx", term_to_binary(OldCache)),
+        {ok, [Result]} = symbolic_search:run_functions_result(Path, "refresh_cache", 10),
+        ?assertEqual(<<"refresh_cache">>, maps:get(<<"function">>, Result))
     after
         file:delete(Path),
         file:delete(Path ++ ".text_idx")

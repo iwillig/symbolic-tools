@@ -34,7 +34,8 @@
 %% remain manual-smoke-test seams because they start applications and mutate
 %% global logger state (docs/erlang-mcp-design.md).
 -export([handle_parse/1, handle_query/1, handle_ask/1, handle_ask_catalog/1, handle_overview/1,
-    handle_extract/1, handle_check/1, handle_search/1, handle_analyze_text/1]).
+    handle_extract/1, handle_check/1, handle_search/1, handle_search_functions/1,
+    handle_analyze_text/1]).
 
 %% Start the MCP server over stdio: logging first (so early failures
 %% are visible), then the erlmcp application, the symbolic_codebase
@@ -301,6 +302,15 @@ register_parity_tools() ->
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
     ok = erlmcp_stdio:add_tool(<<"search">>, <<"Search cached prose facts.">>, fun handle_search/1,
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"limit">> => #{<<"type">> => <<"integer">>}}, <<"required">> => [<<"query">>]}),
+    ok = erlmcp_stdio:add_tool(<<"search_functions">>,
+        <<"Search cached function definitions by exact or partial name and identifier terms. ",
+          "Returns only definitions present in the parsed facts, with name, arity, file, line, and relevance score.">>,
+        fun handle_search_functions/1,
+        #{<<"type">> => <<"object">>,
+          <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>},
+              <<"path">> => #{<<"type">> => <<"string">>},
+              <<"limit">> => #{<<"type">> => <<"integer">>}},
+          <<"required">> => [<<"query">>]}),
     erlmcp_stdio:add_tool(<<"analyze_text">>,
         <<"Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks, plus bounded query-frame candidates for an LLM to map to a schema-valid query. Frames are suggestions, not verified claims. Requires English nlprule tokenizer data in SYMBOLIC_NLPRULE_DATA. Does not correct text.">>,
         fun handle_analyze_text/1,
@@ -357,6 +367,17 @@ handle_search(Params) ->
     case symbolic_codebase:facts(optional_path(Params)) of
         {ok, Facts} ->
             case symbolic_search:run_facts(Facts, Query, limit_of(Params)) of
+                {ok, Results} -> json(#{ok => Results});
+                {error, Reason} -> json(#{error => error_str(Reason)})
+            end;
+        {error, Reason} -> json(#{error => error_str(Reason)})
+    end.
+
+handle_search_functions(Params) ->
+    Query = to_list(maps:get(<<"query">>, Params)),
+    case symbolic_codebase:facts(optional_path(Params)) of
+        {ok, Facts} ->
+            case symbolic_search:run_functions_facts(Facts, Query, limit_of(Params)) of
                 {ok, Results} -> json(#{ok => Results});
                 {error, Reason} -> json(#{error => error_str(Reason)})
             end;

@@ -66,6 +66,26 @@ parse_rejects_arguments_test() ->
         <<"rules">> => <<"custom.pl">>})),
     ?assertMatch(#{<<"error">> := <<"parse accepts no arguments", _/binary>>}, Json).
 
+search_functions_tool_is_registered_with_query_contract_test() ->
+    meck:new(erlmcp_stdio, [non_strict]),
+    meck:expect(erlmcp_stdio, add_tool,
+        fun(Name, _Description, _Handler, Schema) ->
+            put({registered_tool_schema, Name}, Schema),
+            ok
+        end),
+    try
+        ok = symbolic_serve:register_tools(),
+        Schema = get({registered_tool_schema, <<"search_functions">>}),
+        ?assertEqual([<<"query">>], maps:get(<<"required">>, Schema)),
+        Props = maps:get(<<"properties">>, Schema),
+        ?assertEqual(<<"string">>, maps:get(<<"type">>, maps:get(<<"query">>, Props))),
+        ?assert(maps:is_key(<<"path">>, Props)),
+        ?assert(maps:is_key(<<"limit">>, Props))
+    after
+        erase({registered_tool_schema, <<"search_functions">>}),
+        meck:unload(erlmcp_stdio)
+    end.
+
 ask_catalog_tool_is_discoverable_and_returns_shared_catalog_test() ->
     meck:new(erlmcp_stdio, [non_strict]),
     meck:expect(erlmcp_stdio, add_tool,
@@ -130,6 +150,7 @@ serve_test_() ->
         fun ask_with_unknown_path_is_friendly_error/1,
         fun extract_returns_a_claim/1,
         fun search_returns_cached_prose/1,
+        fun search_functions_returns_cached_definitions/1,
         fun check_returns_a_verdict/1,
         fun analyze_text_returns_sentence_components/1
     ]}.
@@ -171,6 +192,17 @@ search_returns_cached_prose(_Setup) ->
         _ = symbolic_serve:handle_parse(#{}),
         Json = decode(symbolic_serve:handle_search(#{<<"query">> => <<"exclamation">>})),
         ?assertMatch(#{<<"ok">> := [_ | _]}, Json)
+    end.
+
+search_functions_returns_cached_definitions(_Setup) ->
+    fun() ->
+        _ = symbolic_serve:handle_parse(#{}),
+        Json = decode(symbolic_serve:handle_search_functions(
+            #{<<"query">> => <<"shout/1">>})),
+        [Result | _] = maps:get(<<"ok">>, Json),
+        ?assertEqual(<<"function">>, maps:get(<<"kind">>, Result)),
+        ?assertEqual(<<"shout">>, maps:get(<<"function">>, Result)),
+        ?assertEqual(1, maps:get(<<"arity">>, Result))
     end.
 
 check_returns_a_verdict(_Setup) ->

@@ -31,6 +31,7 @@ cli() ->
             "extract" => extract_cmd(),
             "check" => check_cmd(),
             "search" => search_cmd(),
+            "search-functions" => search_functions_cmd(),
             "ask" => ask_cmd(),
             "overview" => overview_cmd()
         }
@@ -111,6 +112,23 @@ search_cmd() ->
             Db = resolve_database(Args, undefined, true),
             #{query := Query} = Args,
             symbolic_search:run(Db, Query, maps:get(limit, Args, 10))
+        end
+    }.
+
+search_functions_cmd() ->
+    #{
+        help => "Rank function definitions by exact, prefix, and full-text name matches",
+        arguments => [
+            #{name => db, long => "db", required => false,
+              help => "Path to a fact database (.dets); defaults to the project's configured database"},
+            #{name => limit, long => "limit", type => integer, default => 10,
+              help => "Maximum number of results (default 10, must be >= 1)"},
+            #{name => query, help => "Function name or identifier terms, optionally with /arity"}
+        ],
+        handler => fun(Args) ->
+            Db = resolve_database(Args, undefined, true),
+            #{query := Query} = Args,
+            symbolic_search:run_functions(Db, Query, maps:get(limit, Args, 10))
         end
     }.
 
