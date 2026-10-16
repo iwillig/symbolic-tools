@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+PROFILE="${REBAR_PROFILE:-default}"
+LIB="$ROOT/_build/$PROFILE/lib"
+if [ ! -d "$LIB" ]; then
+    echo "symbolic-eval: compiled dependencies not found; run rebar3 compile" >&2
+    exit 127
+fi
+exec erl -pa "$LIB"/*/ebin -noshell -eval 'symbolic_eval:main(), halt().' -extra "$@"

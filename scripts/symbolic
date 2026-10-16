@@ -31,6 +31,16 @@ else
     fi
 fi
 
+# Keep VM crash dumps out of whichever project directory invoked the CLI.
+# Respect an explicit caller override; otherwise use a private per-user path.
+if [ -z "${ERL_CRASH_DUMP:-}" ] && [ -n "${HOME:-}" ]; then
+    CRASH_DIR="$HOME/.symbolic"
+    if mkdir -p "$CRASH_DIR" 2>/dev/null; then
+        ERL_CRASH_DUMP="$CRASH_DIR/erl_crash.dump"
+        export ERL_CRASH_DUMP
+    fi
+fi
+
 FOUND_EBIN=false
 for APP_EBIN in "$LIB_DIR"/*/ebin; do
     if [ -d "$APP_EBIN" ]; then

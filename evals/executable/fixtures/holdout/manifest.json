@@ -1,0 +1,7 @@
+{
+  "fixture": "holdout",
+  "files": {
+    ".symbolic/config.json": "0f9ebfbbc8f5d35b42a73aad2702274310c9c2ad1fb63d42fbb1f075711ece3f",
+    "src/beta.ts": "3fa457ba3a7456ea12915d4d6fae32e6f972897147b8ee3bf49db35c769c1aff"
+  }
+}

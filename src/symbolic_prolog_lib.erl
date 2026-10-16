@@ -118,13 +118,14 @@ count_pairs_1([Bad | _], _Counts) ->
 %% sub_atom_5(Head, NextGoal, State) -> void.
 %%
 %% sub_atom(Atom, Before, Length, After, Sub) — ISO sub_atom/5, restricted
-%% to Atom bound (the only mode this project ever needs: "does this atom
-%% contain X", or "list every substring of this atom"). Before, Length,
-%% After and Sub may each be bound or unbound in any combination; every
-%% (Before,Length) split of Atom's characters is generated in
+%% to Atom bound (the supported mode is "does this atom contain X"). Sub
+%% must be a bound atom: unbound Sub would enumerate and permanently intern
+%% every substring in the BEAM atom table. When Sub is bound, compare raw
+%% characters first and only construct an atom for candidates matching the
+%% needle. Every (Before,Length) split is still considered in
 %% increasing-Before-then-increasing-Length order (the same order
-%% SWI-Prolog uses) and unified against whatever the caller already
-%% bound, backtracking to the next split on request — exactly the
+%% SWI-Prolog uses) and unified against the caller's other arguments,
+%% backtracking to the next split on request — exactly the
 %% choice-point pattern erlog_lib_lists:append_3/3 already uses for
 %% append/3, just walking character-index splits instead of list cells.
 sub_atom_5({sub_atom, A0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
@@ -132,7 +133,15 @@ sub_atom_5({sub_atom, A0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
         A when is_atom(A) ->
             Codes = atom_to_list(A),
             Total = length(Codes),
-            sub_chars_search(Codes, Total, 0, 0, B0, L0, Af0, S0, Next, St, fun list_to_atom/1);
+            case deref(S0, Bs) of
+                Sub when is_atom(Sub) ->
+                    sub_chars_search(Codes, Total, 0, 0, B0, L0, Af0, S0, Next, St,
+                        {atom, atom_to_list(Sub)});
+                {_} ->
+                    erlog_int:instantiation_error(St);
+                _Other ->
+                    fail(St)
+            end;
         {_} ->
             erlog_int:instantiation_error(St);
         Other ->
@@ -183,28 +192,43 @@ sub_text_5({sub_text, T0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
 sub_chars_search(Codes, Total, Before, Length, B0, L0, Af0, S0, Next,
         #est{cps = Cps, bs = Bs0} = St, ToTerm) when Before =< Total ->
     After = Total - Before - Length,
-    Sub = ToTerm(lists:sublist(Codes, Before + 1, Length)),
-    case try_unify4(B0, Before, L0, Length, Af0, After, S0, Sub, Bs0) of
-        {succeed, Bs1} ->
-            case next_split(Before, Length, Total) of
-                done ->
-                    prove_body(Next, St#est{bs = Bs1});
-                {NBefore, NLength} ->
-                    FailFun = fun(LCp, LCps, Lst) ->
-                        fail_sub_chars(LCp, LCps, Lst, Codes, Total, NBefore, NLength, B0, L0, Af0, S0, ToTerm)
-                    end,
-                    Cp = #cp{type = compiled, data = FailFun, next = Next, bs = Bs0, vn = St#est.vn},
-                    prove_body(Next, St#est{cps = [Cp | Cps], bs = Bs1})
-            end;
-        fail ->
-            case next_split(Before, Length, Total) of
-                done -> fail(St);
-                {NBefore, NLength} ->
-                    sub_chars_search(Codes, Total, NBefore, NLength, B0, L0, Af0, S0, Next, St, ToTerm)
+    Candidate = lists:sublist(Codes, Before + 1, Length),
+    case candidate_term(Candidate, ToTerm) of
+        skip ->
+            advance_sub_chars(Codes, Total, Before, Length, B0, L0, Af0, S0, Next, St, ToTerm);
+        {ok, Sub} ->
+            case try_unify4(B0, Before, L0, Length, Af0, After, S0, Sub, Bs0) of
+                {succeed, Bs1} ->
+                    case next_split(Before, Length, Total) of
+                        done ->
+                            prove_body(Next, St#est{bs = Bs1});
+                        {NBefore, NLength} ->
+                            FailFun = fun(LCp, LCps, Lst) ->
+                                fail_sub_chars(LCp, LCps, Lst, Codes, Total, NBefore, NLength,
+                                    B0, L0, Af0, S0, ToTerm)
+                            end,
+                            Cp = #cp{type = compiled, data = FailFun, next = Next,
+                                bs = Bs0, vn = St#est.vn},
+                            prove_body(Next, St#est{cps = [Cp | Cps], bs = Bs1})
+                    end;
+                fail ->
+                    advance_sub_chars(Codes, Total, Before, Length, B0, L0, Af0, S0,
+                        Next, St, ToTerm)
             end
     end;
 sub_chars_search(_Codes, _Total, _Before, _Length, _B0, _L0, _Af0, _S0, _Next, St, _ToTerm) ->
     fail(St).
+
+candidate_term(Candidate, {atom, Needle}) when Candidate =/= Needle -> skip;
+candidate_term(Candidate, {atom, _Needle}) -> {ok, list_to_atom(Candidate)};
+candidate_term(Candidate, ToTerm) when is_function(ToTerm, 1) -> {ok, ToTerm(Candidate)}.
+
+advance_sub_chars(Codes, Total, Before, Length, B0, L0, Af0, S0, Next, St, ToTerm) ->
+    case next_split(Before, Length, Total) of
+        done -> fail(St);
+        {NBefore, NLength} ->
+            sub_chars_search(Codes, Total, NBefore, NLength, B0, L0, Af0, S0, Next, St, ToTerm)
+    end.
 
 %% Resumed on backtrack: #cp{}'s own saved bs/vn are the bindings from
 %% BEFORE the candidate that just succeeded, exactly like

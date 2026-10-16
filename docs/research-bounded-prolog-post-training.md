@@ -1,0 +1,58 @@
+# Bounded verification model: evaluation-first research and pilot plan
+
+## Decision and scope
+
+The first model target is **a catalogued operation plus typed slots**, not unrestricted natural-language-to-Prolog generation. The runtime validates the request and executes a fixed Prolog template against a pinned fact snapshot. The model must be allowed to say `unsupported`, `ambiguous`, or `unknown`; a valid proof establishes only the formalized question, never that the model interpreted the user's wording correctly. Natural-language final answers are permitted; the intermediate verification artifact is structured. This is a decision for the *first experiment*, not a claim that all natural language is verifiable.
+
+This matches the repo's [ASK expert-machine plan](plans/ask-expert-machine.md), including allowlisted operations, grounding before proof, scoped negative claims, evidence, and bounded execution. Existing [ASK benchmark](ask-benchmark.md) is 19 curated cases in `test/fixtures/ask-benchmark.json`, exercising the **interpreter**; the existing [promptfoo evals](../evals/README.md) mainly inspect one-turn routing and goal shape and do **not** execute generated goals. They cannot yet measure end-to-end correctness or decide whether an adapter helped.
+
+## Primary-source findings
+
+- [Promptfoo assertions](https://www.promptfoo.dev/docs/configuration/expected-outputs/) include deterministic JavaScript/Python checks and named metrics; [Python providers](https://www.promptfoo.dev/docs/providers/python/) can run a custom multi-step evaluation workflow and return a response. The [MCP provider](https://www.promptfoo.dev/docs/providers/mcp/) calls MCP tools *directly*, which is useful for server tests but does **not** by itself measure whether a model selected the right operation. It documents executed tool-call metadata for some chat-provider MCP integrations; verify support for the specific local provider before depending on that path. Recommendation: retain promptfoo as test orchestrator/reporting UI, and use a small custom provider or deterministic harness to call the model, validate slots, execute the verifier, capture the whole trajectory, and score against labels. Do not use model-graded factuality as the primary correctness metric.
+- [Unsloth Studio quickstart](https://unsloth.ai/docs/new/studio/start.md) offers QLoRA/LoRA/full tuning, dataset import and column mapping; **GGUF is inference-only for training**. [Export docs](https://unsloth.ai/docs/new/studio/export.md) describe adapter-only, merged 16-bit, and GGUF exports. [API docs](https://unsloth.ai/docs/basics/api.md) describe authenticated OpenAI-compatible `/v1/chat/completions`, `/v1/models`, and key creation under Settings → API. Disable unrelated built-in execution/web tools for a controlled benchmark; do not commit API keys.
+- The [Qwen3.8-27B model card](https://huggingface.co/Qwen/Qwen3.8-27B) calls it a 27B vision-language model, with thinking on by default and an `enable_thinking` chat-template option. Treat thinking mode and chat template as pinned eval conditions, not as proof of internal reasoning. [Unsloth's Qwen3.8 guide](https://unsloth.ai/docs/models/qwen3.8.md) estimates **16–19 GB for 4-bit inference** and **31 GB for 8-bit inference**, not training; its numbers are format and context dependent. On this host `uname -m` returned arm64 and `sysctl -n hw.memsize` returned 68,719,476,736 bytes (64 GiB). A 27B LoRA training fit on this Mac has **not** been established. Run a brief Studio compatibility/peak-memory test before allocating a full training run. Do not assume a Q8 GGUF loaded for inference is a trainable base.
+- [Training Language Models to Use Prolog as a Tool](https://arxiv.org/abs/2512.07407) evaluates a **different** model and math task with execution-based reward. It motivates a later training experiment, not predicted performance for Qwen3.8-27B on this project's bounded catalog.
+
+## Benchmark contract (build before training)
+
+Each reviewed item stores: `id`, `source` (fixture/project + immutable snapshot hash), `question`, `expected` `{decision: supported|unsupported|ambiguous|unknown, operation?, slots?, answer_status?, answer?, evidence?}`, `category`, and `split`. Keep expected outcomes human-reviewed. Record model ID/revision, adapter revision, prompt/template, inference settings, verifier catalog/schema/rules version, scan scope/completeness, temperature/seed and raw trajectory with each run. Never grade against a moving `main` checkout: freeze fixture projects and re-derive labels on any schema or extractor change.
+
+Suggested initial task family: `defines`, `calls`, and `callers_count`, plus out-of-scope questions. Add prose, imports, complexity and compound claims only after a separate acceptance suite exists. Balance:
+
+- Positive and closed-world negative cases with exact function, arity, module/receiver and file distinctions.
+- Ambiguous names, missing/wrong arities, similar identifiers and paraphrases.
+- Unsupported design judgments, unseen relations and questions beyond the scanned tree.
+- Partial scans and missing predicates, where a zero-result query must not become `false`.
+- Multi-turn repair after a structured validation error (separate from single-turn scores).
+
+Split by **project and question template family** for the blind test; near-duplicate paraphrases and generated mutations stay together. Use the 19 existing curated cases as regression seeds, not as both SFT examples and held-out proof. Start with an exploratory development set (e.g. 40–60 cases) and a separately reviewed locked test set (e.g. 80–120, stratified); these are pilot targets, not statistical guarantees. Review every label and probe the evaluator with deliberate corruptions (swapped slots, false admission, abstain-all, always-yes, forged citation). The blind set must not be shown to training or prompt iteration.
+
+Score each stage independently, with confusion matrices by slice:
+
+1. **Admission**: supported recall and, foremost, false admission rate on unsupported/ambiguous questions. Abstain-all is not success.
+2. **Grounding**: operation accuracy and exact typed-slot match conditional on a supported label.
+3. **Verification**: runtime status and answer equality, with set comparison for lists; source-evidence alignment and negative scope handling. Structural answer errors count even if the goal is syntactically valid.
+4. **Protocol**: no uncatalogued operation, bounded calls/time, no invented witness and no natural-language intermediate artifact. This is an observable-output property, not a claim about private cognition.
+5. **End-to-end**: correct decision + grounded slots + correct verified answer, including abstention quality; report latency/tokens separately.
+
+Use hard gates in addition to averages: zero unauthorized operations/tool executions, no increase in false admission on the locked set, and a predeclared improvement over *the same base model with the same template and runtime*. Report per-category numerator/denominator and bootstrap uncertainty rather than a single weighted score. Fix thresholds after the first baseline and before training; do not change them to make a checkpoint pass.
+
+## Minimal experiment sequence
+
+1. **Freeze the protocol and fixtures.** Serialize a typed request (for example `{ "decision":"supported", "operation":"calls", "slots":{"caller":"foo/1","callee":"bar/1"} }`). Use the catalog's actual operation/slot schema as authority. Add a validator: reject unknown operations, wrong slot types, extra fields, ambiguous identities; never accept arbitrary goal strings from this route. Pin scan snapshots and make each test independent.
+2. **Build the executable evaluator.** Promptfoo calls a small local provider/harness: send the question to the locally served model; parse structured output; validate; invoke the allowlisted ASK/verifier path; record raw model output, normalized operation, verifier JSON, evidence and timing; then return a structured record to deterministic assertions. First use a scripted mock model to prove the scorer catches known errors. The existing promptfoo one-turn suites remain useful regression checks but are not the outcome benchmark.
+3. **Run baselines, without training.** On the same held-out fixture, compare: current prompt + Qwen3.8-27B, a concise catalog/slot prompt + the same model, and a simple deterministic grammar/ASK baseline. Pin the same quantization, template, thinking setting, seed and tool budget per comparison. Do repeated runs separately to measure variance; establish training only if prompt-only behavior leaves a meaningful gap.
+4. **Build a small supervised dataset.** Use independent fixture projects and reviewed trajectories. Teach positive operation/slot examples and all abstention/ambiguity/error states. The model should emit a *typed request*, not a raw Prolog program or a prose chain. Keep blind benchmark projects/templates out. Prefer modest, balanced data and inspect samples over auto-generating thousands of unchecked labels.
+5. **Studio pilot.** Confirm exact trainable Qwen3.8-27B weights/architecture and a supported LoRA/QLoRA path in the installed Studio version on macOS. Check dataset column mapping and chat-template compatibility with a tiny overfit/smoke job; save config, adapter and revision. If 27B does not fit, use a smaller compatible model for plumbing or move training to appropriate hardware; still evaluate Qwen 27B prompt-only as a baseline.
+6. **Serve and compare.** Export adapter-only first, load with the original base in Studio, query its local API from promptfoo, compare baseline and adapter on the locked set. Optionally export GGUF only after validating adapter inference, and rerun because quantization changes behavior. Do not call a format-compliant model a success unless executable answer and abstention metrics improve. Only then consider execution-reward RL; it is not needed for the first end-to-end proof.
+
+## Setup checkpoint for the local machine
+
+`promptfoo` 0.124.0 is installed. This shell observed an Unsloth model-list response at `127.0.0.1:8888` naming `unsloth/Qwen3.8-27B-GGUF:Q8_0` once; a subsequent `/v1/models` request returned no body, so **API availability and authentication have not been verified**. Existing evals target a separate `llama-server` at `localhost:8080` with `apiKeyRequired: false`: do not assume they address Studio. Ask the user to create a local API key through Settings → API, keep it in an environment variable, confirm the currently displayed API base URL/model ID, and verify a non-streaming `/v1/chat/completions` call without logging the key. No training or download should start until the benchmark and compatibility gate are complete.
+
+## Open risks / decisions before training
+
+- Does the installed Studio release actually fine-tune this architecture on this Apple Silicon host, at useful context length? Documentation on local *inference* does not establish this.
+- Is catalog access through the existing ASK pipeline sufficient for typed requests, or is a small typed dispatch adapter needed? The existing MCP `ask` takes a question, not an operation-and-slots object. Treat this as a deliberate interface addition, not a claim that it exists today.
+- Qwen defaults to thinking and Studio may self-heal tool calls; pin both settings, log intermediate output where accessible, and avoid scoring invisible provider behavior as model competence.
+- Provenance: prior eval ledgers contain historical facts that can go stale. A frozen fixture and manifest solve this better than more regex assertions against moving source.

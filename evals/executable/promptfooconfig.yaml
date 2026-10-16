@@ -1,0 +1,32 @@
+description: Executable bounded verification benchmark (local model + real symbolic prover)
+prompts:
+  - file://prompt.txt
+providers:
+  - id: file://promptfoo-provider.js
+    label: Qwen local via Unsloth API and frozen symbolic fixtures
+    config:
+      base_url: http://127.0.0.1:8888/v1
+defaultTest:
+  assert:
+    - type: javascript
+      value: JSON.parse(output).scores.admission === true
+      metric: admission
+    - type: javascript
+      value: JSON.parse(output).scores.operation === true
+      metric: operation
+    - type: javascript
+      value: JSON.parse(output).scores.slots === true
+      metric: slots
+    - type: javascript
+      value: JSON.parse(output).scores.verifier_answer === true
+      metric: verifier_answer
+    - type: javascript
+      value: JSON.parse(output).scores.evidence === true
+      metric: evidence
+    - type: javascript
+      value: JSON.parse(output).scores.protocol === true
+      metric: protocol
+    - type: javascript
+      value: JSON.parse(output).scores.end_to_end === true
+      metric: end_to_end
+tests: file://cases.dev.jsonl

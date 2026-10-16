@@ -1,0 +1,7 @@
+{
+  "fixture": "dev",
+  "files": {
+    ".symbolic/config.json": "0f9ebfbbc8f5d35b42a73aad2702274310c9c2ad1fb63d42fbb1f075711ece3f",
+    "src/alpha.ts": "555da28356014c5b443d6ee89e9128930811c35221de7cb4d62ad36b15170fe8"
+  }
+}

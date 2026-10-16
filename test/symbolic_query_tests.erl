@@ -33,6 +33,23 @@ run_result_no_solution_test() ->
             symbolic_query:run_result(?DB, undefined, "defines(bar, _, _, _, _)"))
     end).
 
+sub_atom_rejects_unbound_sub_test() ->
+    with_db([], fun() ->
+        ?assertEqual(
+            {error, {query_failed, instantiation_error}},
+            symbolic_query:run_result(?DB, undefined, "sub_atom(foo, _, _, _, Sub)"))
+    end).
+
+sub_atom_nonmatching_needle_does_not_intern_candidate_atoms_test() ->
+    LongAtom = list_to_atom(lists:duplicate(100, $x)),
+    with_db([{sample, LongAtom}], fun() ->
+        Before = erlang:system_info(atom_count),
+        ?assertEqual(no_solution,
+            symbolic_query:run_result(?DB, undefined, "sample(Value), sub_atom(Value, _, _, _, absent_needle)")),
+        After = erlang:system_info(atom_count),
+        ?assert(After - Before < 10)
+    end).
+
 run_result_query_failed_is_error_test() ->
     with_db([{defines, foo, 0, <<"()">>, 'f.erl', 1}], fun() ->
         ?assertMatch(
