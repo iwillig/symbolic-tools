@@ -154,12 +154,15 @@ Hits = [hit(comment, test/symbolic_search_tests.erl, 33, 22.81),
         hit(paragraph, docs/nlp-tooling.md, 125, 18.02), ...]
 ```
 
-`text_search/2` binds `Hits` to a BM25-ranked list of
-`hit(Kind, File, Line, Score)` terms, best first, limit 10;
-`text_search/3` takes an explicit positive-integer limit. It is a
-compiled procedure registered by `symbolic_prolog_lib` — the same
-`add_compiled_proc` mechanism `count_pairs/2` uses — and it enumerates
-the prose facts (comment/3, paragraph/3, heading/4, blockquote/3)
+`text_search/2` binds `Hits` to a ranked list of prose
+`hit(Kind, File, Line, Score)` terms and matching function-definition
+`hit(function, Name, Arity, File, Line, Score)` terms, best first, limit 10;
+`text_search/3` takes an explicit positive-integer limit. Function names
+are searched directly (normalized, case-insensitive substring matching),
+so callers no longer need to enumerate `defines/6` and use `sub_atom/5`
+for ordinary name searches. It is a compiled procedure registered by
+`symbolic_prolog_lib` — the same `add_compiled_proc` mechanism
+`count_pairs/2` uses — and it enumerates the prose and definition facts
 straight out of the erlog database the goal is being proved against, so
 whatever base the session holds IS the corpus: no file, no sidecar, no
 plumbing. Query accepts a double-quoted code list (the natural literal

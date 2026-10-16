@@ -38,6 +38,13 @@ text_search_ranks_by_bm25_test() ->
         ?assertMatch({'hit', comment, doc_a, 10, Score} when is_float(Score), First)
     end).
 
+text_search_matches_function_names_test() ->
+    with_facts(facts(), fun(Pid) ->
+        {ok, [{'Hits', [Hit]}]} = prolog_session:query(Pid,
+            "text_search(\"foo\", Hits)"),
+        ?assertMatch({'hit', function, foo, 2, doc_a, 3, _}, Hit)
+    end).
+
 text_search_finds_every_prose_kind_test() ->
     with_facts(facts(), fun(Pid) ->
         %% Each kind needs a query only its own text can match — this

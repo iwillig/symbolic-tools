@@ -9,6 +9,9 @@ mcp__symbolic__parse: load a codebase directory into the cache.
 mcp__symbolic__query: prove one Prolog goal against the cache.
 mcp__symbolic__overview: report the cache state (files, fact families).
 mcp__symbolic__ask: ask one bounded English question against the cache.
+mcp__symbolic__search_functions: search function definitions by name or identifier terms.
+mcp__symbolic__search: search indexed prose.
+
 </tools>
 
 <rules>
@@ -19,7 +22,7 @@ mcp__symbolic__ask: ask one bounded English question against the cache.
 </rules>
 
 <routing>
-Prefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal.
+Prefer `query` over `ask`. Questions about callers, callees, definitions, or any relation between named functions go to `query` as a Prolog goal. Use `ask` only when you cannot write the question as a goal. For function-name discovery, use `search_functions`; when searching names inside a Prolog goal, use `text_search/2,3` instead of enumerating `defines/5` and filtering names with `sub_atom/5`. Function results have the shape `hit(function, Name, Arity, File, Line, Score)`.
 </routing>
 
 <schema>
@@ -31,7 +34,8 @@ truly_uncalled(Function, Arity, File): Function/Arity has no caller
 duplicate_name(Function, Arity, Files): the same name is defined in more than one file
 real_complexity(Function, Arity, File, Score)
 heading(File, Level, Title, Line): a Markdown heading; Title is the full heading text
-File is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`.
+text_search(Query, Hits): ranked prose and function-name hits; function hit shape is `hit(function, Name, Arity, File, Line, Score)`
+File is an absolute path. To match a repository-relative path, write `sub_atom(File, _, _, 0, 'src/foo.erl')`. Use `sub_atom/5` for file-path filters, not for function-name search.
 </schema>
 
 <goals>

@@ -290,14 +290,14 @@ try_unify4(B0, Before, L0, Length, Af0, After, S0, Sub, Bs0) ->
 atom_from_binary_2({atom_from_binary, Bin0, Atom0}, Next, #est{bs = Bs} = St) ->
     case deref(Bin0, Bs) of
         Bin when is_binary(Bin) ->
-            case catch binary_to_existing_atom(Bin, utf8) of
-                {'EXIT', _} ->
-                    fail(St);
+            try binary_to_existing_atom(Bin, utf8) of
                 A ->
                     case unify(Atom0, A, Bs) of
                         {succeed, Bs1} -> prove_body(Next, St#est{bs = Bs1});
                         fail -> fail(St)
                     end
+            catch
+                error:badarg -> fail(St)
             end;
         {_} ->
             erlog_int:instantiation_error(St);
@@ -350,7 +350,9 @@ text_search_run(Query, Limit, Hits0, Next, #est{db = Db} = St) ->
     {Index, Docs} = session_text_index(Db),
     case symbolic_text:index_search(Index, QueryBin, Limit) of
         {ok, Ranked} ->
-            Hits = [hit_term(Id, Score, Docs) || {Id, Score} <- Ranked],
+            TextHits = [hit_term(Id, Score, Docs) || {Id, Score} <- Ranked],
+            FunctionHits = function_search_hits(Db, QueryBin, Limit),
+            Hits = lists:sublist(merge_text_and_function_hits(TextHits, FunctionHits), Limit),
             erlog_int:unify_prove_body(Hits0, Hits, Next, St);
         {error, Reason} ->
             %% Unreachable by construction — query_binary only produces
@@ -359,6 +361,44 @@ text_search_run(Query, Limit, Hits0, Next, #est{db = Db} = St) ->
             %% a bug here must be loud.
             erlang:error({text_search_failed, Reason})
     end.
+
+%% Function definitions participate in text_search alongside prose. Keep
+%% name matching here rather than requiring Prolog callers to enumerate
+%% defines/6 and use sub_atom/5: that scan is both cumbersome and misses
+%% the ranked name-search behavior exposed by symbolic_search.
+function_search_hits(Db, QueryBin, Limit) ->
+    Query = normalize_search_name(unicode:characters_to_list(QueryBin)),
+    Defs = definition_heads(Db),
+    Matches = lists:filtermap(fun
+        ({Name, Arity, File, Line}) ->
+            Normalized = normalize_search_name(atom_to_list(Name)),
+            case Query =/= [] andalso string:str(Normalized, Query) > 0 of
+                true -> {true, {'hit', function, Name, Arity, File, Line, 1.0e6}};
+                false -> false
+            end
+    end, Defs),
+    lists:sublist(Matches, Limit).
+
+definition_heads(#db{mod = Dm, ref = Dr}) ->
+    case Dm:get_procedure(Dr, {defines, 5}) of
+        {clauses, Cs} ->
+            [{Name, Arity, File, Line} || {_, {defines, Name, Arity, _Params, File, Line}, _} <- Cs,
+                is_atom(Name), is_integer(Arity), is_integer(Line)];
+        _ -> []
+    end.
+
+normalize_search_name(Name) ->
+    [C || C <- string:lowercase(Name), (C >= $a andalso C =< $z) orelse
+        (C >= $0 andalso C =< $9)].
+
+merge_text_and_function_hits(TextHits, FunctionHits) ->
+    lists:sort(fun hit_before/2, TextHits ++ FunctionHits).
+
+hit_before({'hit', function, _, _, _, _, ScoreA}, {'hit', function, _, _, _, _, ScoreB}) ->
+    ScoreA > ScoreB;
+hit_before({'hit', function, _, _, _, _, _}, _) -> true;
+hit_before(_, {'hit', function, _, _, _, _, _}) -> false;
+hit_before({'hit', _, _, _, ScoreA}, {'hit', _, _, _, ScoreB}) -> ScoreA >= ScoreB.
 
 %% The session's own prose corpus: the four text-bearing fact shapes,
 %% enumerated straight from the erlog database (clauses are

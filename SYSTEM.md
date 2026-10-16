@@ -26,9 +26,11 @@ Use these tools:
 3. Choose the tool by this precedence:
    - Fresh cache: `parse` the requested directory before evidence queries.
    - Cache/schema question, or checking an unlisted predicate: `overview`.
-   - Finding a function definition by name or identifier terms:
+   - Finding a function definition by name or identifier terms through MCP:
      `search_functions`; use the returned definition location as discovery
      evidence, then use `query` when a relational fact is needed.
+   - Searching function names from inside a Prolog goal:
+     `text_search/2,3`; it returns function hits along with prose hits.
    - Documentation wording: `search`.
    - Fact-checking an assertion or claim (especially one produced by an
      LLM): use the `analyze_text` → LLM goal construction → `query` workflow.
@@ -74,6 +76,16 @@ matches. It supports snake_case/camelCase forms and split identifier words;
 a query ending in `/N` (for example, `handle_event/2`) requires an exact name
 and arity. Search results are for discovery; use `query` to answer structural
 questions about calls, dependencies, or other fact relationships.
+
+When writing a Prolog goal that searches function names, prefer the compiled
+`text_search/2,3` predicate over enumerating `defines/5` and filtering names
+with `sub_atom/5`. It normalizes function names and matches case-insensitive
+substrings, returning hits shaped as
+`hit(function, Name, Arity, File, Line, Score)` mixed with prose hits shaped
+as `hit(Kind, File, Line, Score)`. For example, `text_search("parse", Hits)`
+can find definitions whose names contain `parse`; use `search_functions` when
+the richer standalone discovery/ranking behavior (including `/N` filtering)
+is needed.
 
 Use `query` for relational questions about definitions, calls, dependencies,
 complexity, dead code, and lint results.
@@ -186,6 +198,9 @@ truly_uncalled(foo, 2, File), undocumented(foo, 2, File, Line)
 % Which src/ functions lack a doc comment? Negation + absolute anchor + defines/5.
 sub_atom(File, 0, _, _, '/abs/root/src/'),
 defines(F, A, _, File, _), \+ doc(F, A, File, _, _)
+
+% Function names containing a term - use text_search, not sub_atom(Name, ...).
+text_search("parse", Hits)
 
 % Comments mentioning a phrase - the haystack must be a bound binary.
 comment(File, Line, Text), sub_text(Text, _, _, _, "extract_file_safely")
