@@ -362,7 +362,7 @@ parse_crash_is_an_error_and_leaves_cache_and_process_untouched(_Setup) ->
         {ok, GoodMeta} = symbolic_codebase:parse(?FIXTURES),
         Pid = whereis(symbolic_codebase),
         meck:new(symbolic_parse, [passthrough]),
-        meck:expect(symbolic_parse, scan_report, fun(_Dir) -> error(boom) end),
+        meck:expect(symbolic_parse, scan_report, fun(_Dir, _Cache) -> error(boom) end),
         try
             Result = symbolic_codebase:parse(?FIXTURES),
             ?assertMatch({error, {parse_crashed, {error, boom}}}, Result)

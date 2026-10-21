@@ -113,11 +113,11 @@
     "id": "real-scan-report-extraction",
     "plan_reference": "docs/plans/ask-expert-machine.md#3-make-negative-and-unknown-answers-scope-aware",
     "source": "project_src",
-    "question": "does scan_report/1 call parallel_extract/1?",
+    "question": "does scan_report/2 call parallel_extract/2?",
     "operation": "calls",
-    "slots": {"caller": "scan_report/1", "callee": "parallel_extract/1"},
+    "slots": {"caller": "scan_report/2", "callee": "parallel_extract/2"},
     "expected": {"status": "answer", "type": "yes_no", "answer": true},
-    "evidence": [{"predicate": "calls", "file": "symbolic_parse.erl", "line": 37}]
+    "evidence": [{"predicate": "calls", "file": "symbolic_parse.erl", "line": 40}]
   },
   {
     "id": "real-mcp-ambiguity-adapter",
@@ -127,19 +127,20 @@
     "operation": "calls",
     "slots": {"caller": "render_ask/1", "callee": "ambiguity_answer/1"},
     "expected": {"status": "answer", "type": "yes_no", "answer": true},
-    "evidence": [{"predicate": "calls", "file": "symbolic_serve.erl", "line": 438}]
+    "evidence": [{"predicate": "calls", "file": "symbolic_serve.erl", "line": 459}]
   },
   {
     "id": "real-atomic-snapshot-persistence-callers",
     "plan_reference": "docs/plans/typescript-type-system.md#implementation-status",
     "source": "project_src",
-    "question": "which functions call write_bundle/3?",
+    "question": "which functions call write_bundle/4?",
     "operation": "callers",
-    "slots": {"callee": "write_bundle/3"},
-    "expected": {"status": "answer", "type": "enumerate", "answer": ["maybe_store_report/2", "persist_database/3"]},
+    "slots": {"callee": "write_bundle/4"},
+    "expected": {"status": "answer", "type": "enumerate", "answer": ["maybe_store_report/2", "persist_database/3", "write_bundle/3"]},
     "evidence": [
-      {"predicate": "calls", "file": "symbolic_codebase.erl", "line": 470},
-      {"predicate": "calls", "file": "symbolic_parse.erl", "line": 394}
+      {"predicate": "calls", "file": "symbolic_codebase.erl", "line": 487},
+      {"predicate": "calls", "file": "symbolic_parse.erl", "line": 427},
+      {"predicate": "calls", "file": "symbolic_fact_store.erl", "line": 42}
     ]
   },
   {

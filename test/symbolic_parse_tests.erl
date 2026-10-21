@@ -41,6 +41,65 @@ extract_file_timed_survives_a_crashing_file_test() ->
         _ = file:del_dir_r(Root)
     end.
 
+incremental_scan_reuses_unchanged_and_replaces_changed_files_test() ->
+    Root = filename:absname(filename:join("_build", "incremental_parse_scratch")),
+    Db = filename:join(Root, "facts.dets"),
+    Source = filename:join(Root, "src"),
+    A = filename:join(Source, "a.erl"),
+    B = filename:join(Source, "b.erl"),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_dir(A),
+    ok = file:write_file(A, <<"-module(a).\nold() -> ok.\n">>),
+    ok = file:write_file(B, <<"-module(b).\nkeep() -> ok.\n">>),
+    meck:new(ts_extract, [passthrough]),
+    try
+        {ok, First} = symbolic_parse:scan_paths_report([Source, A], #{}),
+        ?assertEqual(2, length(maps:get(files, First))),
+        Cache = maps:get(file_cache, First),
+        ?assertEqual(2, map_size(Cache)),
+        ok = symbolic_fact_store:write_bundle(Db, maps:get(facts, First),
+            #{<<"complete">> => true}, Cache),
+        ?assertEqual(Cache, symbolic_file_cache:load(Db)),
+        meck:expect(ts_extract, file, fun(File) ->
+            case File of B -> error(should_have_hit_cache);
+                _ -> meck:passthrough([File]) end
+        end),
+        {ok, Unchanged} = symbolic_parse:scan_paths_report([Source], symbolic_file_cache:load(Db)),
+        ?assertEqual(maps:get(facts, First), maps:get(facts, Unchanged)),
+        ok = file:write_file(A, <<"-module(a).\nnew() -> ok.\n">>),
+        {ok, Changed} = symbolic_parse:scan_paths_report([Source], maps:get(file_cache, Unchanged)),
+        ?assertEqual([], maps:get(failed_files, Changed)),
+        ?assert(lists:any(fun(F) -> element(1, F) =:= defines andalso
+            element(2, F) =:= new end, maps:get(facts, Changed))),
+        ?assertNot(lists:any(fun(F) -> element(1, F) =:= defines andalso
+            element(2, F) =:= old end, maps:get(facts, Changed))),
+        ok = file:delete(B),
+        {ok, Deleted} = symbolic_parse:scan_paths_report([Source], maps:get(file_cache, Changed)),
+        ?assertEqual(1, map_size(maps:get(file_cache, Deleted))),
+        ?assertNot(lists:any(fun(F) -> element(1, F) =:= defines andalso
+            element(2, F) =:= keep end, maps:get(facts, Deleted)))
+    after
+        _ = (try meck:unload(ts_extract) catch _:_ -> ok end),
+        _ = file:del_dir_r(Root)
+    end.
+
+failed_extraction_does_not_cache_empty_facts_test() ->
+    Root = filename:absname(filename:join("_build", "incremental_failure_scratch")),
+    File = filename:join(Root, "bad.erl"),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_dir(File),
+    ok = file:write_file(File, <<"-module(bad).\nf() -> ok.\n">>),
+    meck:new(ts_extract, [passthrough]),
+    meck:expect(ts_extract, file, fun(_) -> error(boom) end),
+    try
+        {ok, Report} = symbolic_parse:scan_report(Root, #{}),
+        ?assertEqual([File], maps:get(failed_files, Report)),
+        ?assertEqual(#{}, maps:get(file_cache, Report))
+    after
+        meck:unload(ts_extract),
+        _ = file:del_dir_r(Root)
+    end.
+
 %% scan/1 (the side-effect-free core) is already exercised end-to-end by
 %% symbolic_codebase_tests.erl, which is the main consumer. This module
 %% covers the rest of run/2's body: maybe_store/2, print_fact/1, and
@@ -201,6 +260,29 @@ summary_reports_documented_parse_fields_test() ->
 %% filtered out of the result afterward (real files on disk, not
 %% hand-built facts — the whole point is proving the WALK, not the
 %% extractor). ---
+
+scan_skips_directory_symlinks_but_keeps_file_symlinks_test() ->
+    Scratch = filename:join(["_build", "parse_symlink_scratch"]),
+    Root = filename:join(Scratch, "root"),
+    Outside = filename:join(Scratch, "outside"),
+    _ = file:del_dir_r(Scratch),
+    ok = filelib:ensure_dir(filename:join(Root, "placeholder")),
+    ok = filelib:ensure_dir(filename:join(Outside, "placeholder")),
+    ok = file:write_file(filename:join(Root, "kept.erl"),
+        <<"-module(kept).\nf() -> ok.\n">>),
+    ok = file:write_file(filename:join(Outside, "outside.erl"),
+        <<"-module(outside).\nf() -> ok.\n">>),
+    ok = file:make_symlink(".", filename:join(Root, "loop")),
+    ok = file:make_symlink("../outside", filename:join(Root, "external")),
+    ok = file:make_symlink("kept.erl", filename:join(Root, "alias.erl")),
+    try
+        {ok, Report} = symbolic_parse:scan_report(Root),
+        ?assertEqual(true, maps:get(complete, Report)),
+        ?assertEqual(["alias.erl", "kept.erl"],
+            lists:sort([filename:basename(F) || F <- maps:get(files, Report)]))
+    after
+        _ = file:del_dir_r(Scratch)
+    end.
 
 scan_prunes_node_modules_and_a_gitignore_entry_test() ->
     Root = filename:join(["_build", "parse_scan_ignore_scratch"]),

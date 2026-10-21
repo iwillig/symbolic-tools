@@ -225,7 +225,11 @@ handle_call({parse, Dir, RulesOverride}, _From, State) ->
     safely(fun() ->
         StartMs = erlang:monotonic_time(millisecond),
         case own_config(Dir) of
-            undefined -> finish_parse(symbolic_parse:scan_report(Dir), normalize_dir(Dir), RulesOverride, StartMs, State, undefined, #{});
+            undefined ->
+                Key = normalize_dir(Dir),
+                Cache = previous_file_cache(Key, undefined, State),
+                finish_parse(symbolic_parse:scan_report(Dir, Cache), Key,
+                             RulesOverride, StartMs, State, undefined, #{});
             ConfigPath -> parse_from_config(ConfigPath, RulesOverride, StartMs, State)
         end
     end, State);
@@ -405,11 +409,19 @@ own_config(Dir) ->
 %%  A .symbolic/config.json was found — read and validate it, merge its
 %%  paths into one cache entry, and persist facts to its optional DETS
 %%  database, all keyed by the config's own project root.
+previous_file_cache(Key, undefined, State) ->
+    case maps:find(Key, maps:get(caches, State)) of
+        {ok, Entry} -> symbolic_file_cache:load_memory(maps:get(file_cache, Entry, #{}));
+        error -> #{}
+    end;
+previous_file_cache(_Key, DbPath, _State) -> symbolic_file_cache:load(DbPath).
+
 parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
     case symbolic_config:read_settings(ConfigPath) of
         {ok, Settings = #{paths := Paths, database := DbPath}} ->
             ProjectRoot = symbolic_config:project_root(ConfigPath),
-            finish_parse(symbolic_parse:scan_paths_report(Paths), ProjectRoot,
+            Cache = previous_file_cache(ProjectRoot, DbPath, State),
+            finish_parse(symbolic_parse:scan_paths_report(Paths, Cache), ProjectRoot,
                 RulesOverride, StartMs, State, DbPath,
                 #{config_file => ConfigPath,
                   typescript_settings => maps:get(typescript, Settings, undefined)});
@@ -454,10 +466,15 @@ finish_parse_report(ScanReport, CacheKey, RulesOverride, StartMs, State, DbPath,
                     %% The memory cache is a snapshot of this parse. A later
                     %% CLI write to the shared DETS file is visible after MCP
                     %% parses again, as documented in the shared-db contract.
-                    NewState = State#{
-                        caches => Caches#{CacheKey => #{erl => Erl, meta => Meta,
-                                                        facts => Facts, database => DbPath}},
-                        current => CacheKey},
+                    FileCache = case DbPath of
+                        undefined -> #{file_cache => #{version => symbolic_file_cache:version(),
+                                                        files => maps:get(file_cache, ScanReport)}};
+                        _ -> #{} %% The persisted sidecar supplies the next scan.
+                    end,
+                    Entry = maps:merge(#{erl => Erl, meta => Meta,
+                                         facts => Facts, database => DbPath}, FileCache),
+                    NewState = State#{caches => Caches#{CacheKey => Entry},
+                                      current => CacheKey},
                     {reply, {ok, Meta}, NewState};
                 {error, Reason} -> {reply, {error, Reason}, State}
             end;
@@ -467,7 +484,8 @@ finish_parse_report(ScanReport, CacheKey, RulesOverride, StartMs, State, DbPath,
 
 persist_database(undefined, _Facts, _ScanReport) -> ok;
 persist_database(DbPath, Facts, ScanReport) ->
-    case symbolic_fact_store:write_bundle(DbPath, Facts, scan_metadata(ScanReport)) of
+    case symbolic_fact_store:write_bundle(DbPath, Facts, scan_metadata(ScanReport),
+                                          maps:get(file_cache, ScanReport)) of
         ok -> ok;
         {error, Reason} -> {error, {database_write_failed, DbPath, Reason}}
     end.

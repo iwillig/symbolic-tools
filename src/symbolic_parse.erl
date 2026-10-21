@@ -3,8 +3,9 @@
 %%% JSON summary. See docs/tree-sitter-erlang.md, docs/prolog-store.md.
 -module(symbolic_parse).
 -include_lib("kernel/include/logger.hrl").
+-include_lib("kernel/include/file.hrl").
 -export([run/1, run/2, run_config/2, scan/1, scan_paths/1,
-         scan_report/1, scan_paths_report/1]).
+         scan_report/1, scan_report/2, scan_paths_report/1, scan_paths_report/2]).
 %% Exported for symbolic_parse_tests.erl only — run/1,2 halt() on every
 %% path and can't be called directly from EUnit; summary/2 and maybe_store/2
 %% are the halt-free parts of that same code worth testing in isolation.
@@ -24,7 +25,9 @@ scan(Dir) ->
     end.
 
 -spec scan_report(file:name()) -> {ok, map()} | {error, term()}.
-scan_report(Dir) ->
+scan_report(Dir) -> scan_report(Dir, #{}).
+
+scan_report(Dir, Cache) ->
     case filelib:is_dir(Dir) of
         false -> {error, {no_such_directory, Dir}};
         true ->
@@ -34,12 +37,12 @@ scan_report(Dir) ->
                     Files = scan_files(Dir),
                     ?LOG_INFO("parse: scanning ~p files under ~s", [length(Files), Dir]),
                     StartAll = erlang:monotonic_time(millisecond),
-                    {Facts, FailedFiles} = parallel_extract(Files),
+                    {Facts, FailedFiles, Entries} = parallel_extract(Files, Cache),
                     Facts1 = lists:usort(Facts),
                     ElapsedAllMs = erlang:monotonic_time(millisecond) - StartAll,
                     ?LOG_INFO("parse: finished ~s - ~p files, ~p facts, ~p ms",
                               [Dir, length(Files), length(Facts1), ElapsedAllMs]),
-                    {ok, scan_report_map([Dir], Files, Facts1, FailedFiles)}
+                    {ok, (scan_report_map([Dir], Files, Facts1, FailedFiles))#{file_cache => Entries}}
             end
     end.
 
@@ -83,24 +86,47 @@ extract_file_safely(File) ->
             {[], true}
     end.
 
-%% parallel_extract(Files) -> Facts (not usorted — every caller usorts
-%% the combined list itself).
+%% parallel_extract(Files, Cache) -> {Facts, FailedFiles, Entries}.
+%% Facts are not usorted — callers usort the combined list.
 %%  One process per file instead of lists:flatmap/2's sequential walk.
 %%  Safe to run concurrently: every ts_extract:file/1 call makes its own
 %%  fresh symbolic_ts:parser_new/0 (confirmed against every
 %%  ts_extract_*.erl module and native/symbolic_ts/src/lib.rs directly —
 %%  each parse gets its own TSParser resource; the NIF's own globals are
 %%  read-only atoms/resource-type handles set once at load time, nothing
-%%  mutable shared across calls). A crash in any one file's extraction
-%%  is re-raised in THIS process rather than silently dropped, so a bad
-%%  file still fails the whole scan exactly as it would have sequentially
-%%  — parallelizing the common (successful) case must not quietly change
-%%  what happens on the uncommon (crashing) one.
-parallel_extract(Files) ->
-    Results = parallel_map(fun extract_file_timed/1, Files),
-    Facts = lists:append([FileFacts || {_File, FileFacts, _Failed} <- Results]),
-    FailedFiles = [File || {File, _FileFacts, true} <- Results],
-    {Facts, FailedFiles}.
+%%  mutable shared across calls). A worker crash outside the per-file
+%%  extractor rescue is re-raised in the calling process.
+parallel_extract(Files, Cache) ->
+    Results = parallel_map(fun(File) -> extract_cached(File, Cache) end, Files),
+    Facts = lists:append([FileFacts || {_File, FileFacts, _Failed, _Entry} <- Results]),
+    FailedFiles = [File || {File, _FileFacts, true, _Entry} <- Results],
+    Entries = maps:from_list([{filename:absname(File), Entry} ||
+        {File, _FileFacts, false, Entry} <- Results, Entry =/= undefined]),
+    {Facts, FailedFiles, Entries}.
+
+extract_cached(File, Cache) ->
+    Key = filename:absname(File),
+    case file:read_file(File) of
+        {ok, Bytes} ->
+            Hash = crypto:hash(sha256, Bytes),
+            case maps:get(Key, Cache, undefined) of
+                #{hash := Hash, path := File, facts := Facts} when is_list(Facts) ->
+                    {File, Facts, false, #{hash => Hash, path => File, facts => Facts}};
+                _ ->
+                    {File, Facts, Failed} = extract_file_timed(File),
+                    %% A file changed during extraction: neither its old nor its
+                    %% new contents can safely be cached as this snapshot.
+                    case file:read_file(File) of
+                        {ok, After} when not Failed ->
+                            case crypto:hash(sha256, After) =:= Hash of
+                                true -> {File, Facts, false, #{hash => Hash, path => File, facts => Facts}};
+                                false -> {File, [], true, undefined}
+                            end;
+                        _ -> {File, Facts, true, undefined}
+                    end
+            end;
+        {error, _} -> {File, [], true, undefined}
+    end.
 
 %% parallel_map(Fun, Items) -> [Fun(Item)] (same order as Items).
 %%  One process per item, spawn_monitor'd; results are collected by
@@ -153,54 +179,50 @@ scan_paths(Paths) ->
     end.
 
 -spec scan_paths_report([file:name()]) -> {ok, map()} | {error, term()}.
-scan_paths_report(Paths) ->
+scan_paths_report(Paths) -> scan_paths_report(Paths, #{}).
+
+scan_paths_report(Paths, Cache) ->
     case code:ensure_loaded(symbolic_ts) of
-        {module, symbolic_ts} -> scan_each(Paths);
+        {module, symbolic_ts} -> scan_each(Paths, Cache);
         {error, Reason} -> {error, {nif_not_loadable, Reason}}
     end.
 
-%% Each path's own scan_one/1 runs in its own process too — a directory
-%% walk and a single file's extraction are both independent I/O + NIF
-%% work with no shared state between paths (same reasoning as
-%% parallel_extract/1 above; scan_one/1's own directory branch is
-%% already parallel per-file on top of this), so a config listing
-%% src/test/package.json scans all three at once instead of one after
-%% another. Merged in the ORIGINAL Paths order regardless of which
-%% finishes first (parallel_map/2's own ordering guarantee) — so "the
-%% first path with a problem" stays deterministic even though execution
-%% order isn't.
-scan_each(Paths) ->
-    Results = parallel_map(fun scan_one/1, Paths),
-    case lists:keyfind(error, 1, Results) of
+%% Discover configured paths in parallel, then extract each distinct file
+%% once. Keep the first spelling of an overlapping path: fact file atoms
+%% must match the path handed to the extractor, even for relative scans.
+scan_each(Paths, Cache) ->
+    Discovered = parallel_map(fun discover_path/1, Paths),
+    case lists:keyfind(error, 1, Discovered) of
         {error, _Reason} = Error -> Error;
         false ->
-            Reports = [Report || {ok, Report} <- Results],
-            Files = lists:append([maps:get(files, R) || R <- Reports]),
-            Facts = lists:usort(lists:append([maps:get(facts, R) || R <- Reports])),
-            FailedFiles = lists:append([maps:get(failed_files, R) || R <- Reports]),
-            {ok, scan_report_map(Paths, Files, Facts, FailedFiles)}
+            Files = unique_files([F || {ok, Group} <- Discovered, F <- Group]),
+            {Facts, FailedFiles, Entries} = parallel_extract(Files, Cache),
+            {ok, (scan_report_map(Paths, Files, lists:usort(Facts), FailedFiles))
+                 #{file_cache => Entries}}
     end.
 
-scan_one(Path) ->
+unique_files(Files) ->
+    {_Seen, Reversed} = lists:foldl(fun(File, {Seen, Acc}) ->
+        Key = filename:absname(File),
+        case maps:is_key(Key, Seen) of
+            true -> {Seen, Acc};
+            false -> {Seen#{Key => true}, [File | Acc]}
+        end
+    end, {#{}, []}, Files),
+    lists:reverse(Reversed).
+
+discover_path(Path) ->
     case filelib:is_dir(Path) of
-        true ->
-            Files = scan_files(Path),
-            {Facts, FailedFiles} = parallel_extract(Files),
-            {ok, #{files => Files, facts => lists:usort(Facts), failed_files => FailedFiles}};
+        true -> {ok, scan_files(Path)};
         false ->
             case filelib:is_regular(Path) of
-                true -> scan_one_file(Path);
-                false -> {error, {no_such_path, Path}}
+                false -> {error, {no_such_path, Path}};
+                true ->
+                    case lists:member(filename:extension(Path), ?SCAN_EXTENSIONS) of
+                        true -> {ok, [Path]};
+                        false -> {error, {unsupported_file, Path}}
+                    end
             end
-    end.
-
-scan_one_file(Path) ->
-    case lists:member(filename:extension(Path), ?SCAN_EXTENSIONS) of
-        true ->
-            {File, Facts, Failed} = extract_file_timed(Path),
-            FailedFiles = case Failed of true -> [File]; false -> [] end,
-            {ok, #{files => [Path], facts => Facts, failed_files => FailedFiles}};
-        false -> {error, {unsupported_file, Path}}
     end.
 
 scan_report_map(Paths, Files, Facts, FailedFiles) ->
@@ -238,9 +260,17 @@ walk_entry(AbsDir, RelDir, Entry, Rules) ->
     end,
     case filelib:is_dir(AbsPath) of
         true ->
-            case symbolic_gitignore:ignored(RelPath, true, Rules) of
-                true -> [];
-                false -> walk(AbsPath, RelPath, Rules)
+            %% filelib:is_dir/1 follows symlinks. Do not descend through a
+            %% link to a parent (a cycle) or to a directory outside the
+            %% configured root. File symlinks retain their existing behavior.
+            case file:read_link_info(AbsPath) of
+                {ok, #file_info{type = symlink}} -> [];
+                {ok, _} ->
+                    case symbolic_gitignore:ignored(RelPath, true, Rules) of
+                        true -> [];
+                        false -> walk(AbsPath, RelPath, Rules)
+                    end;
+                {error, _} -> []
             end;
         false ->
             case symbolic_gitignore:ignored(RelPath, false, Rules)
@@ -258,7 +288,7 @@ run(Dir) ->
 %% returns a plain term, and error_message/1 below turns that term into
 %% the exact text printed, so both are directly testable without it.
 run(Dir, DbPath) ->
-    case scan_report(Dir) of
+    case scan_report(Dir, cache_for_db(DbPath)) of
         {ok, Report} -> complete_parse(Report, Dir, undefined, DbPath);
         {error, Reason} ->
             io:put_chars(standard_error, error_message(Reason)),
@@ -308,8 +338,11 @@ resolve_config(undefined) ->
 choose_db(undefined, ConfigDb) -> ConfigDb;
 choose_db(DbPath, _ConfigDb) -> DbPath.
 
+cache_for_db(undefined) -> #{};
+cache_for_db(DbPath) -> symbolic_file_cache:load(DbPath).
+
 run_paths(Paths, DbPath, ScopeRoot, TypeScriptSettings) ->
-    case scan_paths_report(Paths) of
+    case scan_paths_report(Paths, cache_for_db(DbPath)) of
         {ok, Report} -> complete_parse(Report, ScopeRoot, TypeScriptSettings, DbPath);
         {error, Reason} -> halt_error(Reason)
     end.
@@ -391,7 +424,8 @@ maybe_store_report(DbPath, Report) ->
             || Path <- maps:get(failed_files, Report)],
         <<"typescript_analysis">> => symbolic_ts_project:summary_json(
             maps:get(type_analysis, Report))},
-    symbolic_fact_store:write_bundle(DbPath, maps:get(facts, Report), Metadata).
+    symbolic_fact_store:write_bundle(DbPath, maps:get(facts, Report), Metadata,
+                                     maps:get(file_cache, Report)).
 
 print_summary_report(Report) ->
     Base = summary(maps:get(files, Report), maps:get(facts, Report)),

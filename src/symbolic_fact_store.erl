@@ -12,7 +12,7 @@
 %%% `defines/3` fact directly — a free index by predicate, no wrapping
 %%% needed. `read/1` just wants the whole fact set back, via `foldl`.
 -module(symbolic_fact_store).
--export([write/2, write_bundle/3, read/1, write_metadata/2, read_metadata/1, delete_metadata/1]).
+-export([write/2, write_bundle/3, write_bundle/4, read/1, write_metadata/2, read_metadata/1, delete_metadata/1]).
 
 %% `symbolic parse` fully regenerates the fact set every run (it's a
 %% deterministic function of the source files), so a write replaces
@@ -28,23 +28,49 @@ write(Path, Facts) ->
         ok = dets:sync(Table)
     after
         ok = dets:close(Table)
-    end.
+    end,
+    %% A direct legacy write cannot leave metadata claiming that an old
+    %% per-file sidecar belongs to the newly written fact snapshot.
+    ok = delete_metadata(Path),
+    _ = file:delete(symbolic_file_cache:path(Path)),
+    ok.
 
 %% Stage the facts and metadata before replacing either persisted snapshot.
 %% A failed stage or rename leaves the previous database/metadata pair intact.
 -spec write_bundle(file:filename(), [tuple()], map()) -> ok | {error, term()}.
 write_bundle(Path, Facts, Metadata) ->
+    write_bundle(Path, Facts, Metadata, undefined).
+
+%% The file cache is installed in the same rollback-protected bundle as the
+%% query snapshot. Older callers without a cache invalidate any old sidecar.
+write_bundle(Path, Facts, Metadata, FileCache) ->
     Suffix = ".stage." ++ integer_to_list(erlang:unique_integer([positive, monotonic])),
     StagedDb = Path ++ Suffix,
     StagedMeta = metadata_path(StagedDb),
+    Id = crypto:strong_rand_bytes(16),
+    CachePairs = case FileCache of
+        undefined -> [];
+        _ -> [{symbolic_file_cache:path(StagedDb), symbolic_file_cache:path(Path)}]
+    end,
+    Metadata1 = case FileCache of
+        undefined -> maps:remove(<<"file_cache_id">>, Metadata);
+        _ -> Metadata#{<<"file_cache_id">> => binary:encode_hex(Id)}
+    end,
     try
         ok = filelib:ensure_dir(Path),
         ok = write(StagedDb, Facts),
-        ok = write_metadata(StagedDb, Metadata),
-        case replace_bundle([{StagedDb, Path}, {StagedMeta, metadata_path(Path)}]) of
+        ok = write_metadata(StagedDb, Metadata1),
+        case FileCache of
+            undefined -> ok;
+            _ -> ok = symbolic_file_cache:write_stage(StagedDb,
+                maps:get(<<"file_cache_id">>, Metadata1), FileCache)
+        end,
+        case replace_bundle([{StagedDb, Path}, {StagedMeta, metadata_path(Path)}] ++ CachePairs) of
             ok ->
-                %% The text index is a disposable cache. If rebuilding fails,
-                %% remove any old index so it cannot masquerade as current.
+                case FileCache of
+                    undefined -> _ = file:delete(symbolic_file_cache:path(Path));
+                    _ -> ok
+                end,
                 refresh_text_index(Path, Facts);
             Error -> Error
         end
@@ -53,7 +79,8 @@ write_bundle(Path, Facts, Metadata) ->
     after
         _ = file:delete(StagedDb),
         _ = file:delete(StagedMeta),
-        _ = file:delete(StagedMeta ++ ".tmp")
+        _ = file:delete(StagedMeta ++ ".tmp"),
+        _ = file:delete(symbolic_file_cache:path(StagedDb))
     end.
 
 refresh_text_index(Path, Facts) ->

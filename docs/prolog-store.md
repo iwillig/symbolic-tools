@@ -138,8 +138,9 @@ esqlite:exec(Db,
 
 Reach for it **only** when you need one or more of:
 
-- **Incremental updates** — re-parse only changed files and merge, instead of a
-  full rebuild.
+- **Incremental database updates** — merge changed fact rows in place rather
+  than assembling and replacing a full snapshot. Per-file syntax extraction
+  reuse is now implemented on DETS; see [incremental-parsing.md](incremental-parsing.md).
 - **SQL directly** — some questions are easier as SQL than Prolog.
 - **Durability + indexing across restarts**, shared across many processes.
 
@@ -181,8 +182,9 @@ on-disk option:
 
 - **`symbolic_fact_store.erl`** — a thin wrapper around a **DETS `bag`
   table**. `write/2` replaces the whole table's contents (parse output is
-  a deterministic function of the source files, so each run fully
-  regenerates it, not an incremental merge); `read/1` folds the table back
+  assembled from cached unchanged-file extraction records plus freshly
+  extracted changed files; each run still replaces the full DETS snapshot,
+  not an incremental database merge); `read/1` folds the table back
   into a plain fact list. Facts are stored **as-is** — a fact tuple's own
   first element (`defines`, `calls`, `comment`, ...) doubles as its DETS
   key, so `dets:lookup(Table, defines)` already returns every `defines/5`

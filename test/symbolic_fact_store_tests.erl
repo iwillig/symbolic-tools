@@ -71,6 +71,29 @@ write_bundle_stage_failure_preserves_the_previous_snapshot_test() ->
         cleanup(Path)
     end.
 
+file_cache_follows_bundle_commit_and_metadata_identity_test() ->
+    Path = tmp_path(),
+    A = #{"a.erl" => #{hash => <<1>>, path => "a.erl", facts => [{defines, a, 0}]}},
+    B = #{"b.erl" => #{hash => <<2>>, path => "b.erl", facts => [{defines, b, 0}]}},
+    try
+        ok = symbolic_fact_store:write_bundle(Path, [{defines, a, 0}], #{}, A),
+        ?assertEqual(A, symbolic_file_cache:load(Path)),
+        ?assertMatch({error, {snapshot_stage_failed, _, _}},
+            symbolic_fact_store:write_bundle(Path, [not_a_fact_tuple], #{}, B)),
+        ?assertEqual(A, symbolic_file_cache:load(Path)),
+        ok = symbolic_fact_store:write_bundle(Path, [{defines, b, 0}], #{}, B),
+        ?assertEqual(B, symbolic_file_cache:load(Path)),
+        ok = symbolic_fact_store:write_metadata(Path, #{<<"file_cache_id">> => <<"stale">>}),
+        ?assertEqual(#{}, symbolic_file_cache:load(Path)),
+        ok = symbolic_fact_store:write_bundle(Path, [], #{}),
+        ?assertEqual(#{}, symbolic_file_cache:load(Path)),
+        ok = symbolic_fact_store:write_bundle(Path, [{defines, a, 0}], #{}, A),
+        ok = symbolic_fact_store:write(Path, [{defines, b, 0}]),
+        ?assertEqual(#{}, symbolic_file_cache:load(Path))
+    after
+        cleanup(Path)
+    end.
+
 cleanup(Path) ->
     lists:foreach(fun(File) -> _ = file:delete(File) end,
                   filelib:wildcard(Path ++ "*")),
