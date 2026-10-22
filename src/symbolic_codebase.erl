@@ -346,13 +346,9 @@ resolve_cache_entry(Path, State) ->
 normalize_dir(Dir) ->
     filename:absname(Dir).
 
-%% A fresh erlog state with every fact asserted. Same asserta pattern as
-%% prolog_session:load_facts/2's handle_call (asserta is O(1); facts have no
-%% order-dependent meaning, only backtracking order). When RulesPath is
-%% resolved, the same derived-predicate library the CLI consults
-%% (prolog_session:consult/2) is consulted here too, via the same
-%% erlog:consult/2 primitive, so `undefined`/RulesPath's absence is the
-%% only difference from a facts-only cache.
+%% A fresh erlog state loaded through the same bulk loader as the CLI.
+%% When RulesPath is resolved, the same derived-predicate library the CLI
+%% consults is consulted here too through erlog:consult/2.
 build_state(Facts, RulesPath) ->
     {ok, Erl0} = erlog:new(),
     %% Same native-builtin layering prolog_session:init/1 does — see
@@ -360,12 +356,7 @@ build_state(Facts, RulesPath) ->
     %% codebase need it independently; erlog:new/0 itself has no way to
     %% take extra library modules.
     {ok, Erl} = erlog:load(symbolic_prolog_lib, Erl0),
-    Erl1 = lists:foldl(
-        fun(Fact, ErlAcc) ->
-            {{succeed, _}, ErlAcc1} = erlog:prove({asserta, Fact}, ErlAcc),
-            ErlAcc1
-        end, Erl, Facts),
-    consult_rules(Erl1, RulesPath).
+    consult_rules(symbolic_fact_loader:load(Erl, Facts), RulesPath).
 
 consult_rules(Erl, undefined) -> {ok, Erl};
 consult_rules(Erl, RulesPath) -> erlog:consult(RulesPath, Erl).

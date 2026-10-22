@@ -138,7 +138,7 @@
     "slots": {"callee": "write_bundle/4"},
     "expected": {"status": "answer", "type": "enumerate", "answer": ["maybe_store_report/2", "persist_database/3", "write_bundle/3"]},
     "evidence": [
-      {"predicate": "calls", "file": "symbolic_codebase.erl", "line": 490},
+      {"predicate": "calls", "file": "symbolic_codebase.erl", "line": 481},
       {"predicate": "calls", "file": "symbolic_parse.erl", "line": 427},
       {"predicate": "calls", "file": "symbolic_fact_store.erl", "line": 42}
     ]

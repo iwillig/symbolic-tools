@@ -36,21 +36,12 @@ consult(Pid, File) ->
 consult_string(Pid, ProgramText) ->
     gen_server:call(Pid, {consult_string, ProgramText}).
 
-%% Assert a pre-built list of fact tuples directly into the session's
-%% database — no text parsing, unlike consult/2 or consult_string/2 (see
-%% symbolic_fact_store.erl, which is where such a list normally comes
-%% from: a DETS-backed fact database written to the configured store by `symbolic parse`).
-%% Uses `asserta`, not `assertz`: order is irrelevant for pure facts (it
-%% only affects backtracking order, never correctness), and
-%% erlog_db_dict's assertz_clause/4 appends via `Cs ++ [_]` — O(N) per
-%% call, so assertz-ing thousands of facts sharing one predicate would
-%% be O(N^2). asserta prepends in O(1) (confirmed by reading
-%% erlog_int.erl/erlog_db_dict.erl directly, not assumed).
+%% Assert extracted, ground fact tuples into the session's default dict
+%% database with symbolic_fact_loader. No text parsing or Prolog goal
+%% evaluation per fact; asserta order and clause tags are preserved.
 -spec load_facts(pid(), [tuple()]) -> ok.
-%% Assert a whole fact list into the session, front-loaded through
-%% `asserta` (order-irrelevant for pure facts, O(1) per call — see the
-%% longer comment above for why assertz would have been O(N^2) here).
-%% This is how a parse's DETS facts become queryable.
+%% Load a whole fact list into the session. This is how a parse's DETS
+%% facts become queryable.
 load_facts(Pid, Facts) ->
     gen_server:call(Pid, {load_facts, Facts}, infinity).
 
@@ -120,15 +111,7 @@ handle_call({consult_string, ProgramText}, _From, Erl) ->
         file:delete(TmpFile)
     end;
 handle_call({load_facts, Facts}, _From, Erl) ->
-    Erl1 = lists:foldl(
-        fun(Fact, ErlAcc) ->
-            {{succeed, _}, ErlAcc1} = erlog:prove({asserta, Fact}, ErlAcc),
-            ErlAcc1
-        end,
-        Erl,
-        Facts
-    ),
-    {reply, ok, Erl1};
+    {reply, ok, symbolic_fact_loader:load(Erl, Facts)};
 handle_call({query, GoalString, TimeoutMs}, _From, Erl) ->
     case parse_goal(GoalString) of
         {ok, Goal} ->
