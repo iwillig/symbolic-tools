@@ -62,6 +62,7 @@ codebase_test_() ->
         fun parse_reports_erlang_by_extension/1,
         fun parse_discovers_and_consults_scratch_rules/1,
         fun parse_rules_override_takes_precedence_over_discovery/1,
+        fun parse_with_unreadable_directory_keeps_cache_and_database/1,
         fun parse_with_broken_rules_is_error_and_leaves_cache_untouched/1,
         fun parse_crash_is_an_error_and_leaves_cache_and_process_untouched/1,
         fun fixtures_parse_picks_up_the_real_project_rules_file/1,
@@ -344,6 +345,36 @@ parse_with_broken_rules_is_error_and_leaves_cache_untouched(_Setup) ->
         ?assertMatch({error, {rules_error, "no/such/rules_zz.pl", _}}, Result),
         {ok, StillGoodMeta} = symbolic_codebase:overview(),
         ?assertEqual(GoodMeta, StillGoodMeta)
+    end.
+
+parse_with_unreadable_directory_keeps_cache_and_database(_Setup) ->
+    fun() ->
+        with_scratch_config_codebase(fun(Root, ConfigPath) ->
+            DbPath = filename:join([Root, ".symbolic", "facts.dets"]),
+            TestDir = filename:join(Root, "test"),
+            ok = file:write_file(ConfigPath,
+                <<"{\"paths\": [\"src\", \"test\"], "
+                  "\"database\": \".symbolic/facts.dets\"}">>),
+            {ok, OldMeta} = symbolic_codebase:parse(Root),
+            {ok, OldSnapshot} = file:read_file(DbPath),
+            ?assertMatch({ok, [_]}, symbolic_codebase:query(
+                "defines(run, 0, _, _, _)", 50, Root)),
+            meck:new(file, [passthrough, unstick]),
+            meck:expect(file, list_dir, fun(Path) ->
+                case filename:absname(Path) of
+                    TestDir -> {error, eacces};
+                    _ -> meck:passthrough([Path])
+                end
+            end),
+            try
+                ?assertEqual({error, {cannot_list_directory, TestDir, eacces}},
+                             symbolic_codebase:parse(Root)),
+                ?assertEqual({ok, OldMeta}, symbolic_codebase:overview(Root)),
+                ?assertMatch({ok, [_]}, symbolic_codebase:query(
+                    "defines(run, 0, _, _, _)", 50, Root)),
+                ?assertEqual({ok, OldSnapshot}, file:read_file(DbPath))
+            after meck:unload(file) end
+        end)
     end.
 
 %% Issue #4's structural fix: a crash ANYWHERE during a `parse` call —

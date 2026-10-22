@@ -173,6 +173,7 @@ serve_test_() ->
         fun query_before_parse_is_friendly_error/1,
         fun parse_reports_summary/1,
         fun parse_logs_incomplete_scan/1,
+        fun parse_directory_listing_failure_is_friendly_error/1,
         fun parse_uses_only_configured_paths/1,
         fun parse_persists_configured_database/1,
         fun parse_without_project_config_is_friendly_error/1,
@@ -242,6 +243,25 @@ wait_for_incomplete_parse_log() ->
                 _ -> Message
             end
     after 1000 -> error(missing_incomplete_parse_log)
+    end.
+
+parse_directory_listing_failure_is_friendly_error(#{root := Root}) ->
+    fun() ->
+        Target = filename:absname(filename:join([Root, "..", "..", "test", "fixtures"])),
+        meck:new(file, [passthrough, unstick]),
+        meck:expect(file, list_dir, fun(Path) ->
+            case filename:absname(Path) of
+                Target -> {error, eacces};
+                _ -> meck:passthrough([Path])
+            end
+        end),
+        try
+            Json = decode(symbolic_serve:handle_parse(#{})),
+            Error = maps:get(<<"error">>, Json),
+            ?assertNotEqual(nomatch, binary:match(Error, <<"cannot list directory">>)),
+            ?assertNotEqual(nomatch, binary:match(Error, <<"eacces">>)),
+            ?assertNotEqual(nomatch, binary:match(Error, <<"last good snapshot is unchanged">>))
+        after meck:unload(file) end
     end.
 
 parse_uses_only_configured_paths(Setup) ->

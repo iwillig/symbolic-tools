@@ -18,9 +18,11 @@ its JSON summary on stdout; unexpected CLI crashes also print a short error
 to stderr and exit nonzero. The MCP server logs an incomplete-scan summary in
 `serve.log`
 under Erlang's platform user log directory for `symbolic` (the directory
-returned by `filename:basedir(user_log, "symbolic")`). A partial scan still
-returns a result; do not treat absent facts as proof that skipped files lack
-them. A fatal MCP parse error leaves the previous in-memory cache untouched.
+returned by `filename:basedir(user_log, "symbolic")`). A file-level partial scan still returns a result; do not treat absent facts
+as proof that skipped files lack them. If a configured directory cannot be
+listed or inspected during discovery, the entire parse fails with its path
+and reason. No partial discovery replaces the last good in-memory cache or
+configured database snapshot.
 
 For a configured database, the cache lives at `<database>.files_cache`. It is
 staged and installed with the DETS facts and scan metadata, and its random

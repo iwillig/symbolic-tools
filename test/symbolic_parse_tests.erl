@@ -41,6 +41,56 @@ extract_file_timed_survives_a_crashing_file_test() ->
         _ = file:del_dir_r(Root)
     end.
 
+unreadable_subdirectory_never_reports_complete_test() ->
+    Root = filename:absname(filename:join("_build", "parse_unreadable_dir_scratch")),
+    Unreadable = filename:join(Root, "hidden"),
+    Good = filename:join(Root, "good.erl"),
+    Hidden = filename:join(Unreadable, "hidden.erl"),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_dir(Hidden),
+    ok = file:write_file(Good, <<"-module(good).\nf() -> ok.\n">>),
+    ok = file:write_file(Hidden, <<"-module(hidden).\nf() -> ok.\n">>),
+    meck:new(file, [passthrough, unstick]),
+    meck:expect(file, list_dir, fun(Path) ->
+        case Path of
+            Unreadable -> {error, eacces};
+            _ -> meck:passthrough([Path])
+        end
+    end),
+    try
+        ?assertEqual({error, {cannot_list_directory, Unreadable, eacces}},
+                     symbolic_parse:scan_report(Root)),
+        ?assertEqual({error, {cannot_list_directory, Unreadable, eacces}},
+                     symbolic_parse:scan_paths_report([Root]))
+    after
+        meck:unload(file),
+        _ = file:del_dir_r(Root)
+    end.
+
+uninspectable_subdirectory_aborts_scan_test() ->
+    Root = filename:absname(filename:join("_build", "parse_uninspectable_dir_scratch")),
+    Dir = filename:join(Root, "hidden"),
+    File = filename:join(Dir, "hidden.erl"),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_dir(File),
+    ok = file:write_file(File, <<"-module(hidden).\nf() -> ok.\n">>),
+    meck:new(file, [passthrough, unstick]),
+    meck:expect(file, read_link_info, fun(Path) ->
+        case Path of
+            Dir -> {error, eacces};
+            _ -> meck:passthrough([Path])
+        end
+    end),
+    try
+        ?assertEqual({error, {cannot_inspect_directory, Dir, eacces}},
+                     symbolic_parse:scan_report(Root)),
+        ?assertEqual({error, {cannot_inspect_directory, Dir, eacces}},
+                     symbolic_parse:scan_paths_report([Root]))
+    after
+        meck:unload(file),
+        _ = file:del_dir_r(Root)
+    end.
+
 unreadable_file_logs_path_and_reason_test() ->
     Root = filename:absname(filename:join("_build", "parse_read_failure_scratch")),
     File = filename:join(Root, "bad.erl"),
@@ -179,6 +229,13 @@ failed_extraction_does_not_cache_empty_facts_test() ->
 %% error_message/1 (the exact text printed for each scan/1 error, pulled
 %% out specifically so it's assertable without calling run/2 itself,
 %% which halt()s on every path).
+
+error_message_directory_failure_test() ->
+    Text = lists:flatten(symbolic_parse:error_message(
+        {cannot_list_directory, "/project/hidden", eacces})),
+    ?assert(string:find(Text, "/project/hidden") =/= nomatch),
+    ?assert(string:find(Text, "eacces") =/= nomatch),
+    ?assert(string:find(Text, "snapshot unchanged") =/= nomatch).
 
 error_message_no_such_directory_test() ->
     Text = lists:flatten(symbolic_parse:error_message({no_such_directory, "no/such/dir"})),

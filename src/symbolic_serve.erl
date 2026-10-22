@@ -89,8 +89,10 @@ register_tools() ->
           "call parse again to refresh it. Run one MCP server per project. "
           "Returns a summary of the parsed project, including its root, "
           "file and fact counts, configured database, and discovered rules "
-          "file. A failed parse leaves any previous cache unchanged. "
-          "Check scan_complete and failed_files: a scan can succeed while "
+          "file. A failed parse leaves any previous cache unchanged; "
+          "unreadable directories fail discovery rather than silently "
+          "publishing a partial snapshot. Check scan_complete and "
+          "failed_files: a scan can succeed while "
           "skipping files. Parse errors go to symbolic/serve.log under the "
           "platform user log directory. After parsing, use overview for "
           "raw fact counts and rules_file; "
@@ -657,6 +659,14 @@ version_json() ->
 %% for a non-existent predicate coming back corrupted rather than crashing.
 parse_error_str({no_such_directory, Dir}) ->
     <<"no such directory: ", (jstr(Dir))/binary>>;
+parse_error_str({cannot_list_directory, Dir, Reason}) ->
+    iolist_to_binary([<<"cannot list directory ">>, jstr(Dir), <<": ">>,
+                       jstr(io_lib:format("~p", [Reason])),
+                       <<" - parse failed; the last good snapshot is unchanged">>]);
+parse_error_str({cannot_inspect_directory, Dir, Reason}) ->
+    iolist_to_binary([<<"cannot inspect directory ">>, jstr(Dir), <<": ">>,
+                       jstr(io_lib:format("~p", [Reason])),
+                       <<" - parse failed; the last good snapshot is unchanged">>]);
 parse_error_str({nif_not_loadable, _Reason}) ->
     <<"the tree-sitter NIF (symbolic_ts) isn't loadable in this build - "
       "run via a `rebar3 release`; see docs/cli-erlang.md">>;

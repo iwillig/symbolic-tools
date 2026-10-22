@@ -34,15 +34,19 @@ scan_report(Dir, Cache) ->
             case code:ensure_loaded(symbolic_ts) of
                 {error, Reason} -> {error, {nif_not_loadable, Reason}};
                 {module, symbolic_ts} ->
-                    Files = scan_files(Dir),
-                    ?LOG_INFO("parse: scanning ~p files under ~s", [length(Files), Dir]),
-                    StartAll = erlang:monotonic_time(millisecond),
-                    {Facts, FailedFiles, Entries} = parallel_extract(Files, Cache),
-                    Facts1 = lists:usort(Facts),
-                    ElapsedAllMs = erlang:monotonic_time(millisecond) - StartAll,
-                    ?LOG_INFO("parse: finished ~s - ~p files, ~p facts, ~p ms",
-                              [Dir, length(Files), length(Facts1), ElapsedAllMs]),
-                    {ok, (scan_report_map([Dir], Files, Facts1, FailedFiles))#{file_cache => Entries}}
+                    case scan_files(Dir) of
+                        {error, _} = Error -> Error;
+                        {ok, Files} ->
+                            ?LOG_INFO("parse: scanning ~p files under ~s", [length(Files), Dir]),
+                            StartAll = erlang:monotonic_time(millisecond),
+                            {Facts, FailedFiles, Entries} = parallel_extract(Files, Cache),
+                            Facts1 = lists:usort(Facts),
+                            ElapsedAllMs = erlang:monotonic_time(millisecond) - StartAll,
+                            ?LOG_INFO("parse: finished ~s - ~p files, ~p facts, ~p ms",
+                                      [Dir, length(Files), length(Facts1), ElapsedAllMs]),
+                            {ok, (scan_report_map([Dir], Files, Facts1, FailedFiles))
+                                 #{file_cache => Entries}}
+                    end
             end
     end.
 
@@ -226,7 +230,7 @@ unique_files(Files) ->
 
 discover_path(Path) ->
     case filelib:is_dir(Path) of
-        true -> {ok, scan_files(Path)};
+        true -> scan_files(Path);
         false ->
             case filelib:is_regular(Path) of
                 false -> {error, {no_such_path, Path}};
@@ -253,7 +257,11 @@ scan_report_map(Paths, Files, Facts, FailedFiles) ->
 %% header for exactly what is and isn't supported).
 scan_files(Dir) ->
     Rules = symbolic_gitignore:load(Dir),
-    walk(Dir, "", Rules).
+    try {ok, walk(Dir, "", Rules)}
+    catch
+        throw:{cannot_list_directory, _, _} = Reason -> {error, Reason};
+        throw:{cannot_inspect_directory, _, _} = Reason -> {error, Reason}
+    end.
 
 walk(AbsDir, RelDir, Rules) ->
     case file:list_dir(AbsDir) of
@@ -262,9 +270,9 @@ walk(AbsDir, RelDir, Rules) ->
                 fun(Entry) -> walk_entry(AbsDir, RelDir, Entry, Rules) end,
                 lists:sort(Entries));
         {error, Reason} ->
-            ?LOG_ERROR("parse: could not list directory ~s (~p); skipping it",
+            ?LOG_ERROR("parse: could not list directory ~s (~p); aborting scan",
                        [AbsDir, Reason]),
-            []
+            throw({cannot_list_directory, AbsDir, Reason})
     end.
 
 walk_entry(AbsDir, RelDir, Entry, Rules) ->
@@ -286,9 +294,9 @@ walk_entry(AbsDir, RelDir, Entry, Rules) ->
                         false -> walk(AbsPath, RelPath, Rules)
                     end;
                 {error, Reason} ->
-                    ?LOG_ERROR("parse: could not inspect ~s (~p); skipping it",
+                    ?LOG_ERROR("parse: could not inspect ~s (~p); aborting scan",
                                [AbsPath, Reason]),
-                    []
+                    throw({cannot_inspect_directory, AbsPath, Reason})
             end;
         false ->
             case symbolic_gitignore:ignored(RelPath, false, Rules)
@@ -412,6 +420,12 @@ halt_error(Reason) ->
 
 error_message({no_such_directory, Dir}) ->
     io_lib:format("parse: no such directory: ~s~n", [Dir]);
+error_message({cannot_list_directory, Dir, Reason}) ->
+    io_lib:format("parse: cannot list directory ~s: ~p; last good snapshot unchanged~n",
+                  [Dir, Reason]);
+error_message({cannot_inspect_directory, Dir, Reason}) ->
+    io_lib:format("parse: cannot inspect directory ~s: ~p; last good snapshot unchanged~n",
+                  [Dir, Reason]);
 error_message({no_such_path, Path}) ->
     io_lib:format("parse: no such file or directory: ~s~n", [Path]);
 error_message({unsupported_file, Path}) ->
