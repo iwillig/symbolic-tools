@@ -37,3 +37,27 @@ facts had no Prolog variables (`erlog:vars_in/1`).
 The remaining costs are about one second each for DETS read and the absent
 proof. Changing storage or adding a literal index would be a separate design
 decision, not implied by this benchmark.
+
+## Session-owned DETS read: memory follow-up
+
+The original CLI read the whole fact list in its caller and sent it to the
+Prolog session, copying it between Erlang process heaps. The session now
+reads DETS itself, so the temporary list lives only in the loading process.
+The timeout worker remains in place.
+
+In a fresh-VM A/B comparison on the same `common` snapshot and absent-needle
+goal above, two runs of the committed loader peaked at 2.21–2.22 GB RSS;
+two runs with the session-owned read peaked at 1.86–1.89 GB RSS. Wall times
+were 3.57–3.99 s before and 3.18–3.93 s after. The A/B used the committed
+`prolog_session` and `symbolic_query` beams in a temporary directory as the
+control, alternating control and changed beams with the same CLI entry point.
+No fact database was rewritten. These runs show a repeatable memory reduction,
+not a stable wall-time claim.
+
+A stage probe using Erlang `timer:tc/1`, `erlang:memory/0`, and
+`process_info/2` found the owner process at about 292 MB after loading rules
+but about 1.1 GB after a failed query. The query worker still copies the
+session's state, then sends an erlog state back to the owner. A more invasive
+change to that timeout/result protocol needs separate measurement and a
+semantic review (including queries with side effects); this follow-up leaves
+it unchanged.

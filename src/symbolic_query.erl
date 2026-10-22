@@ -5,8 +5,8 @@
 %%%
 %%% Facts used to be consulted from a `.pl` text file the same way rules
 %%% are; now they come from a DETS-backed symbolic_fact_store.erl
-%%% database instead, asserted directly as Erlang terms
-%%% (prolog_session:load_facts/2) with no text parsing involved. `--rules`
+%%% database instead, loaded inside the session as Erlang terms
+%%% (prolog_session:load_database/2) with no text parsing involved. `--rules`
 %%% keeps the door open for hand-written derived rules (e.g.
 %%% docs/lint-queries.md's rule library) via the ordinary text-based
 %%% prolog_session:consult/2 — that path isn't buggy (it's real Prolog
@@ -97,9 +97,8 @@ run_result(DbPath, RulesPath, Goal) ->
     end.
 
 run_checked(DbPath, RulesPath, Goal) ->
-    Facts = symbolic_fact_store:read(DbPath),
     {ok, Pid} = prolog_session:start_link(),
-    ok = prolog_session:load_facts(Pid, Facts),
+    ok = prolog_session:load_database(Pid, DbPath),
     Result =
         case maybe_consult_rules(Pid, RulesPath) of
             ok -> query_result(Pid, Goal);

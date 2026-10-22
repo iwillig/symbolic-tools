@@ -84,6 +84,21 @@ undefined_predicate_test() ->
 %% parsing, so a binary value with an embedded quote (the exact shape
 %% that broke erlog_io:writeq1/1-based round trips) needs no escaping
 %% at all to load and query correctly.
+load_database_reads_and_queries_in_session_test() ->
+    Db = filename:join("_build", "prolog_session_database_test.dets"),
+    Facts = [{sample, <<"first">>}, {sample, <<"second">>}],
+    ok = symbolic_fact_store:write(Db, Facts),
+    {ok, Pid} = prolog_session:start_link(),
+    try
+        ?assertEqual(ok, prolog_session:load_database(Pid, Db)),
+        ?assertMatch({ok, _}, prolog_session:query(Pid, "sample(Value)")),
+        ?assertEqual(no_solution,
+            prolog_session:query(Pid, "sample(\"absent\")"))
+    after
+        prolog_session:stop(Pid),
+        file:delete(Db)
+    end.
+
 load_facts_and_query_test() ->
     {ok, Pid} = prolog_session:start_link(),
     ok = prolog_session:load_facts(Pid, [

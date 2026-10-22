@@ -5,7 +5,8 @@
 -module(prolog_session).
 -behaviour(gen_server).
 
--export([start_link/0, consult/2, consult_string/2, load_facts/2, query/2, query/3, stop/1]).
+-export([start_link/0, consult/2, consult_string/2, load_facts/2,
+         load_database/2, query/2, query/3, stop/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
 
 -define(QUERY_TIMEOUT_MS, 5000).
@@ -44,6 +45,13 @@ consult_string(Pid, ProgramText) ->
 %% facts become queryable.
 load_facts(Pid, Facts) ->
     gen_server:call(Pid, {load_facts, Facts}, infinity).
+
+%% A one-shot CLI query can read DETS in the session process instead of
+%% copying a large fact list from the CLI process into the session mailbox.
+%% This keeps the reader's temporary list on the same heap as the loader.
+-spec load_database(pid(), file:filename()) -> ok.
+load_database(Pid, Path) ->
+    gen_server:call(Pid, {load_database, Path}, infinity).
 
 -spec query(pid(), string()) ->
     {ok, [{atom(), term()}]} | no_solution | {error, term()}.
@@ -111,6 +119,9 @@ handle_call({consult_string, ProgramText}, _From, Erl) ->
         file:delete(TmpFile)
     end;
 handle_call({load_facts, Facts}, _From, Erl) ->
+    {reply, ok, symbolic_fact_loader:load(Erl, Facts)};
+handle_call({load_database, Path}, _From, Erl) ->
+    Facts = symbolic_fact_store:read(Path),
     {reply, ok, symbolic_fact_loader:load(Erl, Facts)};
 handle_call({query, GoalString, TimeoutMs}, _From, Erl) ->
     case parse_goal(GoalString) of
