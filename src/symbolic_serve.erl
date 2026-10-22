@@ -90,7 +90,10 @@ register_tools() ->
           "Returns a summary of the parsed project, including its root, "
           "file and fact counts, configured database, and discovered rules "
           "file. A failed parse leaves any previous cache unchanged. "
-          "After parsing, use overview for raw fact counts and rules_file; "
+          "Check scan_complete and failed_files: a scan can succeed while "
+          "skipping files. Parse errors go to symbolic/serve.log under the "
+          "platform user log directory. After parsing, use overview for "
+          "raw fact counts and rules_file; "
           "use schema for documented argument order and types.">>,
         fun handle_parse/1,
         #{<<"type">> => <<"object">>,
@@ -428,7 +431,12 @@ handle_parse(Params) when is_map(Params), map_size(Params) =:= 0 ->
         ?LOG_INFO("parse: using project configuration from server cwd"),
         case symbolic_codebase:parse(undefined) of
             {ok, Meta} ->
-                ?LOG_INFO("parse: ok path=~s files=~p total_facts=~p elapsed_ms=~p",
+                case maps:get(scan_complete, Meta) of
+                    true -> ok;
+                    false -> ?LOG_ERROR("parse: incomplete scan path=~s failed_files=~p",
+                                        [maps:get(path, Meta), maps:get(failed_files, Meta)])
+                end,
+                ?LOG_INFO("parse: finished path=~s files=~p total_facts=~p elapsed_ms=~p",
                           [maps:get(path, Meta), maps:get(files, Meta),
                            maps:get(total_facts, Meta), maps:get(parse_ms, Meta)]),
                 json(#{ok => meta_to_json(Meta)});

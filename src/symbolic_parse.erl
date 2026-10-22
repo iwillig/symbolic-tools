@@ -120,12 +120,24 @@ extract_cached(File, Cache) ->
                         {ok, After} when not Failed ->
                             case crypto:hash(sha256, After) =:= Hash of
                                 true -> {File, Facts, false, #{hash => Hash, path => File, facts => Facts}};
-                                false -> {File, [], true, undefined}
+                                false ->
+                                    ?LOG_ERROR("parse: ~s changed during extraction; "
+                                               "skipping this file's facts", [File]),
+                                    {File, [], true, undefined}
                             end;
-                        _ -> {File, Facts, true, undefined}
+                        {error, Reason} ->
+                            ?LOG_ERROR("parse: could not re-read ~s after extraction "
+                                       "(~p); skipping this file's facts", [File, Reason]),
+                            {File, Facts, true, undefined};
+                        {ok, _After} ->
+                            %% extract_file_safely already logged the failure.
+                            {File, Facts, true, undefined}
                     end
             end;
-        {error, _} -> {File, [], true, undefined}
+        {error, Reason} ->
+            ?LOG_ERROR("parse: could not read ~s (~p); skipping this file's facts",
+                       [File, Reason]),
+            {File, [], true, undefined}
     end.
 
 %% parallel_map(Fun, Items) -> [Fun(Item)] (same order as Items).
@@ -140,16 +152,17 @@ parallel_map(Fun, Items) ->
     Parent = self(),
     Workers = [begin
         {Pid, Ref} = spawn_monitor(fun() -> Parent ! {self(), Fun(Item)} end),
-        {Pid, Ref}
+        {Pid, Ref, Item}
     end || Item <- Items],
-    [parallel_collect(Pid, Ref) || {Pid, Ref} <- Workers].
+    [parallel_collect(Pid, Ref, Item) || {Pid, Ref, Item} <- Workers].
 
-parallel_collect(Pid, Ref) ->
+parallel_collect(Pid, Ref, Item) ->
     receive
         {Pid, Result} ->
             erlang:demonitor(Ref, [flush]),
             Result;
         {'DOWN', Ref, process, Pid, Reason} ->
+            ?LOG_ERROR("parse: worker failed for ~p (~p)", [Item, Reason]),
             error({parse_worker_crashed, Reason})
     end.
 
@@ -248,7 +261,9 @@ walk(AbsDir, RelDir, Rules) ->
             lists:flatmap(
                 fun(Entry) -> walk_entry(AbsDir, RelDir, Entry, Rules) end,
                 lists:sort(Entries));
-        {error, _Reason} ->
+        {error, Reason} ->
+            ?LOG_ERROR("parse: could not list directory ~s (~p); skipping it",
+                       [AbsDir, Reason]),
             []
     end.
 
@@ -270,7 +285,10 @@ walk_entry(AbsDir, RelDir, Entry, Rules) ->
                         true -> [];
                         false -> walk(AbsPath, RelPath, Rules)
                     end;
-                {error, _} -> []
+                {error, Reason} ->
+                    ?LOG_ERROR("parse: could not inspect ~s (~p); skipping it",
+                               [AbsPath, Reason]),
+                    []
             end;
         false ->
             case symbolic_gitignore:ignored(RelPath, false, Rules)
@@ -288,6 +306,9 @@ run(Dir) ->
 %% returns a plain term, and error_message/1 below turns that term into
 %% the exact text printed, so both are directly testable without it.
 run(Dir, DbPath) ->
+    cli_parse(fun() -> run_dir(Dir, DbPath) end).
+
+run_dir(Dir, DbPath) ->
     case scan_report(Dir, cache_for_db(DbPath)) of
         {ok, Report} -> complete_parse(Report, Dir, undefined, DbPath);
         {error, Reason} ->
@@ -303,6 +324,9 @@ run(Dir, DbPath) ->
 %%  every one of them into a single fact set — same halt()-at-the-edge
 %%  shape as run/2.
 run_config(ConfigOverride, DbPath) ->
+    cli_parse(fun() -> run_configured(ConfigOverride, DbPath) end).
+
+run_configured(ConfigOverride, DbPath) ->
     case resolve_config(ConfigOverride) of
         {ok, ConfigPath} ->
             case symbolic_config:read_settings(ConfigPath) of
@@ -358,6 +382,29 @@ complete_parse(RawReport, ScopeRoot, TypeScriptSettings, DbPath) ->
             end;
         {error, Reason} -> halt_error({typescript_analysis_failed, Reason})
     end.
+
+%% Keep unexpected CLI exceptions visible with their stack in the logger,
+%% and return a concise error on stderr even if the logger has not flushed
+%% before halt/1. The MCP path has its own catch in symbolic_codebase.
+cli_parse(Fun) ->
+    try
+        cli_logger_to_stderr(),
+        Fun()
+    catch
+        Class:Reason:ST ->
+            ?LOG_ERROR("parse: crashed ~p:~p~n~p", [Class, Reason, ST]),
+            io:format(standard_error, "parse: crashed ~p:~p~n", [Class, Reason]),
+            halt(1)
+    end.
+
+%% A CLI parse prints one JSON summary on stdout. OTP's default logger
+%% handler writes errors to stdout, corrupting that JSON on partial scans.
+%% This is a one-shot CLI entry point; the MCP server installs its own file
+%% handler and does not call run/2 or run_config/2.
+cli_logger_to_stderr() ->
+    ok = logger:remove_handler(default),
+    ok = logger:add_handler(symbolic_parse_cli_stderr, logger_std_h,
+                            #{config => #{type => standard_error}}).
 
 halt_error(Reason) ->
     io:put_chars(standard_error, error_message(Reason)),
@@ -428,10 +475,17 @@ maybe_store_report(DbPath, Report) ->
                                      maps:get(file_cache, Report)).
 
 print_summary_report(Report) ->
+    FailedFiles = [filename:absname(P) || P <- maps:get(failed_files, Report)],
+    case FailedFiles of
+        [] -> ok;
+        _ -> io:format(standard_error,
+             "parse: incomplete scan (~p failed files); see failed_files in JSON summary~n",
+             [length(FailedFiles)])
+    end,
     Base = summary(maps:get(files, Report), maps:get(facts, Report)),
     Summary = Base#{scan_complete => maps:get(complete, Report),
-                    failed_files => [filename:absname(P)
-                        || P <- maps:get(failed_files, Report)],
+                    failed_files => [unicode:characters_to_binary(P)
+                        || P <- FailedFiles],
                     type_analysis => symbolic_ts_project:summary_json(
                         maps:get(type_analysis, Report))},
     io:format("~ts~n", [jsx:encode(Summary)]).

@@ -41,6 +41,79 @@ extract_file_timed_survives_a_crashing_file_test() ->
         _ = file:del_dir_r(Root)
     end.
 
+unreadable_file_logs_path_and_reason_test() ->
+    Root = filename:absname(filename:join("_build", "parse_read_failure_scratch")),
+    File = filename:join(Root, "bad.erl"),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_dir(File),
+    ok = file:write_file(File, <<"-module(bad).\nf() -> ok.\n">>),
+    Handler = symbolic_parse_read_failure_test,
+    ok = logger:add_handler(Handler, symbolic_parse_log_handler,
+                            #{receiver => self(), level => error}),
+    meck:new(file, [passthrough, unstick]),
+    meck:expect(file, read_file, fun(Path) ->
+        case Path of
+            File -> {error, eacces};
+            _ -> meck:passthrough([Path])
+        end
+    end),
+    try
+        {ok, Report} = symbolic_parse:scan_paths_report([File]),
+        ?assertEqual(false, maps:get(complete, Report)),
+        ?assertEqual([File], maps:get(failed_files, Report)),
+        receive
+            {parse_log, #{msg := {Format, Args}}} ->
+                Message = lists:flatten(io_lib:format(Format, Args)),
+                ?assert(string:find(Message, File) =/= nomatch),
+                ?assert(string:find(Message, "eacces") =/= nomatch)
+        after 1000 -> ?assert(false)
+        end
+    after
+        meck:unload(file),
+        logger:remove_handler(Handler),
+        _ = file:del_dir_r(Root)
+    end.
+
+reread_failure_logs_path_and_reason_test() ->
+    Root = filename:absname(filename:join("_build", "parse_reread_failure_scratch")),
+    File = filename:join(Root, "bad.erl"),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_dir(File),
+    ok = file:write_file(File, <<"-module(bad).\nf() -> ok.\n">>),
+    Handler = symbolic_parse_reread_failure_test,
+    ok = logger:add_handler(Handler, symbolic_parse_log_handler,
+                            #{receiver => self(), level => error}),
+    meck:new(file, [passthrough, unstick]),
+    meck:new(ts_extract, [passthrough]),
+    meck:expect(ts_extract, file, fun(_) -> [] end),
+    meck:expect(file, read_file, fun(Path) ->
+        case Path of
+            File ->
+                case get(parse_read_count) of
+                    undefined -> put(parse_read_count, 1), meck:passthrough([Path]);
+                    _ -> {error, eio}
+                end;
+            _ -> meck:passthrough([Path])
+        end
+    end),
+    try
+        {ok, Report} = symbolic_parse:scan_paths_report([File]),
+        ?assertEqual(false, maps:get(complete, Report)),
+        ?assertEqual([File], maps:get(failed_files, Report)),
+        receive
+            {parse_log, #{msg := {Format, Args}}} ->
+                Message = lists:flatten(io_lib:format(Format, Args)),
+                ?assert(string:find(Message, File) =/= nomatch),
+                ?assert(string:find(Message, "eio") =/= nomatch)
+        after 1000 -> ?assert(false)
+        end
+    after
+        meck:unload(ts_extract),
+        meck:unload(file),
+        logger:remove_handler(Handler),
+        _ = file:del_dir_r(Root)
+    end.
+
 incremental_scan_reuses_unchanged_and_replaces_changed_files_test() ->
     Root = filename:absname(filename:join("_build", "incremental_parse_scratch")),
     Db = filename:join(Root, "facts.dets"),
@@ -177,10 +250,22 @@ parallel_map_runs_concurrently_not_sequentially_test() ->
     ?assert(ElapsedUs < 500000).
 
 parallel_map_reraises_a_worker_crash_test() ->
-    ?assertError({parse_worker_crashed, _},
-        symbolic_parse:parallel_map(fun(X) ->
-            case X of 2 -> error(boom); _ -> X end
-        end, [1, 2, 3])).
+    Handler = symbolic_parse_worker_failure_test,
+    ok = logger:add_handler(Handler, symbolic_parse_log_handler,
+                            #{receiver => self(), level => error}),
+    try
+        ?assertError({parse_worker_crashed, _},
+            symbolic_parse:parallel_map(fun(X) ->
+                case X of 2 -> error(boom); _ -> X end
+            end, [1, 2, 3])),
+        receive
+            {parse_log, #{msg := {Format, Args}}} ->
+                Message = lists:flatten(io_lib:format(Format, Args)),
+                ?assert(string:find(Message, "worker failed for 2") =/= nomatch),
+                ?assert(string:find(Message, "boom") =/= nomatch)
+        after 1000 -> ?assert(false)
+        end
+    after logger:remove_handler(Handler) end.
 
 %% --- scan_paths/1: merges a directory walk and a directly-named file
 %% into one fact set, and reports the same errors scan_one/2's two

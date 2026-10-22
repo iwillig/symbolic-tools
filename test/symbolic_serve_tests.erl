@@ -172,6 +172,7 @@ serve_test_() ->
         fun overview_before_parse/1,
         fun query_before_parse_is_friendly_error/1,
         fun parse_reports_summary/1,
+        fun parse_logs_incomplete_scan/1,
         fun parse_uses_only_configured_paths/1,
         fun parse_persists_configured_database/1,
         fun parse_without_project_config_is_friendly_error/1,
@@ -205,6 +206,43 @@ serve_test_() ->
         fun check_returns_a_verdict/1,
         fun analyze_text_returns_sentence_components/1
     ]}.
+
+parse_logs_incomplete_scan(_Setup) ->
+    fun() ->
+        Handler = symbolic_serve_incomplete_parse_test,
+        ok = logger:add_handler(Handler, symbolic_parse_log_handler,
+                                #{receiver => self(), level => error}),
+        meck:new(file, [passthrough, unstick]),
+        meck:expect(file, read_file, fun(Path) ->
+            case filename:basename(Path) of
+                "sample.ts" -> {error, eacces};
+                _ -> meck:passthrough([Path])
+            end
+        end),
+        try
+            #{<<"ok">> := Meta} = decode(symbolic_serve:handle_parse(#{})),
+            ?assertEqual(false, maps:get(<<"scan_complete">>, Meta)),
+            ?assert(lists:any(fun(P) ->
+                binary:match(P, <<"sample.ts">>) =/= nomatch
+            end, maps:get(<<"failed_files">>, Meta))),
+            Message = wait_for_incomplete_parse_log(),
+            ?assert(string:find(Message, "sample.ts") =/= nomatch)
+        after
+            meck:unload(file),
+            logger:remove_handler(Handler)
+        end
+    end.
+
+wait_for_incomplete_parse_log() ->
+    receive
+        {parse_log, #{msg := {Format, Args}}} ->
+            Message = lists:flatten(io_lib:format(Format, Args)),
+            case string:find(Message, "incomplete scan") of
+                nomatch -> wait_for_incomplete_parse_log();
+                _ -> Message
+            end
+    after 1000 -> error(missing_incomplete_parse_log)
+    end.
 
 parse_uses_only_configured_paths(Setup) ->
     fun() ->
