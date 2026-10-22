@@ -270,7 +270,10 @@ handle_call({overview, Path}, _From, State) ->
 query_reply(Goal, Limit, Erl) ->
     case parse_goal(Goal) of
         {ok, ParsedGoal} ->
-            prove_all_with_timeout(ParsedGoal, Erl, clamp_limit(Limit));
+            case symbolic_query_schema:validate(ParsedGoal) of
+                ok -> prove_all_with_timeout(ParsedGoal, Erl, clamp_limit(Limit));
+                {error, _} = Error -> Error
+            end;
         {error, Reason} ->
             {error, Reason}
     end.

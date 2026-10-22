@@ -86,6 +86,57 @@ search_functions_tool_is_registered_with_query_contract_test() ->
         meck:unload(erlmcp_stdio)
     end.
 
+tool_descriptions_explain_schema_routing_test() ->
+    meck:new(erlmcp_stdio, [non_strict]),
+    meck:expect(erlmcp_stdio, add_tool,
+        fun(Name, Description, _Handler, _Schema) ->
+            put({tool_description, Name}, Description), ok
+        end),
+    try
+        ok = symbolic_serve:register_tools(),
+        [begin
+            Description = get({tool_description, Name}),
+            ?assert(is_binary(Description)),
+            ?assertNotEqual(nomatch, binary:match(Description, <<"schema">>))
+         end || Name <- [<<"parse">>, <<"query">>, <<"overview">>,
+                         <<"search">>, <<"search_functions">>,
+                         <<"analyze_text">>, <<"ask">>]],
+        Query = get({tool_description, <<"query">>}),
+        ?assertNotEqual(nomatch, binary:match(Query, <<"sub_text/5">>)),
+        ?assertNotEqual(nomatch, binary:match(Query, <<"zero-solution">>)),
+        Overview = get({tool_description, <<"overview">>}),
+        ?assertNotEqual(nomatch, binary:match(Overview, <<"Derived rules are not counted">>)),
+        Schema = get({tool_description, <<"schema">>}),
+        ?assertNotEqual(nomatch, binary:match(Schema, <<"without parsing">>)),
+        ?assertNotEqual(nomatch, binary:match(Schema, <<"unlisted">>))
+    after
+        [erase({tool_description, Name}) || Name <- [<<"parse">>, <<"query">>,
+            <<"overview">>, <<"search">>, <<"search_functions">>,
+            <<"analyze_text">>, <<"ask">>, <<"schema">>]],
+        meck:unload(erlmcp_stdio)
+    end.
+
+schema_tool_is_registered_and_exposes_paragraph_contract_test() ->
+    meck:new(erlmcp_stdio, [non_strict]),
+    meck:expect(erlmcp_stdio, add_tool,
+        fun(Name, _Description, _Handler, Schema) ->
+            put({registered_tool_schema, Name}, Schema), ok
+        end),
+    try
+        ok = symbolic_serve:register_tools(),
+        Schema = get({registered_tool_schema, <<"schema">>}),
+        ?assertEqual([], maps:get(<<"required">>, Schema)),
+        Json = decode(symbolic_serve:handle_schema(#{<<"name">> => <<"paragraph/3">>})),
+        #{<<"ok">> := #{<<"predicates">> := [Contract]}} = Json,
+        ?assertEqual([<<"File">>, <<"Text">>, <<"Line">>],
+            [maps:get(<<"name">>, A) || A <- maps:get(<<"arguments">>, Contract)]),
+        ?assertEqual(#{<<"error">> => <<"schema.name must be a string">>},
+            decode(symbolic_serve:handle_schema(#{<<"name">> => 1})))
+    after
+        erase({registered_tool_schema, <<"schema">>}),
+        meck:unload(erlmcp_stdio)
+    end.
+
 ask_catalog_tool_is_discoverable_and_returns_shared_catalog_test() ->
     meck:new(erlmcp_stdio, [non_strict]),
     meck:expect(erlmcp_stdio, add_tool,
@@ -422,6 +473,16 @@ overview_after_parse_matches_parse(_Setup) ->
         #{<<"ok">> := OverviewOk} = OverviewJson,
         ?assertEqual(maps:get(<<"total_facts">>, ParseOk), maps:get(<<"total_facts">>, OverviewOk)),
         ?assertEqual(maps:get(<<"files">>, ParseOk), maps:get(<<"files">>, OverviewOk))
+    end.
+
+query_preflight_explains_swapped_paragraph_arguments(_Setup) ->
+    fun() ->
+        _ = symbolic_serve:handle_parse(#{}),
+        Json = decode(symbolic_serve:handle_query(#{<<"goal">> =>
+            <<"paragraph(F, Line, Text), sub_text(Text, _, _, _, \"query\")">>})),
+        ?assertMatch(#{<<"error">> := _}, Json),
+        ?assertNotEqual(nomatch,
+            binary:match(maps:get(<<"error">>, Json), <<"paragraph(File, Text, Line)">>))
     end.
 
 query_all_solutions(_Setup) ->

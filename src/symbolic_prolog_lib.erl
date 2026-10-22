@@ -161,8 +161,9 @@ sub_atom_5({sub_atom, A0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
 %% `erlog_parse.erl`'s `term/3` passes that list straight through with no
 %% conversion), not assumed: a double-quoted goal literal like `"prolog"`
 %% is erlog's ISO default `double_quotes(codes)` behavior, a code list,
-%% not a binary. `sub_atom/5`'s `Sub` is an atom because that's what a
-%% caller naturally writes unquoted (`oo`); the equivalent "what a caller
+%% not a binary. Before/Length/After count bytes of the binary haystack,
+%% as the existing binary_to_list/1 mode does. `sub_atom/5`'s `Sub` is
+%% an atom because that's what a caller naturally writes unquoted (`oo`); the equivalent "what a caller
 %% naturally writes" for free text is a double-quoted literal, so `Sub`
 %% has to come back as a code list to unify against one at all — wrapping
 %% it in `list_to_binary/1` instead (this module's first attempt, caught
@@ -171,14 +172,70 @@ sub_atom_5({sub_atom, A0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
 sub_text_5({sub_text, T0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
     case deref(T0, Bs) of
         T when is_binary(T) ->
-            Codes = binary_to_list(T),
-            Total = length(Codes),
-            sub_chars_search(Codes, Total, 0, 0, B0, L0, Af0, S0, Next, St, fun(Cs) -> Cs end);
+            %% A goal-level quoted needle is a code list. For the common
+            %% bound ASCII mode, match directly against the binary rather
+            %% than constructing every possible substring. Keep the old
+            %% byte-list enumerator for all other modes and their errors.
+            case deref(S0, Bs) of
+                Needle when is_list(Needle) ->
+                    case ascii_needle(Needle) of
+                        true -> fast_sub_text(T, list_to_binary(Needle), Needle, 0,
+                            B0, L0, Af0, S0, Next, St);
+                        false -> slow_sub_text(T, B0, L0, Af0, S0, Next, St)
+                    end;
+                _ -> slow_sub_text(T, B0, L0, Af0, S0, Next, St)
+            end;
         {_} ->
             erlog_int:instantiation_error(St);
         Other ->
             erlog_int:type_error(binary, Other, St)
     end.
+
+slow_sub_text(T, B0, L0, Af0, S0, Next, St) ->
+    Codes = binary_to_list(T),
+    sub_chars_search(Codes, length(Codes), 0, 0, B0, L0, Af0, S0, Next, St,
+        fun(Cs) -> Cs end).
+
+ascii_needle([C | Rest]) when is_integer(C), C >= 0, C =< 127 ->
+    ascii_tail(Rest);
+ascii_needle(_) -> false.
+
+ascii_tail([]) -> true;
+ascii_tail([C | Rest]) when is_integer(C), C >= 0, C =< 127 ->
+    ascii_tail(Rest);
+ascii_tail(_) -> false.
+
+%% Search again from one byte after the last hit. binary:matches/2 would
+%% omit overlapping matches; sub_text/5 must enumerate every occurrence.
+%% Before/Length/After are byte offsets, matching the pre-existing
+%% binary_to_list/1 implementation even for UTF-8 source text.
+fast_sub_text(Text, Pattern, Needle, Start, B0, L0, Af0, S0, Next,
+        #est{bs = Bs0, cps = Cps} = St) when Start =< byte_size(Text) ->
+    case binary:match(Text, Pattern,
+            [{scope, {Start, byte_size(Text) - Start}}]) of
+        nomatch -> fail(St);
+        {Before, Length} ->
+            After = byte_size(Text) - Before - Length,
+            case try_unify4(B0, Before, L0, Length, Af0, After, S0, Needle, Bs0) of
+                {succeed, Bs1} ->
+                    FailFun = fun(LCp, LCps, Lst) ->
+                        fail_fast_sub_text(LCp, LCps, Lst, Text, Pattern, Needle,
+                            Before + 1, B0, L0, Af0, S0)
+                    end,
+                    Cp = #cp{type = compiled, data = FailFun, next = Next,
+                        bs = Bs0, vn = St#est.vn},
+                    prove_body(Next, St#est{bs = Bs1, cps = [Cp | Cps]});
+                fail -> fast_sub_text(Text, Pattern, Needle, Before + 1,
+                    B0, L0, Af0, S0, Next, St)
+            end
+    end;
+fast_sub_text(_Text, _Pattern, _Needle, _Start, _B0, _L0, _Af0, _S0, _Next, St) ->
+    fail(St).
+
+fail_fast_sub_text(#cp{next = Next, bs = Bs0, vn = Vn}, Cps, St,
+        Text, Pattern, Needle, Start, B0, L0, Af0, S0) ->
+    fast_sub_text(Text, Pattern, Needle, Start, B0, L0, Af0, S0, Next,
+        St#est{bs = Bs0, vn = Vn, cps = Cps}).
 
 %% Walk (Before,Length) candidates starting at the given position, shared
 %% by sub_atom_5/3 and sub_text_5/3 — identical search either way, the

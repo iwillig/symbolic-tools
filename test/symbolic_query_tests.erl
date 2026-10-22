@@ -33,6 +33,54 @@ run_result_no_solution_test() ->
             symbolic_query:run_result(?DB, undefined, "defines(bar, _, _, _, _)"))
     end).
 
+query_rows(Goal) ->
+    {solutions, Bindings} = symbolic_query:run_result(?DB, undefined, Goal),
+    proplists:get_value('Rows', Bindings).
+
+%% The fast bound-needle mode must enumerate overlapping hits in the old
+%% Before/Length/After order, not binary:matches/2's non-overlapping order.
+sub_text_bound_needle_overlaps_and_backtracks_test() ->
+    with_db([{sample, <<"banana">>}], fun() ->
+        ?assertEqual([[1,3,2],[3,3,0]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"ana\")), Rows)")),
+        ?assertEqual([[3,3,0]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"ana\"), B > 1), Rows)")),
+        ?assertEqual(no_solution, symbolic_query:run_result(?DB, undefined,
+            "sample(T), sub_text(T,0,_,_,\"ana\")"))
+    end).
+
+sub_text_bound_needle_absent_empty_and_type_modes_test() ->
+    with_db([{sample, <<"ab">>}, {sample_atom, hello}], fun() ->
+        ?assertEqual(no_solution, symbolic_query:run_result(?DB, undefined,
+            "sample(T), sub_text(T,_,_,_,\"zzz\")")),
+        ?assertEqual([[0,0,2],[1,0,1],[2,0,0]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"\")), Rows)")),
+        ?assertEqual({error, {query_failed, instantiation_error}},
+            symbolic_query:run_result(?DB, undefined, "sub_text(T,_,_,_,\"a\")")),
+        ?assertMatch({error, {query_failed, {type_error, binary, hello}}},
+            symbolic_query:run_result(?DB, undefined,
+                "sample_atom(T), sub_text(T,_,_,_,\"e\")"))
+    end).
+
+sub_text_long_literal_absent_and_tail_match_test() ->
+    Text = list_to_binary(lists:duplicate(2048, $x) ++ "needle"),
+    with_db([{sample, Text}], fun() ->
+        ?assertEqual(no_solution, symbolic_query:run_result(?DB, undefined,
+            "sample(T), sub_text(T,_,_,_,\"absent\")")),
+        ?assertEqual([[2048,6,0]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"needle\")), Rows)"))
+    end).
+
+sub_text_ascii_needle_uses_byte_offsets_and_non_ascii_fallback_test() ->
+    with_db([{sample, <<"caf\xc3\xa9 caf\xc3\xa9">>}], fun() ->
+        ?assertEqual([[0,3,8],[6,3,2]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"caf\")), Rows)")),
+        %% Existing binary_to_list semantics do not decode UTF-8: a
+        %% goal-level non-ASCII codepoint cannot match UTF-8 bytes here.
+        ?assertEqual(no_solution, symbolic_query:run_result(?DB, undefined,
+            "sample(T), sub_text(T,_,_,_,\"é\")"))
+    end).
+
 sub_atom_rejects_unbound_sub_test() ->
     with_db([], fun() ->
         ?assertEqual(

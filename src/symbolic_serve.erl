@@ -33,7 +33,7 @@
 %% schemas with a mocked erlmcp_stdio boundary. run/0 and setup_logging/0
 %% remain manual-smoke-test seams because they start applications and mutate
 %% global logger state (docs/erlang-mcp-design.md).
--export([handle_parse/1, handle_query/1, handle_ask/1, handle_ask_catalog/1, handle_overview/1,
+-export([handle_parse/1, handle_query/1, handle_ask/1, handle_ask_catalog/1, handle_overview/1, handle_schema/1,
     handle_extract/1, handle_check/1, handle_search/1, handle_search_functions/1,
     handle_analyze_text/1]).
 
@@ -89,7 +89,9 @@ register_tools() ->
           "call parse again to refresh it. Run one MCP server per project. "
           "Returns a summary of the parsed project, including its root, "
           "file and fact counts, configured database, and discovered rules "
-          "file. A failed parse leaves any previous cache unchanged.">>,
+          "file. A failed parse leaves any previous cache unchanged. "
+          "After parsing, use overview for raw fact counts and rules_file; "
+          "use schema for documented argument order and types.">>,
         fun handle_parse/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{},
@@ -98,8 +100,17 @@ register_tools() ->
     ok = erlmcp_stdio:add_tool(<<"query">>,
         <<"Prove a Prolog goal against the cached project and return all "
           "solutions (capped). `parse` loads the project configured for "
-          "this server process. Omit `path` to use that cache entry. Raw "
-          "facts, from `overview`: "
+          "this server process. Omit `path` to use that cache entry. "
+          "Before writing a goal, use overview for raw fact counts and "
+          "rules_file, then schema for documented argument order, value "
+          "types, binding modes, and examples. schema is partial; an "
+          "unlisted predicate is not necessarily absent (derived rules "
+          "are not counted by overview). Bind a fact "
+          "before filtering its atom with sub_atom/5 or binary text "
+          "with sub_text/5. A zero-solution answer is not an error; a "
+          "timeout or type error is not proof of absence. Use "
+          "search_functions for name discovery and search for prose. "
+          "Common raw fact shapes (not from overview's count fields): "
           "defines(Function, Arity, Params, File, Line), "
           "export(Function, Arity, File, Line) - an Erlang -export list "
           "element (Erlang only; one fact per entry, keyed Fun+Arity like "
@@ -217,7 +228,9 @@ register_tools() ->
           <<"properties">> => #{
               <<"goal">> => #{<<"type">> => <<"string">>,
                              <<"description">> =>
-                                 <<"Prolog goal, e.g. calls(X, _, local(foo, 2), _, _)">>},
+                                 <<"Prolog goal. Check overview for raw fact counts and schema "
+                                   "for documented arity/order/types first; e.g. "
+                                   "calls(foo, 2, local(bar, 1), File, Line)">>},
               <<"limit">> => #{<<"type">> => <<"integer">>,
                               <<"description">> =>
                                   <<"Max solutions to return (default 50)">>},
@@ -249,7 +262,8 @@ register_tools() ->
           "{type: unverifiable, reason} naming the unresolvable entity; "
           "phrasings outside the grammar are an `unrecognized` error. "
           "Callers that need anything the grammar doesn't cover should "
-          "write a `query` goal instead. Pass `path` to pick which cached "
+          "write a `query` goal instead; consult schema for documented "
+          "argument order and types first. Pass `path` to pick which cached "
           "directory, or omit it to use whichever was most recently "
           "parsed (see `parse`).">>,
         fun handle_ask/1,
@@ -275,13 +289,30 @@ register_tools() ->
           <<"properties">> => #{},
           <<"required">> => [],
           <<"additionalProperties">> => false}),
+    ok = erlmcp_stdio:add_tool(<<"schema">>,
+        <<"Look up ordered arguments, value types, binding modes, and examples "
+          "before composing a query goal. Available without parsing. This "
+          "catalog documents selected high-use predicates only; an unlisted "
+          "predicate may still exist. Use overview after parse for raw fact "
+          "counts and rules_file (derived rules are not counted). Omit name "
+          "for the catalog, or request "
+          "paragraph/3, import_decl/3, literal/8, sub_text/5, or another "
+          "documented name. Do not infer absence from an unknown name here.">>,
+        fun handle_schema/1,
+        #{<<"type">> => <<"object">>,
+          <<"properties">> => #{<<"name">> => #{<<"type">> => <<"string">>,
+              <<"description">> => <<"Optional predicate name or exact name/arity, "
+                                     "e.g. paragraph/3. Omit to list documented contracts.">>}},
+          <<"required">> => [], <<"additionalProperties">> => false}),
     ok = erlmcp_stdio:add_tool(<<"overview">>,
         <<"Report the current state of a cached fact base: whether a "
           "codebase is loaded, how many files/languages, fact counts by "
           "predicate, and TypeScript analysis status/provenance. "
           "TypeScript analysis is disabled unless explicitly enabled in config. "
-          "Call it after `parse`, or to check state before "
-          "`query`. Pass `path` to report on a specific cached directory "
+          "Call it after `parse` to check raw fact counts before `query`. "
+          "Derived rules are not counted; check rules_file. Counts do not "
+          "specify argument order or types: use "
+          "schema for documented contracts. Pass `path` to report on a specific cached directory "
           "(see `parse`); omit it to use whichever was most recently "
           "parsed.">>,
         fun handle_overview/1,
@@ -300,11 +331,16 @@ register_parity_tools() ->
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
     ok = erlmcp_stdio:add_tool(<<"check">>, <<"Extract and check a claim against cached facts.">>, fun handle_check/1,
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
-    ok = erlmcp_stdio:add_tool(<<"search">>, <<"Search cached prose facts.">>, fun handle_search/1,
+    ok = erlmcp_stdio:add_tool(<<"search">>,
+        <<"Search cached comments and Markdown prose. This does not search "
+          "function definitions or literal/8 values; use search_functions "
+          "for definitions, or schema before a query goal over literals.">>, fun handle_search/1,
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"limit">> => #{<<"type">> => <<"integer">>}}, <<"required">> => [<<"query">>]}),
     ok = erlmcp_stdio:add_tool(<<"search_functions">>,
-        <<"Search cached function definitions by exact or partial name and identifier terms. ",
-          "Returns only definitions present in the parsed facts, with name, arity, file, line, and relevance score.">>,
+        <<"Discover function definitions by exact or partial name and identifier terms. "
+          "Returns only definitions, with name, arity, file, line, and relevance score. "
+          "For calls or other relationships, use overview for raw fact counts, "
+          "schema for documented argument order, then query. Does not search literal values.">>,
         fun handle_search_functions/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>},
@@ -312,7 +348,7 @@ register_parity_tools() ->
               <<"limit">> => #{<<"type">> => <<"integer">>}},
           <<"required">> => [<<"query">>]}),
     erlmcp_stdio:add_tool(<<"analyze_text">>,
-        <<"Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks, plus bounded query-frame candidates for an LLM to map to a schema-valid query. Frames are suggestions, not verified claims. Requires English nlprule tokenizer data in SYMBOLIC_NLPRULE_DATA. Does not correct text.">>,
+        <<"Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks, plus bounded query-frame candidates. Frames are suggestions, not proof. Use overview for raw fact counts/rules_file and schema for documented argument order/types before sending a constructed goal to query. Requires English nlprule tokenizer data in SYMBOLIC_NLPRULE_DATA. Does not correct text.">>,
         fun handle_analyze_text/1,
         #{<<"type">> => <<"object">>,
           <<"properties">> => #{<<"text">> => #{<<"type">> => <<"string">>,
@@ -428,6 +464,21 @@ handle_query(Params) ->
             ?LOG_ERROR("query: crashed ~p:~p~n~p", [Class, Crash, ST]),
             json(#{error => caught_str(Class, Crash, ST)})
     end.
+
+handle_schema(Params) when is_map(Params) ->
+    case maps:get(<<"name">>, Params, undefined) of
+        Name when is_binary(Name); Name =:= undefined ->
+            case symbolic_query_schema:describe(Name) of
+                {ok, Schema} -> json(#{ok => Schema});
+                {error, {unknown_documented_predicate, _}} ->
+                    json(#{error => <<"No documented contract for this name. "
+                        "Use overview to check loaded predicate names; "
+                        "schema is intentionally partial.">>})
+            end;
+        _ -> json(#{error => <<"schema.name must be a string">>})
+    end;
+handle_schema(_Params) ->
+    json(#{error => <<"schema accepts an object with optional name">>}).
 
 %% The `ask_catalog` MCP tool exposes the same catalog used by the CLI.
 handle_ask_catalog(Params) when is_map(Params), map_size(Params) =:= 0 ->
@@ -628,6 +679,7 @@ error_str({existence_error, procedure, {'/', F, A}}) ->
     iolist_to_binary([<<"no such predicate: ">>, atom_to_binary(F, utf8),
                        <<"/">>, integer_to_binary(A),
                        <<" - see `overview` for available predicates">>]);
+error_str({invalid_goal, Message}) -> Message;
 error_str(timeout) ->
     <<"query timed out - the goal may be cyclic or unbounded; try a more "
       "specific goal">>;
