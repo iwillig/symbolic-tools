@@ -1,6 +1,7 @@
 %%% `symbolic serve` — the MCP server. Exposes the codebase cache and
-%%% configured DETS persistence (symbolic_codebase) over MCP via `erlmcp`.
-%%% See docs/erlang-mcp-design.md.
+%%% configured DETS persistence (symbolic_codebase) over MCP through the
+%%% project-local stdio adapter `symbolic_stdio`. See docs/erlang-mcp-design.md
+%%% and docs/plans/live-mcp-operation-status.md.
 %%%
 %%% Codebase tools:
 %%%   parse         scan configured project paths, persist facts, cache in memory
@@ -9,17 +10,18 @@
 %%%   ask/extract/check/search provide bounded question, claim, and prose tools
 %%%   analyze_text  split English into sentences and annotated tokens
 %%%
-%%% Uses `erlmcp_stdio` (not the lower-level `erlmcp_server:start_link/2`
-%%% from erlmcp's README) — confirmed by testing: the README's API starts a
-%%% process that isn't wired into the app's real stdin/stdout loop unless the
-%%% `erlmcp` OTP application itself is started first; `erlmcp_stdio:start/0`
-%%% goes through `erlmcp_sup` (erlmcp's actual top-level supervisor) and is
-%%% the API that works.
+%%% Why a project-local adapter: the pinned erlmcp 0.5.1 stdio server runs
+%%% every tool handler inline in its request loop, so a `status` request
+%%% could not be answered while `parse`/`query` blocked that loop
+%%% (docs/plans/live-mcp-operation-status.md). `symbolic_stdio` dispatches
+%%% each `tools/call` in a monitored worker and serializes all responses
+%%% through one writer, so tool replies stay synchronous while `status`
+%%% remains reachable mid-operation.
 %%%
 %%% Tool handlers are stateless (Params -> Result); the stateful cache lives
 %%% in the separately-started, registered symbolic_codebase process. Handlers
 %%% catch everything and always return a JSON binary — they never crash, so
-%%% behavior doesn't depend on erlmcp's own handler wrapping.
+%%% behavior doesn't depend on the adapter's worker wrapping.
 %%%
 %%% Logging goes through Erlang's `logger` to a file, never to standard
 %%% output: stdout is the MCP JSON-RPC transport (see the smoke test in
@@ -30,27 +32,35 @@
 -export([run/0, register_tools/0]).
 %% Handler functions are exported for symbolic_serve_tests.erl. The
 %% registration function is also exported so tests can verify the MCP tool
-%% schemas with a mocked erlmcp_stdio boundary. run/0 and setup_logging/0
+%% schemas with a mocked symbolic_stdio boundary. run/0 and setup_logging/0
 %% remain manual-smoke-test seams because they start applications and mutate
 %% global logger state (docs/erlang-mcp-design.md).
--export([handle_parse/1, handle_query/1, handle_ask/1, handle_ask_catalog/1, handle_overview/1, handle_schema/1,
+-export([handle_parse/1, handle_query/1, handle_status/1, handle_ask/1, handle_ask_catalog/1, handle_overview/1, handle_schema/1,
     handle_extract/1, handle_check/1, handle_search/1, handle_search_functions/1,
     handle_analyze_text/1]).
 
 %% Start the MCP server over stdio: logging first (so early failures
-%% are visible), then the erlmcp application, the symbolic_codebase
-%% cache gen_server, and the tool registry — then hand off to erlmcp's
-%% loop. One process tree for the whole session; see
-%% docs/erlang-mcp-design.md.
+%% are visible), then the status tracker, the symbolic_codebase
+%% cache gen_server, the stdio adapter, and the tool registry. One
+%% process tree for the whole session; see docs/erlang-mcp-design.md
+%% and docs/plans/live-mcp-operation-status.md.
 run() ->
     ok = setup_logging(),
     ?LOG_INFO("symbolic serve starting"),
-    {ok, _} = application:ensure_all_started(erlmcp),
+    {ok, _} = application:ensure_all_started(jsx),
+    {ok, _StatusPid} = symbolic_operation_status:start_link(),
     {ok, _CachePid} = symbolic_codebase:start_link(),
-    ok = erlmcp_stdio:start(),
+    ok = symbolic_stdio:start(),
     ok = register_tools(),
-    ?LOG_INFO("symbolic serve ready: tools parse, query, ask, overview, extract, check, search, analyze_text registered"),
-    receive after infinity -> ok end.
+    symbolic_stdio:begin_reading(),
+    ?LOG_INFO("symbolic serve ready: tools parse, query, status, ask, overview, extract, check, search, analyze_text registered"),
+    %% The adapter stops when stdin reaches EOF or its reader fails; the
+    %% server session is over at that point, so shut down (the start_link
+    %% links to this process tear down the tracker and cache with it).
+    AdapterRef = erlang:monitor(process, whereis(symbolic_stdio)),
+    receive
+        {'DOWN', AdapterRef, process, _Pid, _Reason} -> ok
+    end.
 
 %% A file under the platform's standard log directory (e.g. ~/Library/Logs
 %% on macOS, $XDG_STATE_HOME or ~/.local/state on Linux), independent of
@@ -77,7 +87,7 @@ setup_logging() ->
     ok.
 
 register_tools() ->
-    ok = erlmcp_stdio:add_tool(<<"parse">>,
+    ok = symbolic_stdio:add_tool(<<"parse">>,
         <<"Parse the paths in the project .symbolic/config.json found by "
           "walking up from this server's working directory. The parse tool "
           "accepts no arguments; set paths, database, rules, and optional "
@@ -102,7 +112,7 @@ register_tools() ->
           <<"properties">> => #{},
           <<"additionalProperties">> => false,
           <<"required">> => []}),
-    ok = erlmcp_stdio:add_tool(<<"query">>,
+    ok = symbolic_stdio:add_tool(<<"query">>,
         <<"Prove a Prolog goal against the cached project and return all "
           "solutions (capped). `parse` loads the project configured for "
           "this server process. Omit `path` to use that cache entry. "
@@ -246,7 +256,7 @@ register_tools() ->
                                    "whichever directory was most recently "
                                    "parsed.">>}},
           <<"required">> => [<<"goal">>]}),
-    ok = erlmcp_stdio:add_tool(<<"ask">>,
+    ok = symbolic_stdio:add_tool(<<"ask">>,
         <<"Answer a bounded English question against a cached codebase "
           "— for callers that think in questions rather than goals. "
           "Parses the question, verifies every entity against the fact "
@@ -285,7 +295,7 @@ register_tools() ->
                                    "to use whichever directory was most "
                                    "recently parsed.">>}},
           <<"required">> => [<<"question">>]}),
-    ok = erlmcp_stdio:add_tool(<<"ask_catalog">>,
+    ok = symbolic_stdio:add_tool(<<"ask_catalog">>,
         <<"List supported ASK operations, required input slots, answer shapes, "
           "world assumptions, evidence behavior, limits, and example questions. "
           "Use this before composing a question for the `ask` tool.">>,
@@ -294,7 +304,7 @@ register_tools() ->
           <<"properties">> => #{},
           <<"required">> => [],
           <<"additionalProperties">> => false}),
-    ok = erlmcp_stdio:add_tool(<<"schema">>,
+    ok = symbolic_stdio:add_tool(<<"schema">>,
         <<"Look up ordered arguments, value types, binding modes, and examples "
           "before composing a query goal. Available without parsing. This "
           "catalog documents selected high-use predicates only; an unlisted "
@@ -309,7 +319,14 @@ register_tools() ->
               <<"description">> => <<"Optional predicate name or exact name/arity, "
                                      "e.g. paragraph/3. Omit to list documented contracts.">>}},
           <<"required">> => [], <<"additionalProperties">> => false}),
-    ok = erlmcp_stdio:add_tool(<<"overview">>,
+    ok = symbolic_stdio:add_tool(<<"status">>,
+        <<"Report the active parse or query phase while work is running, "
+          "plus the last operation's outcome. Call concurrently with parse "
+          "or query on the same MCP connection. Takes no arguments.">>,
+        fun handle_status/1,
+        #{<<"type">> => <<"object">>, <<"properties">> => #{},
+          <<"required">> => [], <<"additionalProperties">> => false}),
+    ok = symbolic_stdio:add_tool(<<"overview">>,
         <<"Report the current state of a cached fact base: whether a "
           "codebase is loaded, how many files/languages, fact counts by "
           "predicate, and TypeScript analysis status/provenance. "
@@ -332,16 +349,16 @@ register_tools() ->
     register_parity_tools().
 
 register_parity_tools() ->
-    ok = erlmcp_stdio:add_tool(<<"extract">>, <<"Extract a bounded claim from a sentence.">>, fun handle_extract/1,
+    ok = symbolic_stdio:add_tool(<<"extract">>, <<"Extract a bounded claim from a sentence.">>, fun handle_extract/1,
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
-    ok = erlmcp_stdio:add_tool(<<"check">>, <<"Extract and check a claim against cached facts.">>, fun handle_check/1,
+    ok = symbolic_stdio:add_tool(<<"check">>, <<"Extract and check a claim against cached facts.">>, fun handle_check/1,
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"sentence">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"model">> => #{<<"type">> => <<"string">>}}, <<"required">> => [<<"sentence">>]}),
-    ok = erlmcp_stdio:add_tool(<<"search">>,
+    ok = symbolic_stdio:add_tool(<<"search">>,
         <<"Search cached comments and Markdown prose. This does not search "
           "function definitions or literal/8 values; use search_functions "
           "for definitions, or schema before a query goal over literals.">>, fun handle_search/1,
         #{<<"type">> => <<"object">>, <<"properties">> => #{<<"query">> => #{<<"type">> => <<"string">>}, <<"path">> => #{<<"type">> => <<"string">>}, <<"limit">> => #{<<"type">> => <<"integer">>}}, <<"required">> => [<<"query">>]}),
-    ok = erlmcp_stdio:add_tool(<<"search_functions">>,
+    ok = symbolic_stdio:add_tool(<<"search_functions">>,
         <<"Discover function definitions by exact or partial name and identifier terms. "
           "Returns only definitions, with name, arity, file, line, and relevance score. "
           "For calls or other relationships, use overview for raw fact counts, "
@@ -352,7 +369,7 @@ register_parity_tools() ->
               <<"path">> => #{<<"type">> => <<"string">>},
               <<"limit">> => #{<<"type">> => <<"integer">>}},
           <<"required">> => [<<"query">>]}),
-    erlmcp_stdio:add_tool(<<"analyze_text">>,
+    symbolic_stdio:add_tool(<<"analyze_text">>,
         <<"Analyze English text into sentences and tokens with spans, POS/lemma tags, and chunks, plus bounded query-frame candidates. Frames are suggestions, not proof. Use overview for raw fact counts/rules_file and schema for documented argument order/types before sending a constructed goal to query. Requires English nlprule tokenizer data in SYMBOLIC_NLPRULE_DATA. Does not correct text.">>,
         fun handle_analyze_text/1,
         #{<<"type">> => <<"object">>,
@@ -427,6 +444,13 @@ handle_search_functions(Params) ->
 
 optional_string(Params, Key) ->
     case maps:find(Key, Params) of {ok, Value} -> to_list(Value); error -> undefined end.
+
+handle_status(Params) when is_map(Params), map_size(Params) =:= 0 ->
+    case symbolic_operation_status:status() of
+        {ok, Status} -> json(#{ok => Status});
+        {error, not_running} -> json(#{error => <<"status tracker is not running">>})
+    end;
+handle_status(_Params) -> json(#{error => <<"status accepts no arguments">>}).
 
 handle_parse(Params) when is_map(Params), map_size(Params) =:= 0 ->
     try

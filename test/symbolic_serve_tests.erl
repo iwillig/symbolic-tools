@@ -12,7 +12,7 @@
 %%
 %% run/0 and setup_logging/0 remain manual-smoke-test seams because they
 %% start applications and mutate global logger state. register_tools/0 is
-%% tested through a mocked erlmcp_stdio registration boundary.
+%% tested through a mocked symbolic_stdio registration boundary.
 
 -define(FIXTURES, "test/fixtures").
 
@@ -45,8 +45,8 @@ decode(JsonBinary) ->
     jsx:decode(JsonBinary, [return_maps]).
 
 parse_tool_schema_has_no_arguments_test() ->
-    meck:new(erlmcp_stdio, [non_strict]),
-    meck:expect(erlmcp_stdio, add_tool,
+    meck:new(symbolic_stdio, [non_strict]),
+    meck:expect(symbolic_stdio, add_tool,
         fun(Name, _Description, _Handler, Schema) ->
             put({registered_tool_schema, Name}, Schema),
             ok
@@ -58,7 +58,25 @@ parse_tool_schema_has_no_arguments_test() ->
         ?assertEqual(false, maps:get(<<"additionalProperties">>, Schema))
     after
         erase({registered_tool_schema, <<"parse">>}),
-        meck:unload(erlmcp_stdio)
+        meck:unload(symbolic_stdio)
+    end.
+
+status_tool_schema_has_no_arguments_test() ->
+    meck:new(symbolic_stdio, [non_strict]),
+    meck:expect(symbolic_stdio, add_tool,
+        fun(Name, _Description, _Handler, Schema) ->
+            put({registered_tool_schema, Name}, Schema),
+            ok
+        end),
+    try
+        ok = symbolic_serve:register_tools(),
+        Schema = get({registered_tool_schema, <<"status">>}),
+        ?assertEqual(#{}, maps:get(<<"properties">>, Schema)),
+        ?assertEqual(false, maps:get(<<"additionalProperties">>, Schema)),
+        ?assertEqual([], maps:get(<<"required">>, Schema))
+    after
+        erase({registered_tool_schema, <<"status">>}),
+        meck:unload(symbolic_stdio)
     end.
 
 parse_rejects_arguments_test() ->
@@ -67,8 +85,8 @@ parse_rejects_arguments_test() ->
     ?assertMatch(#{<<"error">> := <<"parse accepts no arguments", _/binary>>}, Json).
 
 search_functions_tool_is_registered_with_query_contract_test() ->
-    meck:new(erlmcp_stdio, [non_strict]),
-    meck:expect(erlmcp_stdio, add_tool,
+    meck:new(symbolic_stdio, [non_strict]),
+    meck:expect(symbolic_stdio, add_tool,
         fun(Name, _Description, _Handler, Schema) ->
             put({registered_tool_schema, Name}, Schema),
             ok
@@ -83,12 +101,12 @@ search_functions_tool_is_registered_with_query_contract_test() ->
         ?assert(maps:is_key(<<"limit">>, Props))
     after
         erase({registered_tool_schema, <<"search_functions">>}),
-        meck:unload(erlmcp_stdio)
+        meck:unload(symbolic_stdio)
     end.
 
 tool_descriptions_explain_schema_routing_test() ->
-    meck:new(erlmcp_stdio, [non_strict]),
-    meck:expect(erlmcp_stdio, add_tool,
+    meck:new(symbolic_stdio, [non_strict]),
+    meck:expect(symbolic_stdio, add_tool,
         fun(Name, Description, _Handler, _Schema) ->
             put({tool_description, Name}, Description), ok
         end),
@@ -113,12 +131,12 @@ tool_descriptions_explain_schema_routing_test() ->
         [erase({tool_description, Name}) || Name <- [<<"parse">>, <<"query">>,
             <<"overview">>, <<"search">>, <<"search_functions">>,
             <<"analyze_text">>, <<"ask">>, <<"schema">>]],
-        meck:unload(erlmcp_stdio)
+        meck:unload(symbolic_stdio)
     end.
 
 schema_tool_is_registered_and_exposes_paragraph_contract_test() ->
-    meck:new(erlmcp_stdio, [non_strict]),
-    meck:expect(erlmcp_stdio, add_tool,
+    meck:new(symbolic_stdio, [non_strict]),
+    meck:expect(symbolic_stdio, add_tool,
         fun(Name, _Description, _Handler, Schema) ->
             put({registered_tool_schema, Name}, Schema), ok
         end),
@@ -134,12 +152,12 @@ schema_tool_is_registered_and_exposes_paragraph_contract_test() ->
             decode(symbolic_serve:handle_schema(#{<<"name">> => 1})))
     after
         erase({registered_tool_schema, <<"schema">>}),
-        meck:unload(erlmcp_stdio)
+        meck:unload(symbolic_stdio)
     end.
 
 ask_catalog_tool_is_discoverable_and_returns_shared_catalog_test() ->
-    meck:new(erlmcp_stdio, [non_strict]),
-    meck:expect(erlmcp_stdio, add_tool,
+    meck:new(symbolic_stdio, [non_strict]),
+    meck:expect(symbolic_stdio, add_tool,
         fun(Name, Description, Handler, Schema) ->
             put({registered_tool_description, Name}, Description),
             put({registered_tool_schema, Name}, Schema),
@@ -164,7 +182,7 @@ ask_catalog_tool_is_discoverable_and_returns_shared_catalog_test() ->
         erase({registered_tool_description, <<"ask">>}),
         erase({registered_tool_schema, <<"ask_catalog">>}),
         erase({registered_tool_handler, <<"ask_catalog">>}),
-        meck:unload(erlmcp_stdio)
+        meck:unload(symbolic_stdio)
     end.
 
 serve_test_() ->

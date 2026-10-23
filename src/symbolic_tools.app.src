@@ -6,7 +6,6 @@
         kernel,
         stdlib,
         erlog,
-        erlmcp,
         jsx,
         erllama
     ]},

@@ -210,7 +210,8 @@ init([]) ->
 %% most likely crash site, a bad literal inside one file, but this is
 %% the outer backstop for anything else that might crash during a scan.
 handle_call({parse, undefined, RulesOverride}, _From, State) ->
-    safely(fun() ->
+    tracked_parse(fun() ->
+        symbolic_operation_status:phase(discovering),
         StartMs = erlang:monotonic_time(millisecond),
         case discovery_start_dir(undefined) of
             {ok, Cwd} ->
@@ -220,27 +221,38 @@ handle_call({parse, undefined, RulesOverride}, _From, State) ->
                 end;
             {error, Reason} -> {reply, {error, Reason}, State}
         end
-    end, State);
+    end, undefined, State);
 handle_call({parse, Dir, RulesOverride}, _From, State) ->
-    safely(fun() ->
+    tracked_parse(fun() ->
+        symbolic_operation_status:phase(discovering),
         StartMs = erlang:monotonic_time(millisecond),
         case own_config(Dir) of
             undefined ->
                 Key = normalize_dir(Dir),
+                symbolic_operation_status:project(Key),
                 Cache = previous_file_cache(Key, undefined, State),
+                symbolic_operation_status:phase(extracting),
                 finish_parse(symbolic_parse:scan_report(Dir, Cache), Key,
                              RulesOverride, StartMs, State, undefined, #{});
             ConfigPath -> parse_from_config(ConfigPath, RulesOverride, StartMs, State)
         end
-    end, State);
+    end, Dir, State);
 
 handle_call({query, Goal, Limit, Path}, _From, State) ->
-    case resolve_cache_entry(Path, State) of
-        {error, Reason} ->
-            {reply, {error, Reason}, State};
+    symbolic_operation_status:started(query, Path),
+    symbolic_operation_status:phase(validating),
+    Result = case resolve_cache_entry(Path, State) of
+        {error, Reason} -> {error, Reason};
         {ok, #{erl := Erl}} ->
-            {reply, query_reply(Goal, Limit, Erl), State}
-    end;
+            Project = case Path of
+                undefined -> maps:get(current, State);
+                _ -> normalize_dir(Path)
+            end,
+            symbolic_operation_status:project(Project),
+            query_reply(Goal, Limit, Erl)
+    end,
+    symbolic_operation_status:finished(status_outcome(Result)),
+    {reply, Result, State};
 
 handle_call({ask, Question, Path}, _From, State) ->
     case resolve_cache_entry(Path, State) of
@@ -271,12 +283,24 @@ query_reply(Goal, Limit, Erl) ->
     case parse_goal(Goal) of
         {ok, ParsedGoal} ->
             case symbolic_query_schema:validate(ParsedGoal) of
-                ok -> prove_all_with_timeout(ParsedGoal, Erl, clamp_limit(Limit));
+                ok ->
+                    symbolic_operation_status:phase(proving),
+                    prove_all_with_timeout(ParsedGoal, Erl, clamp_limit(Limit));
                 {error, _} = Error -> Error
             end;
         {error, Reason} ->
             {error, Reason}
     end.
+
+status_outcome({error, Reason}) -> {error, Reason};
+status_outcome(_Result) -> ok.
+
+tracked_parse(Fun, Path, State) ->
+    symbolic_operation_status:started(parse, Path),
+    Reply = safely(Fun, State),
+    {reply, Result, _} = Reply,
+    symbolic_operation_status:finished(status_outcome(Result)),
+    Reply.
 
 %% Standard OTP no-op: nothing in this module uses casts.
 handle_cast(_Msg, State) -> {noreply, State}.
@@ -411,10 +435,12 @@ previous_file_cache(Key, undefined, State) ->
 previous_file_cache(_Key, DbPath, _State) -> symbolic_file_cache:load(DbPath).
 
 parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
+    symbolic_operation_status:project(symbolic_config:project_root(ConfigPath)),
     case symbolic_config:read_settings(ConfigPath) of
         {ok, Settings = #{paths := Paths, database := DbPath}} ->
             ProjectRoot = symbolic_config:project_root(ConfigPath),
             Cache = previous_file_cache(ProjectRoot, DbPath, State),
+            symbolic_operation_status:phase(extracting),
             finish_parse(symbolic_parse:scan_paths_report(Paths, Cache), ProjectRoot,
                 RulesOverride, StartMs, State, DbPath,
                 #{config_file => ConfigPath,
@@ -433,6 +459,7 @@ parse_from_config(ConfigPath, RulesOverride, StartMs, State) ->
 %%  factored out still holds, since both callers still route every error
 %%  branch through the same {reply, {error,_}, State} (State unchanged).
 finish_parse({ok, RawScanReport}, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta) ->
+    symbolic_operation_status:phase(analyzing),
     TypeScriptSettings = maps:get(typescript_settings, ExtraMeta, undefined),
     PublicExtraMeta = maps:remove(typescript_settings, ExtraMeta),
     case symbolic_ts_project:analyze(RawScanReport, CacheKey, TypeScriptSettings) of
@@ -446,12 +473,15 @@ finish_parse({error, Reason}, _CacheKey, _RulesOverride, _StartMs, State, _DbPat
     {reply, {error, Reason}, State}.
 
 finish_parse_report(ScanReport, CacheKey, RulesOverride, StartMs, State, DbPath, ExtraMeta) ->
+    symbolic_operation_status:phase(loading),
     Facts = maps:get(facts, ScanReport),
     RulesPath = resolve_rules(CacheKey, RulesOverride),
     case build_state(Facts, RulesPath) of
         {ok, Erl} ->
+            symbolic_operation_status:phase(persisting),
             case persist_database(DbPath, Facts, ScanReport) of
                 ok ->
+                    symbolic_operation_status:phase(publishing),
                     ElapsedMs = erlang:monotonic_time(millisecond) - StartMs,
                     DbMeta = case DbPath of undefined -> #{}; _ -> #{database => DbPath} end,
                     Meta = maps:merge(compute_meta(ScanReport, RulesPath, CacheKey, ElapsedMs),
