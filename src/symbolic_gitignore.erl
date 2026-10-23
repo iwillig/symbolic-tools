@@ -1,13 +1,11 @@
 %%% `.gitignore`-style path exclusion for `symbolic parse`'s directory
 %%% walk (symbolic_parse.erl). Two things this deliberately is NOT:
 %%%
-%%% - A full git implementation. Only a single, top-level `.gitignore` at
-%%%   the SCANNED directory's own root is read — real git additionally
-%%%   honors a `.gitignore` nested in every subdirectory, each scoped to
-%%%   its own subtree, `.git/info/exclude`, and a user's global
-%%%   `core.excludesFile`. None of those are consulted here. The common
-%%%   case (one project-root `.gitignore`, this project's own included)
-%%%   is what's actually built.
+%%% - A full git implementation. The scanned directory and its ancestors
+%%%   up to the containing Git root contribute their `.gitignore` rules,
+%%%   each scoped to its own path. Real git additionally honors ignored
+%%%   files in nested descendants, `.git/info/exclude`, and a user's
+%%%   global `core.excludesFile`. Those are not consulted here.
 %%% - A byte-for-byte glob translator. `*`, `?`, `**`, a leading `/`
 %%%   (root-anchored), a trailing `/` (directory-only), an internal `/`
 %%%   (also anchors, per real gitignore semantics), and a leading `!`
@@ -24,7 +22,7 @@
 %%% directory-pruning walk, not a post-hoc filter over an already-
 %%% completed scan), not just noise in the eventual result.
 -module(symbolic_gitignore).
--export([load/1, ignored/3, parse_line/1]).
+-export([load/1, load_scopes/1, ignored/3, ignored_scopes/3, parse_line/1]).
 
 %% {CompiledRegex, Negate, DirOnly}. Rules apply in order with
 %% later-wins precedence, same as real git: a later `!` un-ignores what
@@ -49,6 +47,41 @@ load(Dir) ->
         {error, _} ->
             Defaults
     end.
+
+%% A scan of a child of a Git worktree must inherit the worktree's
+%% .gitignore. Keep a path prefix for each scope so anchored rules are
+%% matched relative to the directory that declared them, not the scan root.
+%% Without a containing .git directory/file, retain the old behavior:
+%% only the scanned directory's own .gitignore is consulted.
+load_scopes(Dir) ->
+    AbsDir = filename:absname(Dir),
+    Dirs = scope_dirs(AbsDir, [AbsDir]),
+    [{scope_prefix(Scope, AbsDir), load(Scope)} || Scope <- Dirs].
+
+scope_dirs(Dir, Acc) ->
+    Git = filename:join(Dir, ".git"),
+    case filelib:is_dir(Git) orelse filelib:is_regular(Git) of
+        true -> Acc;
+        false ->
+            Parent = filename:dirname(Dir),
+            case Parent =:= Dir of
+                true -> [lists:last(Acc)];
+                false -> scope_dirs(Parent, [Parent | Acc])
+            end
+    end.
+
+scope_prefix(Scope, Dir) ->
+    Parts = lists:nthtail(length(filename:split(Scope)), filename:split(Dir)),
+    case Parts of [] -> ""; _ -> filename:join(Parts) end.
+
+ignored_scopes(RelPath, IsDir, Scopes) ->
+    lists:foldl(fun({Prefix, Rules}, Ignored) ->
+        ScopedPath = case Prefix of
+            "" -> RelPath;
+            _ -> filename:join(Prefix, RelPath)
+        end,
+        ignored(ScopedPath, IsDir, Rules, Ignored)
+    end, false, Scopes).
 
 %% One `.gitignore` line -> `{ok, Rule}`, or `skip` for a blank/comment
 %% line. Exported (not hidden in a fun) so it's unit-testable on its own
@@ -120,7 +153,9 @@ glob_to_regex([C | Rest], Acc) ->
 %% root, no leading "/") should be skipped. IsDir says whether RelPath
 %% names a directory — only then do dir-only rules apply — or a file.
 -spec ignored(string(), boolean(), [rule()]) -> boolean().
-ignored(RelPath, IsDir, Rules) ->
+ignored(RelPath, IsDir, Rules) -> ignored(RelPath, IsDir, Rules, false).
+
+ignored(RelPath, IsDir, Rules, Initial) ->
     lists:foldl(
         fun({Regex, Negate, DirOnly}, Acc) ->
             case DirOnly andalso not IsDir of
@@ -131,4 +166,4 @@ ignored(RelPath, IsDir, Rules) ->
                         nomatch -> Acc
                     end
             end
-        end, false, Rules).
+        end, Initial, Rules).

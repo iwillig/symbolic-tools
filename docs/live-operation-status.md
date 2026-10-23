@@ -15,19 +15,24 @@ except `elapsed_ms`, which is a duration.
 
 Parse phases: `starting`, `discovering`, `extracting`, `analyzing`, `loading`,
 `persisting`, `publishing`. Query phases: `starting`, `validating`, `proving`.
-These are coarse phases, not per-file counters. A failed scan never replaces
-the previous cache; `status` reports the failed attempt while `overview`
-keeps reporting the last good snapshot.
+These are coarse phases, not per-file counters. A fresh MCP server resumes
+its configured saved snapshot, then starts a background differential scan;
+`overview.ok.snapshot_source` is `disk` until that scan publishes, and
+`overview.ok.refreshing` reports whether it is still active. Queries can use
+saved facts during the scan. A failed scan never replaces the previous cache;
+`status` reports the failed attempt while `overview` keeps reporting the last
+good snapshot.
 
 ## How the concurrency works
 
 Two pieces make live status possible:
 
 - `symbolic_operation_status` is a separate `gen_statem` that observes the
-  cache process. The cache sends phase events without waiting for replies,
-  and the tracker monitors that process and records a crash if it dies
-  mid-operation. `status` never calls the cache process, so it is answered
-  even while the cache is blocked inside a parse or query call.
+  active operation owner: the cache process for explicit calls, or the
+  background worker during startup refresh. Owners send phase events
+  without waiting for replies. The tracker monitors the owner and records
+  a crash if it dies mid-operation. `status` never calls the cache process,
+  so it remains available during an explicit parse or query.
 - `symbolic_stdio` is the MCP stdio transport (replacing the pinned erlmcp
   0.5.1 stdio server, whose request loop ran tool handlers inline, so a
   `status` request could not be dispatched while `parse` or `query` blocked

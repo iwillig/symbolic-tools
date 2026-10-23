@@ -3,9 +3,10 @@
 %%% A single registered gen_server that can hold more than one cached
 %%% codebase at once — one per PROJECT `parse` was pointed at, keyed by
 %%% that project's own root. A project's optional config database is
-%%% persisted to DETS on parse; queries use the in-memory snapshot until
-%%% that project is parsed again. `query`/`overview` take an optional path
-%%% to select an entry, defaulting to the most recently parsed project.
+%%% persisted to DETS on parse. The MCP server restores it at startup,
+%%% then runs a background differential scan while queries use the saved
+%%% snapshot. `query`/`overview` take an optional path to select an
+%%% entry, defaulting to the most recently published project.
 %%%
 %%% Each cache entry is an erlog state (facts asserted in, ready to prove
 %%% against) plus a small Meta summary computed at parse time. Queries are
@@ -44,9 +45,9 @@
 -behaviour(gen_server).
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/0, parse/1, parse/2, query/1, query/2, query/3,
+-export([start_link/0, start_link/1, parse/1, parse/2, parse_config/2, query/1, query/2, query/3,
     ask/2, facts/1, overview/0, overview/1]).
--export([init/1, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(DEFAULT_LIMIT, 50).
 -define(MAX_LIMIT, 1000).
@@ -59,8 +60,13 @@
 %% project (erlog state + meta). Multiple projects coexist and stay
 %% independently queryable; a crash in one parse never disturbs the
 %% others (safely/2).
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+start_link() -> start_link(#{}).
+
+%% Only the MCP entry point opts into saved-snapshot hydration and
+%% background refresh; callers of start_link/0 keep their explicit-parse
+%% lifecycle.
+start_link(Options) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [Options], []).
 
 %% Discover and parse the PROJECT Dir belongs to (see this module's own
 %% header comment), and (re)build that project's cache entry — every
@@ -101,6 +107,16 @@ parse(Dir) ->
 %% fails the whole parse and leaves the previous cache untouched.
 parse(Dir, RulesOverride) ->
     gen_server:call(?MODULE, {parse, Dir, RulesOverride}, infinity).
+
+-spec parse_config(file:filename(), file:filename() | undefined) -> {ok, map()} | {error, term()}.
+%% Parse a project selected by an EXPLICIT .symbolic/config.json path (the
+%% MCP `parse` tool's `config_file` target) — the same scan/persist tail as
+%% parse/1's server-cwd discovery, but the config file is named rather than
+%% discovered by walking up from this server's own working directory. The
+%% config is still validated (paths required, database optional, typescript
+%% settings read), and every error leaves the previous cache untouched.
+parse_config(ConfigPath, RulesOverride) ->
+    gen_server:call(?MODULE, {parse_config, ConfigPath, RulesOverride}, infinity).
 
 %% Prove Goal against a cached directory's fact base, returning ALL
 %% solutions (capped at Limit, default ?DEFAULT_LIMIT). Returns
@@ -182,11 +198,19 @@ overview(Path) ->
 %% caches: NormalizedDir -> #{erl => ErlState, meta => Meta,
 %%                        facts => [Fact]} (raw facts — the ask
 %% pipeline's one-shot sessions; see the finish_parse comment).
-%% current: the NormalizedDir most recently parsed successfully, or
-%% undefined if nothing has been parsed yet — what query/3 and
-%% overview/1 fall back to when their Path argument is undefined.
-init([]) ->
-    {ok, #{caches => #{}, current => undefined}}.
+%% current: the NormalizedDir most recently published (from disk or a
+%% scan), or undefined if neither exists — the default for query/3 and
+%% overview/1. refresh: optional startup worker, never a published cache.
+init([Options]) ->
+    Empty = #{caches => #{}, current => undefined, refresh => undefined,
+              resuming => maps:get(startup_refresh, Options, false)},
+    case maps:get(startup_refresh, Options, false) of
+        true ->
+            {State, Config} = resume_configured_project(Empty),
+            case Config of undefined -> ok; _ -> self() ! {start_refresh, Config} end,
+            {ok, State};
+        false -> {ok, Empty}
+    end.
 
 %% Two deliberately DIFFERENT rules for "which project", not one —
 %% see this module's header comment and parse/2's own doc comment:
@@ -209,7 +233,8 @@ init([]) ->
 %% extract_file_timed/1 (symbolic_parse.erl) already catches the single
 %% most likely crash site, a bad literal inside one file, but this is
 %% the outer backstop for anything else that might crash during a scan.
-handle_call({parse, undefined, RulesOverride}, _From, State) ->
+handle_call({parse, undefined, RulesOverride}, _From, State0) ->
+    State = cancel_refresh(State0),
     tracked_parse(fun() ->
         symbolic_operation_status:phase(discovering),
         StartMs = erlang:monotonic_time(millisecond),
@@ -222,7 +247,8 @@ handle_call({parse, undefined, RulesOverride}, _From, State) ->
             {error, Reason} -> {reply, {error, Reason}, State}
         end
     end, undefined, State);
-handle_call({parse, Dir, RulesOverride}, _From, State) ->
+handle_call({parse, Dir, RulesOverride}, _From, State0) ->
+    State = cancel_refresh(State0),
     tracked_parse(fun() ->
         symbolic_operation_status:phase(discovering),
         StartMs = erlang:monotonic_time(millisecond),
@@ -237,6 +263,13 @@ handle_call({parse, Dir, RulesOverride}, _From, State) ->
             ConfigPath -> parse_from_config(ConfigPath, RulesOverride, StartMs, State)
         end
     end, Dir, State);
+handle_call({parse_config, ConfigPath, RulesOverride}, _From, State0) ->
+    State = cancel_refresh(State0),
+    tracked_parse(fun() ->
+        symbolic_operation_status:phase(discovering),
+        StartMs = erlang:monotonic_time(millisecond),
+        parse_from_config(ConfigPath, RulesOverride, StartMs, State)
+    end, ConfigPath, State);
 
 handle_call({query, Goal, Limit, Path}, _From, State) ->
     symbolic_operation_status:started(query, Path),
@@ -272,7 +305,16 @@ handle_call({overview, Path}, _From, State) ->
     case resolve_cache_entry(Path, State) of
         {error, not_parsed} -> {reply, {not_parsed, #{loaded => false}}, State};
         {error, Reason} -> {reply, {error, Reason}, State};
-        {ok, #{meta := Meta}} -> {reply, {ok, Meta}, State}
+        {ok, #{meta := Meta}} ->
+            case maps:get(resuming, State, false) of
+                false -> {reply, {ok, Meta}, State};
+                true ->
+                    Refreshing = case maps:get(refresh, State) of
+                        #{root := Root} -> maps:get(path, Meta) =:= Root;
+                        undefined -> false
+                    end,
+                    {reply, {ok, Meta#{refreshing => Refreshing}}, State}
+            end
     end.
 
 %% The query ladder, extracted so handle_call/3 reads as dispatch: no
@@ -295,6 +337,109 @@ query_reply(Goal, Limit, Erl) ->
 status_outcome({error, Reason}) -> {error, Reason};
 status_outcome(_Result) -> ok.
 
+%% Hydrate only the MCP server's configured project. A missing or
+%% unreadable snapshot is not a fact base: log and let the refresh build
+%% one; never publish a partially loaded erlog state.
+resume_configured_project(State) ->
+    case file:get_cwd() of
+        {ok, Cwd} ->
+            case symbolic_config:discover(Cwd) of
+                undefined -> {State, undefined};
+                ConfigPath ->
+                    case symbolic_config:read_settings(ConfigPath) of
+                        {ok, #{database := Db} = Settings} when Db =/= undefined ->
+                            Root = symbolic_config:project_root(ConfigPath),
+                            Config = #{root => Root, db => Db, config => ConfigPath,
+                                       paths => maps:get(paths, Settings),
+                                       typescript => maps:get(typescript, Settings, undefined)},
+                            {resume_snapshot(Root, Db, State), Config};
+                        {ok, _} -> {State, undefined};
+                        {error, Reason} ->
+                            ?LOG_WARNING("cannot read startup project config: ~p", [Reason]),
+                            {State, undefined}
+                    end
+            end;
+        {error, Reason} ->
+            ?LOG_WARNING("cannot get cwd for startup snapshot: ~p", [Reason]),
+            {State, undefined}
+    end.
+
+resume_snapshot(Root, Db, State) ->
+    case {filelib:is_regular(Db), symbolic_fact_store:read_metadata(Db)} of
+        {true, {ok, Saved}} ->
+            try
+                Facts = symbolic_fact_store:read(Db),
+                Rules = resolve_rules(Root, undefined),
+                case build_state(Facts, Rules) of
+                    {ok, Erl} ->
+                        Meta = saved_meta(Root, Db, Rules, Saved, Facts),
+                        ?LOG_INFO("restored ~p facts from ~s; refreshing in background",
+                                  [length(Facts), Db]),
+                        State#{caches => #{Root => #{erl => Erl, facts => Facts,
+                                                     database => Db, meta => Meta}},
+                               current => Root};
+                    {error, RuleError} ->
+                        ?LOG_WARNING("cannot load saved rules ~p: ~p", [Rules, RuleError]),
+                        State
+                end
+            catch Class:Reason:Stack ->
+                ?LOG_WARNING("cannot restore ~s: ~p:~p ~p", [Db, Class, Reason, Stack]),
+                State
+            end;
+        {true, Other} ->
+            ?LOG_WARNING("saved database metadata unavailable ~s: ~p", [Db, Other]),
+            State;
+        {false, _} -> State
+    end.
+
+saved_meta(Root, Db, Rules, Saved, Facts) ->
+    #{loaded => true, path => Root, database => Db, rules_file => Rules,
+      snapshot_source => disk, refreshing => false, parse_ms => null,
+      scan_complete => maps:get(<<"complete">>, Saved, false),
+      scan_metadata_available => maps:get(<<"metadata_available">>, Saved, false),
+      files => maps:get(<<"files">>, Saved, 0),
+      scan_paths => [binary_to_list(P) || P <- maps:get(<<"scan_paths">>, Saved, [])],
+      failed_files => [binary_to_list(P) || P <- maps:get(<<"failed_files">>, Saved, [])],
+      languages => [binary_to_list(L) || L <- maps:get(<<"languages">>, Saved,
+                                                       [<<"unknown">>])],
+      type_analysis => maps:get(<<"typescript_analysis">>, Saved,
+                                #{<<"status">> => <<"unknown">>}),
+      facts_by_predicate => counts_by_predicate(Facts), total_facts => length(Facts)}.
+
+start_refresh(#{root := Root, db := Db, paths := Paths, typescript := TS} = Config, State) ->
+    Parent = self(),
+    {Pid, Ref} = spawn_monitor(fun() ->
+        symbolic_operation_status:started(parse, Root),
+        symbolic_operation_status:phase(extracting),
+        Result = try
+            Cache = symbolic_file_cache:load(Db),
+            case symbolic_parse:scan_paths_report(Paths, Cache) of
+                {ok, #{complete := false, failed_files := Failed}} ->
+                    {error, {incomplete_scan, Failed}};
+                {ok, Scan} ->
+                    symbolic_operation_status:phase(analyzing),
+                    symbolic_ts_project:analyze(Scan, Root, TS);
+                Error -> Error
+            end
+        catch Class:Reason:Stack ->
+            ?LOG_ERROR("startup refresh crashed: ~p:~p ~p", [Class, Reason, Stack]),
+            {error, {refresh_crashed, Class, Reason}}
+        end,
+        Parent ! {refresh_result, self(), Result},
+        receive
+            {refresh_published, Outcome} -> symbolic_operation_status:finished(Outcome)
+        end
+    end),
+    ?LOG_INFO("startup differential scan for ~s", [Root]),
+    State#{refresh => Config#{pid => Pid, ref => Ref}}.
+
+cancel_refresh(#{refresh := undefined} = State) -> State;
+cancel_refresh(#{refresh := #{pid := Pid, ref := Ref}} = State) ->
+    symbolic_operation_status:cancelled(Pid),
+    exit(Pid, kill),
+    erlang:demonitor(Ref, [flush]),
+    State#{refresh => undefined}.
+
 tracked_parse(Fun, Path, State) ->
     symbolic_operation_status:started(parse, Path),
     Reply = safely(Fun, State),
@@ -305,9 +450,38 @@ tracked_parse(Fun, Path, State) ->
 %% Standard OTP no-op: nothing in this module uses casts.
 handle_cast(_Msg, State) -> {noreply, State}.
 
-%% Standard OTP no-op: cache state lives in the process, nothing to
-%% clean up on shutdown (an in-flight parse's worker process is
-%% already isolated — see safely/2 and prove_all_with_timeout/3).
+handle_info({start_refresh, Config}, State) ->
+    {noreply, start_refresh(Config, State)};
+handle_info({refresh_result, Pid, Result}, #{refresh := #{pid := Pid} = Job} = State) ->
+    Reply = case Result of
+        {ok, ScanReport} ->
+            #{root := Root, db := Db, config := Config} = Job,
+            StartMs = erlang:monotonic_time(millisecond),
+            safely(fun() -> finish_parse_report(ScanReport, Root, undefined,
+                        StartMs, State#{refresh => undefined}, Db,
+                        #{config_file => Config}) end, State#{refresh => undefined});
+        {error, Reason} ->
+            ?LOG_ERROR("startup refresh failed: ~p; keeping saved snapshot", [Reason]),
+            {reply, {error, Reason}, State#{refresh => undefined}}
+    end,
+    {reply, Outcome, NewState} = Reply,
+    case Outcome of
+        {ok, Meta} -> ?LOG_INFO("startup refresh published ~p facts for ~s",
+                                [maps:get(total_facts, Meta), maps:get(path, Meta)]);
+        {error, PublishError} -> ?LOG_ERROR("startup refresh publish failed: ~p; saved snapshot kept",
+                                            [PublishError])
+    end,
+    Pid ! {refresh_published, status_outcome(Outcome)},
+    erlang:demonitor(maps:get(ref, Job), [flush]),
+    {noreply, NewState};
+handle_info({refresh_result, _StalePid, _Result}, State) -> {noreply, State};
+handle_info({'DOWN', Ref, process, Pid, Reason},
+            #{refresh := #{pid := Pid, ref := Ref}} = State) ->
+    ?LOG_ERROR("startup refresh worker stopped: ~p; keeping saved snapshot", [Reason]),
+    {noreply, State#{refresh => undefined}};
+handle_info(_Message, State) -> {noreply, State}.
+
+terminate(_Reason, State) when is_map(State) -> _ = cancel_refresh(State), ok;
 terminate(_Reason, _State) -> ok.
 
 %% Standard OTP no-op: the cache is rebuilt by a fresh parse, never
@@ -487,15 +661,19 @@ finish_parse_report(ScanReport, CacheKey, RulesOverride, StartMs, State, DbPath,
                     Meta = maps:merge(compute_meta(ScanReport, RulesPath, CacheKey, ElapsedMs),
                                       maps:merge(ExtraMeta, DbMeta)),
                     Caches = maps:get(caches, State),
-                    %% The memory cache is a snapshot of this parse. A later
-                    %% CLI write to the shared DETS file is visible after MCP
-                    %% parses again, as documented in the shared-db contract.
+                    %% A later CLI write to the shared DETS file is visible
+                    %% only after MCP parses again or a fresh MCP process
+                    %% restores the saved snapshot.
                     FileCache = case DbPath of
                         undefined -> #{file_cache => #{version => symbolic_file_cache:version(),
                                                         files => maps:get(file_cache, ScanReport)}};
                         _ -> #{} %% The persisted sidecar supplies the next scan.
                     end,
-                    Entry = maps:merge(#{erl => Erl, meta => Meta,
+                    EntryMeta = case maps:get(resuming, State, false) of
+                        true -> Meta#{snapshot_source => scan, refreshing => false};
+                        false -> Meta
+                    end,
+                    Entry = maps:merge(#{erl => Erl, meta => EntryMeta,
                                          facts => Facts, database => DbPath}, FileCache),
                     NewState = State#{caches => Caches#{CacheKey => Entry},
                                       current => CacheKey},
@@ -520,6 +698,8 @@ scan_metadata(Report) ->
       <<"scan_paths">> => [unicode:characters_to_binary(filename:absname(Path))
           || Path <- maps:get(scan_paths, Report)],
       <<"files">> => length(maps:get(files, Report)),
+      <<"languages">> => [unicode:characters_to_binary(L)
+          || L <- languages_from_files(maps:get(files, Report))],
       <<"failed_files">> => [unicode:characters_to_binary(filename:absname(Path))
           || Path <- maps:get(failed_files, Report)],
       <<"typescript_analysis">> => symbolic_ts_project:summary_json(

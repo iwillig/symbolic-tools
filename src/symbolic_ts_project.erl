@@ -5,7 +5,8 @@
 
 -export([analyze/3, summary_json/1]).
 
--define(WORKER_TIMEOUT_MS, 30000).
+%% Bound the entire worker invocation, not just the interval between stdout chunks.
+-define(WORKER_TIMEOUT_MS, 90000).
 -define(MAX_WORKER_OUTPUT, 33554432).
 
 -spec analyze(map(), file:filename(), map() | undefined) -> {ok, map()} | {error, term()}.
@@ -180,7 +181,8 @@ invoke_worker(Node, RequestPath) ->
     try open_port({spawn_executable, Node},
             [binary, exit_status, use_stdio, hide, {args, Args}]) of
         Port ->
-            try collect_output(Port, [], 0)
+            Deadline = erlang:monotonic_time(millisecond) + ?WORKER_TIMEOUT_MS,
+            try collect_output(Port, [], 0, Deadline)
             after
                 try port_close(Port) catch _:_ -> ok end
             end
@@ -188,19 +190,21 @@ invoke_worker(Node, RequestPath) ->
         error:Reason -> {error, {worker_start, Reason}}
     end.
 
-collect_output(Port, Chunks, Size) ->
-    receive
-        {Port, {data, Data}} ->
-            NewSize = Size + byte_size(Data),
-            case NewSize > ?MAX_WORKER_OUTPUT of
-                true -> {error, output_limit};
-                false -> collect_output(Port, [Data | Chunks], NewSize)
-            end;
-        {Port, {exit_status, 0}} ->
-            decode_worker_output(iolist_to_binary(lists:reverse(Chunks)));
-        {Port, {exit_status, _Status}} ->
-            decode_worker_output(iolist_to_binary(lists:reverse(Chunks)))
-    after ?WORKER_TIMEOUT_MS -> {error, timeout}
+collect_output(Port, Chunks, Size, Deadline) ->
+    case Deadline - erlang:monotonic_time(millisecond) of
+        Remaining when Remaining =< 0 -> {error, timeout};
+        Remaining ->
+            receive
+                {Port, {data, Data}} ->
+                    NewSize = Size + byte_size(Data),
+                    case NewSize > ?MAX_WORKER_OUTPUT of
+                        true -> {error, output_limit};
+                        false -> collect_output(Port, [Data | Chunks], NewSize, Deadline)
+                    end;
+                {Port, {exit_status, _Status}} ->
+                    decode_worker_output(iolist_to_binary(lists:reverse(Chunks)))
+            after Remaining -> {error, timeout}
+            end
     end.
 
 decode_worker_output(<<>>) -> {error, invalid_worker_output};

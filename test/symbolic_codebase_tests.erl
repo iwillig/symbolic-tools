@@ -77,6 +77,7 @@ codebase_test_() ->
         fun parse_with_no_path_merges_config_paths/1,
         fun parse_with_no_path_and_no_config_is_error/1,
         fun path_is_a_project_root_uses_its_own_config/1,
+        fun parse_config_by_explicit_path_uses_that_config/1,
         fun configured_typescript_analysis_status_is_cached_and_queryable/1,
         fun configured_database_is_shared_with_cli_query_and_refreshes_on_reparse/1,
         fun two_projects_stay_independently_cached_via_their_own_roots/1,
@@ -610,6 +611,20 @@ path_is_a_project_root_uses_its_own_config(_Setup) ->
             %% .symbolic/config.json. Proving Root wins means the scratch
             %% project's facts show up, not the real one's.
             {ok, Meta} = symbolic_codebase:parse(Root),
+            ?assertEqual(Root, maps:get(path, Meta)),
+            ?assertEqual(ConfigPath, maps:get(config_file, Meta)),
+            {ok, Solutions} = symbolic_codebase:query("defines(F, _, _, _, _)", 50, Root),
+            Names = lists:sort([proplists:get_value('F', Bs) || Bs <- Solutions]),
+            ?assertEqual([hello, run], Names)
+        end)
+    end.
+
+parse_config_by_explicit_path_uses_that_config(_Setup) ->
+    fun() ->
+        with_scratch_config_codebase(fun(Root, ConfigPath) ->
+            %% The MCP `parse` tool's `config_file` target: an explicit
+            %% config path parses THAT project, not the server-cwd one.
+            {ok, Meta} = symbolic_codebase:parse_config(ConfigPath, undefined),
             ?assertEqual(Root, maps:get(path, Meta)),
             ?assertEqual(ConfigPath, maps:get(config_file, Meta)),
             {ok, Solutions} = symbolic_codebase:query("defines(F, _, _, _, _)", 50, Root),

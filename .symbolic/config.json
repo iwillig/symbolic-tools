@@ -1,4 +1,8 @@
 {
   "paths": ["src", "test", "docs"],
-  "database": ".symbolic/facts.dets"
+  "database": ".symbolic/facts.dets",
+  "typescript": {
+    "enabled": true,
+    "projects": ["src"]
+  }
 }

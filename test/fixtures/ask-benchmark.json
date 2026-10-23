@@ -127,7 +127,7 @@
     "operation": "calls",
     "slots": {"caller": "render_ask/1", "callee": "ambiguity_answer/1"},
     "expected": {"status": "answer", "type": "yes_no", "answer": true},
-    "evidence": [{"predicate": "calls", "file": "symbolic_serve.erl", "line": 544}]
+    "evidence": [{"predicate": "calls", "file": "symbolic_serve.erl", "line": 548}]
   },
   {
     "id": "real-atomic-snapshot-persistence-callers",
@@ -138,8 +138,8 @@
     "slots": {"callee": "write_bundle/4"},
     "expected": {"status": "answer", "type": "enumerate", "answer": ["maybe_store_report/2", "persist_database/3", "write_bundle/3"]},
     "evidence": [
-      {"predicate": "calls", "file": "symbolic_codebase.erl", "line": 511},
-      {"predicate": "calls", "file": "symbolic_parse.erl", "line": 488},
+      {"predicate": "calls", "file": "symbolic_codebase.erl", "line": 672},
+      {"predicate": "calls", "file": "symbolic_parse.erl", "line": 521},
       {"predicate": "calls", "file": "symbolic_fact_store.erl", "line": 42}
     ]
   },

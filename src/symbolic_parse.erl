@@ -53,11 +53,8 @@ scan_report(Dir, Cache) ->
 %% ts_extract:file/1 timed and logged per file — this is what lets an
 %% operator (or an agent reading the log) see which file is currently
 %% being parsed and how long each one took, rather than only a single
-%% total at the end. Logged via `logger`, same as everywhere else in this
-%% codebase; filtered out entirely unless the primary log level is raised
-%% to `info` (see symbolic_serve:setup_logging/0), so this is silent by
-%% default for the CLI and only visible when the MCP server turns logging
-%% on and points it at a file.
+%% total at the end. Logged via `logger`: the CLI records info-level
+%% progress in parse.log, while the MCP server uses its own serve.log.
 %%
 %% Issue #4's "broader" fix: a crash anywhere inside ts_extract:file/1 —
 %% a malformed/unsupported literal (issue #4's own bare-exponent case
@@ -92,7 +89,7 @@ extract_file_safely(File) ->
 
 %% parallel_extract(Files, Cache) -> {Facts, FailedFiles, Entries}.
 %% Facts are not usorted — callers usort the combined list.
-%%  One process per file instead of lists:flatmap/2's sequential walk.
+%%  Up to eight processes at a time instead of lists:flatmap/2's sequential walk.
 %%  Safe to run concurrently: every ts_extract:file/1 call makes its own
 %%  fresh symbolic_ts:parser_new/0 (confirmed against every
 %%  ts_extract_*.erl module and native/symbolic_ts/src/lib.rs directly —
@@ -145,20 +142,31 @@ extract_cached(File, Cache) ->
     end.
 
 %% parallel_map(Fun, Items) -> [Fun(Item)] (same order as Items).
-%%  One process per item, spawn_monitor'd; results are collected by
-%%  waiting on each {Pid, Ref} pair IN ORDER — receive's selective match
-%%  finds that pair's message in the mailbox whenever it arrives, so
-%%  this doesn't require replies to arrive in spawn order, just that
-%%  every one eventually does. Bounded only by however many Items there
-%%  are — fine here (a handful of scan paths, at most a few hundred
-%%  files per directory), so no fixed-size worker pool.
-parallel_map(Fun, Items) ->
+%%  A bounded batch avoids copying the potentially large incremental
+%%  cache into thousands of simultaneous workers. Results are collected
+%%  in input order; on a crash, terminate and drain the batch first.
+-define(MAX_SCAN_WORKERS, 8).
+parallel_map(Fun, Items) -> parallel_batches(Fun, Items, []).
+
+parallel_batches(_Fun, [], Reversed) -> lists:reverse(Reversed);
+parallel_batches(Fun, Items, Reversed) ->
+    {Batch, Rest} = lists:split(min(?MAX_SCAN_WORKERS, length(Items)), Items),
     Parent = self(),
     Workers = [begin
         {Pid, Ref} = spawn_monitor(fun() -> Parent ! {self(), Fun(Item)} end),
         {Pid, Ref, Item}
-    end || Item <- Items],
-    [parallel_collect(Pid, Ref, Item) || {Pid, Ref, Item} <- Workers].
+    end || Item <- Batch],
+    Results = try
+        [parallel_collect(Pid, Ref, Item) || {Pid, Ref, Item} <- Workers]
+    catch Class:Reason:Stack ->
+        [begin
+             exit(Pid, kill),
+             erlang:demonitor(Ref, [flush]),
+             receive {Pid, _} -> ok after 0 -> ok end
+         end || {Pid, Ref, _} <- Workers],
+        erlang:raise(Class, Reason, Stack)
+    end,
+    parallel_batches(Fun, Rest, lists:reverse(Results, Reversed)).
 
 parallel_collect(Pid, Ref, Item) ->
     receive
@@ -213,6 +221,7 @@ scan_each(Paths, Cache) ->
         {error, _Reason} = Error -> Error;
         false ->
             Files = unique_files([F || {ok, Group} <- Discovered, F <- Group]),
+            ?LOG_INFO("parse: discovered ~p files across ~p paths", [length(Files), length(Paths)]),
             {Facts, FailedFiles, Entries} = parallel_extract(Files, Cache),
             {ok, (scan_report_map(Paths, Files, lists:usort(Facts), FailedFiles))
                  #{file_cache => Entries}}
@@ -252,11 +261,10 @@ scan_report_map(Paths, Files, Facts, FailedFiles) ->
 %% listing every file under node_modules/_build/etc. even though every
 %% one of them was certain to be discarded afterward. This prunes an
 %% ignored directory the moment it's found, using
-%% symbolic_gitignore:load/1 (that project's own top-level `.gitignore`,
-%% plus node_modules/.git unconditionally — see that module's own
-%% header for exactly what is and isn't supported).
+%% symbolic_gitignore:load_scopes/1 (the containing Git root's rules and
+%% intervening scopes, plus node_modules/.git by default).
 scan_files(Dir) ->
-    Rules = symbolic_gitignore:load(Dir),
+    Rules = symbolic_gitignore:load_scopes(Dir),
     try {ok, walk(Dir, "", Rules)}
     catch
         throw:{cannot_list_directory, _, _} = Reason -> {error, Reason};
@@ -289,7 +297,7 @@ walk_entry(AbsDir, RelDir, Entry, Rules) ->
             case file:read_link_info(AbsPath) of
                 {ok, #file_info{type = symlink}} -> [];
                 {ok, _} ->
-                    case symbolic_gitignore:ignored(RelPath, true, Rules) of
+                    case symbolic_gitignore:ignored_scopes(RelPath, true, Rules) of
                         true -> [];
                         false -> walk(AbsPath, RelPath, Rules)
                     end;
@@ -299,7 +307,7 @@ walk_entry(AbsDir, RelDir, Entry, Rules) ->
                     throw({cannot_inspect_directory, AbsPath, Reason})
             end;
         false ->
-            case symbolic_gitignore:ignored(RelPath, false, Rules)
+            case symbolic_gitignore:ignored_scopes(RelPath, false, Rules)
                 orelse not lists:member(filename:extension(Entry), ?SCAN_EXTENSIONS) of
                 true -> [];
                 false -> [AbsPath]
@@ -335,6 +343,7 @@ run_config(ConfigOverride, DbPath) ->
     cli_parse(fun() -> run_configured(ConfigOverride, DbPath) end).
 
 run_configured(ConfigOverride, DbPath) ->
+    cli_phase(discovering),
     case resolve_config(ConfigOverride) of
         {ok, ConfigPath} ->
             case symbolic_config:read_settings(ConfigPath) of
@@ -374,16 +383,20 @@ cache_for_db(undefined) -> #{};
 cache_for_db(DbPath) -> symbolic_file_cache:load(DbPath).
 
 run_paths(Paths, DbPath, ScopeRoot, TypeScriptSettings) ->
+    cli_phase(extracting),
     case scan_paths_report(Paths, cache_for_db(DbPath)) of
         {ok, Report} -> complete_parse(Report, ScopeRoot, TypeScriptSettings, DbPath);
         {error, Reason} -> halt_error(Reason)
     end.
 
 complete_parse(RawReport, ScopeRoot, TypeScriptSettings, DbPath) ->
+    cli_phase(analyzing),
     case symbolic_ts_project:analyze(RawReport, ScopeRoot, TypeScriptSettings) of
         {ok, Report} ->
+            cli_phase(persisting),
             case maybe_store_report(DbPath, Report) of
                 ok ->
+                    cli_phase(completed),
                     print_summary_report(Report),
                     halt(0);
                 {error, Reason} -> halt_error({database_write_failed, DbPath, Reason})
@@ -405,14 +418,34 @@ cli_parse(Fun) ->
             halt(1)
     end.
 
-%% A CLI parse prints one JSON summary on stdout. OTP's default logger
-%% handler writes errors to stdout, corrupting that JSON on partial scans.
-%% This is a one-shot CLI entry point; the MCP server installs its own file
-%% handler and does not call run/2 or run_config/2.
+%% A CLI parse prints one JSON summary on stdout. Keep warnings/errors on
+%% stderr and record info-level progress in the same parse.log that the
+%% external CLI launcher uses to report fatal signals such as SIGKILL.
+%% This is a one-shot CLI entry point; the MCP server has its own log sink.
 cli_logger_to_stderr() ->
     ok = logger:remove_handler(default),
+    ok = logger:set_primary_config(level, info),
     ok = logger:add_handler(symbolic_parse_cli_stderr, logger_std_h,
-                            #{config => #{type => standard_error}}).
+                            #{level => warning, config => #{type => standard_error}}),
+    LogFile = case os:getenv("SYMBOLIC_PARSE_LOG") of
+        false -> filename:join(filename:basedir(user_log, "symbolic"), "parse.log");
+        Path -> Path
+    end,
+    case filelib:ensure_dir(LogFile) of
+        ok ->
+            case logger:add_handler(symbolic_parse_cli_file, logger_std_h,
+                    #{level => info, config => #{type => {file, LogFile}}}) of
+                ok -> ?LOG_INFO("parse: logging to ~s", [LogFile]);
+                {error, Reason} ->
+                    io:format(standard_error, "parse: cannot open log ~s: ~p~n", [LogFile, Reason])
+            end;
+        {error, Reason} ->
+            io:format(standard_error, "parse: cannot create log ~s: ~p~n", [LogFile, Reason])
+    end,
+    ok.
+
+cli_phase(Phase) ->
+    ?LOG_INFO("parse: phase=~s beam_memory_bytes=~p", [Phase, erlang:memory(total)]).
 
 halt_error(Reason) ->
     io:put_chars(standard_error, error_message(Reason)),

@@ -53,6 +53,48 @@ if [ "$FOUND_EBIN" != true ]; then
     exit 127
 fi
 
+# `erl` cannot log its own SIGKILL. Keep an external parent for parse so
+# an OS-terminated VM has an exit record beside the CLI phase log. Other
+# commands retain exec and their original process/signal behavior.
+if [ "${1:-}" = parse ]; then
+    if [ -z "${SYMBOLIC_PARSE_LOG:-}" ]; then
+        case "$(uname -s)" in
+            Darwin) SYMBOLIC_PARSE_LOG="${HOME}/Library/Logs/symbolic/parse.log" ;;
+            *) SYMBOLIC_PARSE_LOG="${XDG_STATE_HOME:-${HOME}/.local/state}/symbolic/parse.log" ;;
+        esac
+    fi
+    export SYMBOLIC_PARSE_LOG
+    LOG_DIR=$(dirname "$SYMBOLIC_PARSE_LOG")
+    if ! mkdir -p "$LOG_DIR" 2>/dev/null; then
+        printf 'symbolic: cannot create parse log directory: %s\n' "$LOG_DIR" >&2
+    fi
+    erl -pa "$LIB_DIR"/*/ebin \
+        -noshell \
+        -eval "symbolic_cli:main(init:get_plain_arguments()), halt()." \
+        -extra "$@" &
+    CHILD=$!
+    # RSS is an OS measurement; erlang:memory/0 excludes native NIF memory.
+    # Keep sampling outside the VM so the final recorded sample survives it.
+    (
+        while kill -0 "$CHILD" 2>/dev/null; do
+            RSS=$(ps -o rss= -p "$CHILD" 2>/dev/null | tr -d ' ')
+            if [ -n "$RSS" ]; then
+                printf '%s parse: pid=%s rss_kb=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$CHILD" "$RSS" >> "$SYMBOLIC_PARSE_LOG" 2>/dev/null || :
+            fi
+            sleep 5
+        done
+    ) &
+    SAMPLER=$!
+    wait "$CHILD"
+    RC=$?
+    kill "$SAMPLER" 2>/dev/null || :
+    SIGNAL=none
+    if [ "$RC" -eq 137 ]; then SIGNAL=SIGKILL; fi
+    printf '%s parse: pid=%s exit_status=%s signal=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$CHILD" "$RC" "$SIGNAL" >> "$SYMBOLIC_PARSE_LOG" 2>/dev/null || \
+        printf 'symbolic: cannot write parse log: %s\n' "$SYMBOLIC_PARSE_LOG" >&2
+    exit "$RC"
+fi
+
 exec erl -pa "$LIB_DIR"/*/ebin \
     -noshell \
     -eval "symbolic_cli:main(init:get_plain_arguments()), halt()." \

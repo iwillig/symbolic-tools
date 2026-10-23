@@ -6,12 +6,51 @@
 
 -export([resolve/1, analyze/3]).
 
--define(TIMEOUT_MS, 30000).
+%% Whole-project deadline; a large project can spend 30s in diagnostics alone.
+%% Keep a finite cap so a stuck compiler cannot stall the scan indefinitely.
+-define(TIMEOUT_MS, 90000).
 -define(MAX_MESSAGE_BYTES, 33554432).
 -define(MAX_LOCATIONS, 20000).
 -define(MAX_TYPES, 10000).
 -define(MAX_EDGES, 50000).
 -define(MAX_TYPE_DEPTH, 12).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+location_facts_scaling_test_() ->
+    {timeout, 60, fun() ->
+        {SmallUs, _} = timer:tc(fun() -> location_facts_fixture(2000) end),
+        {LargeUs, _} = timer:tc(fun() -> location_facts_fixture(8000) end),
+        ?debugFmt("location_facts: 2k=~p us 8k=~p us", [SmallUs, LargeUs]),
+        ?assert(LargeUs < 12 * max(1, SmallUs))
+    end}.
+
+location_facts_deduplicates_symbols_test() ->
+    File = "/tmp/symbolic-tsgo-dedup.ts",
+    Location = #{start => 0, 'end' => 1, category => reference},
+    Symbol = #{<<"id">> => 42, <<"name">> => <<"same">>, <<"flags">> => 8},
+    Rows = [{File, <<>>, Location, #{<<"id">> => 1}, Symbol},
+            {File, <<>>, Location#{start => 2, 'end' => 3}, #{<<"id">> => 1}, Symbol}],
+    {Symbols, _, _, TypesAt, Links} = location_facts(
+        Rows, #{nodes => [#{<<"id">> => <<"1">>}]}),
+    ?assertEqual([#{<<"id">> => <<"42">>, <<"name">> => <<"same">>,
+                    <<"kind">> => <<"value">>}], Symbols),
+    ?assertEqual(2, length(TypesAt)),
+    ?assertEqual(2, length(Links)).
+
+location_facts_fixture(Count) ->
+    File = "/tmp/symbolic-tsgo-perf.ts",
+    Locations = [{File, <<>>, #{start => I, 'end' => I + 1,
+                     category => reference},
+                  #{<<"id">> => 1},
+                  #{<<"id">> => I, <<"name">> => <<"symbol">>, <<"flags">> => 8}}
+                 || I <- lists:seq(1, Count)],
+    {Symbols, _, _, TypesAt, _} = location_facts(Locations,
+                                                #{nodes => [#{<<"id">> => <<"1">>}]}),
+    ?assertEqual(Count, length(Symbols)),
+    ?assertEqual(Count, length(TypesAt)).
+-endif.
 
 -spec resolve(file:filename()) -> {ok, map()} | {error, atom()}.
 resolve(ConfigPath) ->
@@ -443,7 +482,9 @@ make_result(Version, Snapshot, Files, SourceMap, Diagnostics0, LocationTypes, Gr
 location_facts(LocationTypes, Graph) ->
     Nodes = maps:get(nodes, Graph),
     NodeIds = maps:from_list([{maps:get(<<"id">>, N), true} || N <- Nodes]),
-    lists:foldl(fun({File, _Source, Location, Type, Symbol}, {Syms, Decls, DTypes, TAt, LocSyms}) ->
+    {SymbolMap, Declarations, DeclaredTypes, TypesAt, LocationSymbols} =
+        lists:foldl(fun({File, _Source, Location, Type, Symbol},
+                        {Syms, Decls, DTypes, TAt, LocSyms}) ->
         case is_map(Type) of
             false -> {Syms, Decls, DTypes, TAt, LocSyms};
             true ->
@@ -460,11 +501,14 @@ location_facts(LocationTypes, Graph) ->
                         {SymbolFacts, SymbolLinks} = symbol_json(Symbol, LocId),
                         {NewDecls, NewDeclaredTypes} = declaration_json(Location, Symbol, File,
                                                                           Start, End, TypeId),
-                        {merge_json_records(Syms, SymbolFacts), NewDecls ++ Decls,
+                        {lists:foldl(fun(Item, Acc) ->
+                            maps:put(maps:get(<<"id">>, Item), Item, Acc)
+                        end, Syms, SymbolFacts), NewDecls ++ Decls,
                          NewDeclaredTypes ++ DTypes, [TypeAt | TAt], SymbolLinks ++ LocSyms}
                 end
         end
-    end, {[], [], [], [], []}, LocationTypes).
+    end, {#{}, [], [], [], []}, LocationTypes),
+    {maps:values(SymbolMap), Declarations, DeclaredTypes, TypesAt, LocationSymbols}.
 
 symbol_json(Symbol, LocationId) when is_map(Symbol) ->
     case maps:get(<<"id">>, Symbol, undefined) of
@@ -504,10 +548,6 @@ declaration_json(_, _, _, _, _, _) -> {[], []}.
 origin(#{category := reference}) -> <<"inferred">>;
 origin(#{explicit := true}) -> <<"declared">>;
 origin(_) -> <<"inferred">>.
-
-merge_json_records(Existing, New) ->
-    maps:values(lists:foldl(fun(Item, Acc) -> maps:put(maps:get(<<"id">>, Item), Item, Acc) end,
-                            maps:from_list([{maps:get(<<"id">>, I), I} || I <- Existing]), New)).
 
 project_file_count(Snapshot) ->
     case required_json_value(Snapshot, <<"projects">>) of

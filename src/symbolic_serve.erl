@@ -49,7 +49,7 @@ run() ->
     ?LOG_INFO("symbolic serve starting"),
     {ok, _} = application:ensure_all_started(jsx),
     {ok, _StatusPid} = symbolic_operation_status:start_link(),
-    {ok, _CachePid} = symbolic_codebase:start_link(),
+    {ok, _CachePid} = symbolic_codebase:start_link(#{startup_refresh => true}),
     ok = symbolic_stdio:start(),
     ok = register_tools(),
     symbolic_stdio:begin_reading(),
@@ -88,15 +88,20 @@ setup_logging() ->
 
 register_tools() ->
     ok = symbolic_stdio:add_tool(<<"parse">>,
-        <<"Parse the paths in the project .symbolic/config.json found by "
-          "walking up from this server's working directory. The parse tool "
-          "accepts no arguments; set paths, database, rules, and optional "
-          "TypeScript analysis settings in project configuration instead. "
+        <<"Parse the project to scan: either the project directory holding a "
+          ".symbolic/config.json, a specific project .symbolic/config.json, or "
+          "the project .symbolic/config.json discovered by walking up from this "
+          "server's working directory. Optional arguments: `path` (project "
+          "directory that directly holds a .symbolic/config.json) and "
+          "`config_file` (explicit path to a .symbolic/config.json). "
+          "TypeScript analysis settings live in that project configuration. "
           "TypeScript checking is disabled by default; enable it with "
           "typescript.enabled and list explicit typescript.projects paths. "
-          "A configured database is shared with the "
-          "CLI. MCP queries use this parse-time snapshot; after a CLI write, "
-          "call parse again to refresh it. Run one MCP server per project. "
+          "A configured database is shared with the CLI. A fresh MCP server "
+          "loads that saved snapshot and starts a differential scan in the "
+          "background. Queries can use saved facts while it refreshes. "
+          "After an external CLI write to an already running MCP server, "
+          "call parse to refresh its snapshot. Run one MCP server per project. "
           "Returns a summary of the parsed project, including its root, "
           "file and fact counts, configured database, and discovered rules "
           "file. A failed parse leaves any previous cache unchanged; "
@@ -109,13 +114,30 @@ register_tools() ->
           "use schema for documented argument order and types.">>,
         fun handle_parse/1,
         #{<<"type">> => <<"object">>,
-          <<"properties">> => #{},
+          <<"properties">> => #{
+            <<"path">> => #{
+              <<"type">> => <<"string">>,
+              <<"description">> => <<"Project directory that directly holds a "
+                                     ".symbolic/config.json to parse. Optional; "
+                                     "defaults to the project discovered from this "
+                                     "server's working directory.">>
+            },
+            <<"config_file">> => #{
+              <<"type">> => <<"string">>,
+              <<"description">> => <<"Explicit path to a .symbolic/config.json to "
+                                     "parse. Optional; takes precedence over `path`. "
+                                     "Defaults to the project discovered from this "
+                                     "server's working directory.">>
+            }
+          },
           <<"additionalProperties">> => false,
           <<"required">> => []}),
     ok = symbolic_stdio:add_tool(<<"query">>,
         <<"Prove a Prolog goal against the cached project and return all "
-          "solutions (capped). `parse` loads the project configured for "
-          "this server process. Omit `path` to use that cache entry. "
+          "solutions (capped). A fresh server restores its configured "
+          "project from disk when available, then refreshes it in the "
+          "background; `parse` can refresh it explicitly. Omit `path` "
+          "to use that cache entry. "
           "Before writing a goal, use overview for raw fact counts and "
           "rules_file, then schema for documented argument order, value "
           "types, binding modes, and examples. schema is partial; an "
@@ -455,20 +477,29 @@ handle_status(_Params) -> json(#{error => <<"status accepts no arguments">>}).
 handle_parse(Params) when is_map(Params), map_size(Params) =:= 0 ->
     try
         ?LOG_INFO("parse: using project configuration from server cwd"),
-        case symbolic_codebase:parse(undefined) of
-            {ok, Meta} ->
-                case maps:get(scan_complete, Meta) of
-                    true -> ok;
-                    false -> ?LOG_ERROR("parse: incomplete scan path=~s failed_files=~p",
-                                        [maps:get(path, Meta), maps:get(failed_files, Meta)])
-                end,
-                ?LOG_INFO("parse: finished path=~s files=~p total_facts=~p elapsed_ms=~p",
-                          [maps:get(path, Meta), maps:get(files, Meta),
-                           maps:get(total_facts, Meta), maps:get(parse_ms, Meta)]),
-                json(#{ok => meta_to_json(Meta)});
-            {error, ParseErr} ->
-                ?LOG_ERROR("parse: error=~p", [ParseErr]),
-                json(#{error => parse_error_str(ParseErr)})
+        parse_result(symbolic_codebase:parse(undefined))
+    catch
+        Class:Crash:ST ->
+            ?LOG_ERROR("parse: crashed ~p:~p~n~p", [Class, Crash, ST]),
+            json(#{error => caught_str(Class, Crash, ST)})
+    end;
+handle_parse(Params) when is_map(Params) ->
+    try
+        case parse_keys(Params) of
+            reject ->
+                json(#{error => <<"parse accepts no arguments beyond `path` and `config_file`; set paths, database, rules, and TypeScript settings in project configuration">>});
+            _ ->
+                case parse_target(Params) of
+                    none ->
+                        ?LOG_INFO("parse: using project configuration from server cwd"),
+                        parse_result(symbolic_codebase:parse(undefined));
+                    {config, ConfigPath} ->
+                        ?LOG_INFO("parse: using project configuration from ~s", [ConfigPath]),
+                        parse_result(symbolic_codebase:parse_config(ConfigPath, undefined));
+                    {dir, Dir} ->
+                        ?LOG_INFO("parse: using project directory ~s", [Dir]),
+                        parse_result(symbolic_codebase:parse(Dir))
+                end
         end
     catch
         Class:Crash:ST ->
@@ -477,6 +508,49 @@ handle_parse(Params) when is_map(Params), map_size(Params) =:= 0 ->
     end;
 handle_parse(_Params) ->
     json(#{error => <<"parse accepts no arguments; use project configuration">>}).
+
+%% Only `path` and `config_file` are accepted arguments; anything else
+%% is rejected rather than silently ignored (the historical contract was
+%% "parse accepts no arguments" — now narrowed to these two names).
+parse_keys(Params) ->
+    case [K || K <- maps:keys(Params),
+              not lists:member(K, [<<"path">>, <<"config_file">>])] of
+        [] -> ok;
+        _BadKeys -> reject
+    end.
+
+%% Which target the optional `path` / `config_file` arguments select
+%% (none = the server-cwd-configured project, i.e. the historical
+%% no-argument behavior). `config_file` wins when both are given.
+parse_target(Params) ->
+    case optional_string(Params, <<"config_file">>) of
+        undefined ->
+            case optional_path(Params) of
+                undefined -> none;
+                Dir -> {dir, Dir}
+            end;
+        ConfigPath -> {config, ConfigPath}
+    end.
+
+%% The shared parse reply: {ok, Meta} -> JSON envelope with the
+%% incomplete-scan warning/log line and finished log line; {error, _} ->
+%% the friendly error JSON. Every `parse` target funnels through here.
+parse_result(Result) ->
+    case Result of
+        {ok, Meta} ->
+            case maps:get(scan_complete, Meta) of
+                true -> ok;
+                false -> ?LOG_ERROR("parse: incomplete scan path=~s failed_files=~p",
+                                    [maps:get(path, Meta), maps:get(failed_files, Meta)])
+            end,
+            ?LOG_INFO("parse: finished path=~s files=~p total_facts=~p elapsed_ms=~p",
+                      [maps:get(path, Meta), maps:get(files, Meta),
+                       maps:get(total_facts, Meta), maps:get(parse_ms, Meta)]),
+            json(#{ok => meta_to_json(Meta)});
+        {error, ParseErr} ->
+            ?LOG_ERROR("parse: error=~p", [ParseErr]),
+            json(#{error => parse_error_str(ParseErr)})
+    end.
 
 %% The `query` MCP tool: prove a goal against a parsed directory's
 %% fact base. Params: `goal` (string, required), `path` (optional —
@@ -650,7 +724,9 @@ meta_to_json(Meta) ->
             #{atom_to_binary(K, utf8) => V
               || {K, V} <- maps:to_list(maps:get(facts_by_predicate, Meta))},
         total_facts => maps:get(total_facts, Meta),
-        type_analysis => symbolic_ts_project:summary_json(maps:get(type_analysis, Meta)),
+        type_analysis => type_analysis_json(maps:get(type_analysis, Meta)),
+        snapshot_source => maps:get(snapshot_source, Meta, scan),
+        refreshing => maps:get(refreshing, Meta, false),
         %% undefined -> null when no rules file was found/given, so an
         %% agent can tell "no derived predicates loaded" from "loaded but
         %% path unknown" apart at a glance, without guessing from count.
@@ -663,6 +739,9 @@ meta_to_json(Meta) ->
             DbPath -> jstr(DbPath)
         end
     }).
+
+type_analysis_json(#{<<"status">> := _} = SavedJson) -> SavedJson;
+type_analysis_json(Analysis) -> symbolic_ts_project:summary_json(Analysis).
 
 %% The running server's own build identity (symbolic_version:info/0),
 %% shared by every `parse`/`overview` response — including the

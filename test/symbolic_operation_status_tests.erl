@@ -104,3 +104,24 @@ wait_idle() ->
         {ok, #{state := idle, last := Last}} when Last =/= null -> ok;
         _ -> timer:sleep(10), wait_idle()
     end.
+
+cancelled_refresh_does_not_override_next_operation_test() ->
+    with_tracker(fun(_Pid) ->
+        Worker = spawn(fun() ->
+            symbolic_operation_status:started(parse, <<"/tmp/refresh">>),
+            receive never -> ok end
+        end),
+        wait_running(),
+        symbolic_operation_status:cancelled(Worker),
+        symbolic_operation_status:started(parse, <<"/tmp/explicit">>),
+        symbolic_operation_status:phase(extracting),
+        exit(Worker, kill),
+        {ok, #{state := running, active := #{path := <<"/tmp/explicit">>,
+                                                phase := extracting}}} =
+            symbolic_operation_status:status(),
+        symbolic_operation_status:finished(ok),
+        {ok, #{state := idle,
+               last := #{outcome := #{status := succeeded}}}} =
+            symbolic_operation_status:status(),
+        ok
+    end).

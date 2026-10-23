@@ -448,3 +448,58 @@ scan_prunes_node_modules_and_a_gitignore_entry_test() ->
     after
         _ = file:del_dir_r(Root)
     end.
+
+scan_inherits_git_root_ignore_for_configured_child_test() ->
+    Scratch = filename:join(["_build", "parse_inherited_ignore_scratch"]),
+    Root = filename:absname(Scratch),
+    Apps = filename:join(Root, "apps"),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_dir(filename:join([Root, ".git", "placeholder"])),
+    ok = filelib:ensure_dir(filename:join([Apps, ".next", "placeholder"])),
+    ok = filelib:ensure_dir(filename:join([Apps, "root-only", "placeholder"])),
+    ok = file:write_file(filename:join(Root, ".gitignore"),
+                         <<".next/\n/apps/root-only/\n*.ts\n">>),
+    ok = file:write_file(filename:join(Apps, ".gitignore"), <<"!kept.ts\n">>),
+    ok = file:write_file(filename:join(Apps, "kept.ts"),
+                         <<"export const kept = 1;\n">>),
+    ok = file:write_file(filename:join(Apps, "dropped.ts"),
+                         <<"export const dropped = 1;\n">>),
+    ok = file:write_file(filename:join([Apps, ".next", "generated.ts"]),
+                         <<"export const generated = 1;\n">>),
+    ok = file:write_file(filename:join([Apps, "root-only", "hidden.ts"]),
+                         <<"export const hidden = 1;\n">>),
+    try
+        {ok, Report} = symbolic_parse:scan_paths_report([Apps]),
+        ?assertEqual(["kept.ts"],
+            [filename:basename(F) || F <- maps:get(files, Report)]),
+        %% Explicitly named files still bypass ignore checks.
+        {ok, Explicit} = symbolic_parse:scan_paths_report(
+            [filename:join([Apps, ".next", "generated.ts"])]),
+        ?assertEqual(1, length(maps:get(files, Explicit)))
+    after _ = file:del_dir_r(Root)
+    end.
+
+parallel_map_bounds_active_workers_test() ->
+    Counters = atomics:new(2, []),
+    Items = lists:seq(1, 40),
+    Fun = fun(X) ->
+        Active = atomics:add_get(Counters, 1, 1),
+        record_peak(Counters, Active),
+        timer:sleep(35),
+        atomics:sub(Counters, 1, 1),
+        X
+    end,
+    ?assertEqual(Items, symbolic_parse:parallel_map(Fun, Items)),
+    ?assert(atomics:get(Counters, 2) =< 8),
+    ?assert(atomics:get(Counters, 2) > 1).
+
+record_peak(Counters, Active) ->
+    Old = atomics:get(Counters, 2),
+    case Old >= Active of
+        true -> ok;
+        false ->
+            case atomics:compare_exchange(Counters, 2, Old, Active) of
+                Old -> ok;
+                _ -> record_peak(Counters, Active)
+            end
+    end.

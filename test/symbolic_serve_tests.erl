@@ -44,7 +44,7 @@ teardown(#{pid := Pid, cwd := OldCwd, root := Root}) ->
 decode(JsonBinary) ->
     jsx:decode(JsonBinary, [return_maps]).
 
-parse_tool_schema_has_no_arguments_test() ->
+parse_tool_schema_accepts_path_and_config_file_test() ->
     meck:new(symbolic_stdio, [non_strict]),
     meck:expect(symbolic_stdio, add_tool,
         fun(Name, _Description, _Handler, Schema) ->
@@ -54,7 +54,11 @@ parse_tool_schema_has_no_arguments_test() ->
     try
         ok = symbolic_serve:register_tools(),
         Schema = get({registered_tool_schema, <<"parse">>}),
-        ?assertEqual(#{}, maps:get(<<"properties">>, Schema)),
+        ?assertEqual(<<"object">>, maps:get(<<"type">>, Schema)),
+        Properties = maps:get(<<"properties">>, Schema),
+        ?assertEqual(<<"string">>, maps:get(<<"type">>, maps:get(<<"path">>, Properties))),
+        ?assertEqual(<<"string">>, maps:get(<<"type">>, maps:get(<<"config_file">>, Properties))),
+        ?assertEqual([], maps:get(<<"required">>, Schema)),
         ?assertEqual(false, maps:get(<<"additionalProperties">>, Schema))
     after
         erase({registered_tool_schema, <<"parse">>}),
@@ -80,9 +84,11 @@ status_tool_schema_has_no_arguments_test() ->
     end.
 
 parse_rejects_arguments_test() ->
-    Json = decode(symbolic_serve:handle_parse(#{<<"path">> => <<"/tmp">>,
-        <<"rules">> => <<"custom.pl">>})),
-    ?assertMatch(#{<<"error">> := <<"parse accepts no arguments", _/binary>>}, Json).
+    Json = decode(symbolic_serve:handle_parse(#{<<"rules">> => <<"custom.pl">>})),
+    Error = maps:get(<<"error">>, Json),
+    ?assertNotEqual(nomatch, binary:match(Error, <<"parse accepts no arguments">>)),
+    ?assertNotEqual(nomatch, binary:match(Error, <<"config_file">>)),
+    ?assertNotEqual(nomatch, binary:match(Error, <<"path">>)).
 
 search_functions_tool_is_registered_with_query_contract_test() ->
     meck:new(symbolic_stdio, [non_strict]),

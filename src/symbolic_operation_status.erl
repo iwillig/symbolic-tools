@@ -1,7 +1,7 @@
 %%% Independent observer for the cache process's parse/query lifecycle.
 -module(symbolic_operation_status).
 -behaviour(gen_statem).
--export([start_link/0, started/2, project/1, phase/1, finished/1, status/0]).
+-export([start_link/0, started/2, project/1, phase/1, finished/1, cancelled/1, status/0]).
 -export([init/1, callback_mode/0, handle_event/4]).
 
 start_link() -> gen_statem:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -14,6 +14,10 @@ phase(Phase) -> emit({phase, self(), get({?MODULE, operation}), Phase}).
 finished(Outcome) ->
     Ref = erase({?MODULE, operation}),
     emit({finished, self(), Ref, Outcome}).
+%% An explicit parse supersedes an automatic refresh. The cache process
+%% names that worker so the tracker can retire it before starting the
+%% explicit operation, without a stale DOWN replacing the new status.
+cancelled(Owner) -> emit({cancelled, Owner}).
 status() ->
     case whereis(?MODULE) of
         undefined -> {error, not_running};
@@ -53,6 +57,10 @@ handle_event(cast, {finished, Owner, Token, Outcome}, running,
              #{owner := Owner, token := Token} = Data) ->
     erlang:demonitor(maps:get(monitor, Data), [flush]),
     complete(Outcome, Data);
+handle_event(cast, {cancelled, Owner}, running,
+             #{owner := Owner} = Data) ->
+    erlang:demonitor(maps:get(monitor, Data), [flush]),
+    complete({error, superseded}, Data);
 handle_event(info, {'DOWN', Monitor, process, Owner, Reason}, running,
              #{owner := Owner, monitor := Monitor} = Data) ->
     complete({crashed, Reason}, Data);
