@@ -59,6 +59,60 @@ unsupported_compiler_api_is_unavailable_not_an_empty_success_test() ->
             only([F || {ts_project, _, _, _, _, _, _, _} = F <- Facts]))
     end).
 
+candidate_capture_is_opt_in_and_rejects_mid_analysis_change_test() ->
+    Root = filename:absname(filename:join("_build", "ts_candidate_capture")),
+    _ = file:del_dir_r(Root),
+    Config = filename:join(Root, "tsconfig.json"),
+    Source = filename:join(Root, "src/index.ts"),
+    Exe = filename:join(Root, "node_modules/typescript/bin/tsgo"),
+    ok = filelib:ensure_dir(Source),
+    ok = filelib:ensure_dir(Exe),
+    ok = file:write_file(Config, <<"{}">>),
+    ok = file:write_file(Source, <<"export const value = 1;">>),
+    ok = file:write_file(Exe, <<"compiler">>),
+    Probe = #{files => [unicode:characters_to_binary(Source)], config => #{},
+              version => <<"7.0.2">>, executable => Exe},
+    Json0 = #{<<"schemaVersion">> => 1, <<"status">> => <<"ok">>,
+              <<"reason">> => <<"none">>, <<"compilerVersion">> => <<"7.0.2">>,
+              <<"filesProcessed">> => 1},
+    Json = lists:foldl(fun(Key, Acc) -> Acc#{Key => []} end, Json0,
+        [<<"symbols">>, <<"declarations">>, <<"declaredTypes">>,
+         <<"typeNodes">>, <<"typeEdges">>, <<"typeAt">>,
+         <<"locationSymbols">>, <<"diagnostics">>]),
+    Settings = #{enabled => true, projects => [Config]},
+    Report = #{facts => [], files => [Source], complete => true},
+    meck:new(symbolic_tsgo, [passthrough]),
+    meck:expect(symbolic_tsgo, resolve, fun(_) -> {ok, #{}} end),
+    meck:expect(symbolic_tsgo, probe, fun(_, _) -> {ok, Probe} end),
+    meck:expect(symbolic_tsgo, analyze, fun(_, _, _) -> {ok, Json} end),
+    try
+        {ok, Default} = symbolic_ts_project:analyze(
+            Report#{checker_candidate => #{validated => true}}, Root, Settings),
+        ?assertNot(maps:is_key(checker_candidate, Default)),
+        {ok, Captured} = symbolic_ts_project:analyze(
+            Report#{capture_checker_candidate => true}, Root, Settings),
+        ?assertMatch(#{validated := true}, maps:get(checker_candidate, Captured)),
+        ?assertMatch(#{<<"checker_candidate">> := #{<<"reusable">> := false}},
+                     symbolic_ts_inputs:metadata(Captured)),
+        meck:expect(symbolic_tsgo, analyze, fun(_, _, _) ->
+            ok = file:write_file(Source, <<"export const value = 2;">>),
+            {ok, Json}
+        end),
+        {ok, Changed} = symbolic_ts_project:analyze(
+            Report#{capture_checker_candidate => true}, Root, Settings),
+        ?assertEqual(ok, maps:get(status, maps:get(type_analysis, Changed))),
+        ?assertNot(maps:is_key(checker_candidate, Changed)),
+        meck:expect(symbolic_tsgo, analyze, fun(_, _, _) -> {ok, Json} end),
+        meck:expect(symbolic_tsgo, probe, fun(_, _) -> error(probe_crash) end),
+        {ok, ProbeFailed} = symbolic_ts_project:analyze(
+            Report#{capture_checker_candidate => true}, Root, Settings),
+        ?assertEqual(ok, maps:get(status, maps:get(type_analysis, ProbeFailed))),
+        ?assertNot(maps:is_key(checker_candidate, ProbeFailed))
+    after
+        meck:unload(symbolic_tsgo),
+        _ = file:del_dir_r(Root)
+    end.
+
 only([Value]) -> Value.
 
 with_project_stub(Fun) ->

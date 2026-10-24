@@ -693,7 +693,7 @@ persist_database(DbPath, Facts, ScanReport) ->
     end.
 
 scan_metadata(Report) ->
-    #{<<"metadata_available">> => true,
+    Base = #{<<"metadata_available">> => true,
       <<"complete">> => maps:get(complete, Report),
       <<"scan_paths">> => [unicode:characters_to_binary(filename:absname(Path))
           || Path <- maps:get(scan_paths, Report)],
@@ -703,7 +703,8 @@ scan_metadata(Report) ->
       <<"failed_files">> => [unicode:characters_to_binary(filename:absname(Path))
           || Path <- maps:get(failed_files, Report)],
       <<"typescript_analysis">> => symbolic_ts_project:summary_json(
-          maps:get(type_analysis, Report))}.
+          maps:get(type_analysis, Report))},
+    maps:merge(Base, symbolic_ts_inputs:metadata(Report)).
 
 compute_meta(ScanReport, RulesPath, NormDir, ElapsedMs) ->
     Files = maps:get(files, ScanReport),

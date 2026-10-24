@@ -20,24 +20,52 @@ analyze(Report, ScopeRoot, Settings0) ->
             AnalysisId = analysis_id(ScopeId),
             Fact = {ts_analysis, AnalysisId, ScopeId, failed, internal_error},
             Summary = #{status => failed, reason => internal_error, projects => []},
-            {ok, Report#{facts => lists:usort(maps:get(facts, Report) ++ [Fact]),
-                         type_analysis => Summary}}
+            {ok, (maps:remove(checker_candidate, Report))#{
+                facts => lists:usort(maps:get(facts, Report) ++ [Fact]),
+                type_analysis => Summary}}
     end.
 
-analyze_safe(Report, ScopeRoot, Settings0) ->
+analyze_safe(Report0, ScopeRoot, Settings0) ->
+    %% Never carry a prior candidate through a fresh scan, even when
+    %% observation is disabled or the worker fails.
+    Report = maps:remove(checker_candidate, Report0),
     Settings = normalize_settings(Settings0),
     ScopeId = unicode:characters_to_binary(filename:absname(ScopeRoot)),
     AnalysisId = analysis_id(ScopeId),
+    Projects = maps:get(projects, Settings),
+    Before = maybe_begin_candidate(Report, ScopeRoot, Projects, Settings),
     {Status, Reason, ProjectFacts, ProjectSummaries, Timings} =
         case maps:get(enabled, Settings) of
             false -> {disabled, disabled, [], [], #{}};
-            true -> analyze_projects(maps:get(projects, Settings), Report, AnalysisId)
+            true -> analyze_projects(Projects, Report, AnalysisId)
         end,
     AnalysisFact = {ts_analysis, AnalysisId, ScopeId, Status, Reason},
     Facts = lists:usort(maps:get(facts, Report) ++ [AnalysisFact | ProjectFacts]),
     Summary = #{status => Status, reason => Reason, projects => ProjectSummaries,
                 timings_ms => Timings},
-    {ok, Report#{facts => Facts, type_analysis => Summary}}.
+    Result = Report#{facts => Facts, type_analysis => Summary},
+    {ok, maybe_finish_candidate(Before, Result, ScopeRoot, Projects)}.
+
+%% Diagnostic-only opt-in. No consumer is allowed to serve checker facts from
+%% this candidate: metadata/1 persists it with reusable=false.
+maybe_begin_candidate(Report, ScopeRoot, Projects, #{enabled := true}) ->
+    Requested = maps:get(capture_checker_candidate, Report, false) =:= true orelse
+                os:getenv("SYMBOLIC_CAPTURE_CHECKER_CANDIDATE") =:= "1",
+    case Requested andalso maps:get(complete, Report, false) =:= true of
+        true ->
+            try symbolic_ts_inputs:begin_observation(ScopeRoot, Projects)
+            catch _:_ -> unavailable end;
+        false -> unavailable
+    end;
+maybe_begin_candidate(_, _, _, _) -> unavailable.
+
+maybe_finish_candidate({ok, Before}, Result, ScopeRoot, Projects) ->
+    try symbolic_ts_inputs:finish_observation(Before, Result, ScopeRoot, Projects) of
+        {ok, Candidate} -> Result#{checker_candidate => Candidate};
+        unavailable -> Result
+    catch _:_ -> Result
+    end;
+maybe_finish_candidate(unavailable, Result, _, _) -> Result.
 
 summary_json(#{status := Status, reason := Reason, projects := Projects} = Analysis) ->
     Summary = #{status => atom_to_binary(Status, utf8),

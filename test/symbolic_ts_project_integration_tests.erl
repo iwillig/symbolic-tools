@@ -76,7 +76,11 @@ checker_enriches_shared_facts_and_keeps_diagnostics_source_located_test() ->
         TypeScriptPackage -> with_project(TypeScriptPackage, fun(Root, ConfigPath, SourcePath, Source) ->
             Report = #{facts => ts_extract_typescript:file(SourcePath), files => [SourcePath]},
             {ok, Enriched} = symbolic_ts_project:analyze(
-                Report, Root, #{enabled => true, projects => [ConfigPath]}),
+                Report#{complete => true, capture_checker_candidate => true},
+                Root, #{enabled => true, projects => [ConfigPath]}),
+            %% The compiler package is an external symlink in this fixture;
+            %% candidate capture must fail closed without losing checker facts.
+            ?assertNot(maps:is_key(checker_candidate, Enriched)),
             Facts = maps:get(facts, Enriched),
             ?assertEqual(ok, maps:get(status, maps:get(type_analysis, Enriched))),
             ?assert(lists:any(fun
@@ -122,6 +126,42 @@ checker_enriches_shared_facts_and_keeps_diagnostics_source_located_test() ->
                     binary:part(Source, Start, Length) =:= <<"invalid">>;
                 (_) -> false
             end, Diagnostics))
+        end)
+    end.
+
+compiler_input_files_track_newly_resolved_unscanned_dependency_test() ->
+    case os:getenv("SYMBOLIC_TEST_TYPESCRIPT_PACKAGE") of
+        false -> ok;
+        Package -> with_project(Package, fun(Root, ConfigPath, SourcePath, _Source) ->
+            case symbolic_tsgo:resolve(ConfigPath) of
+                {ok, Compiler} ->
+                    Dependency = filename:join([Root, "src", "dependency.ts"]),
+                    ok = file:write_file(SourcePath,
+                        <<"import { value } from './dependency'; export const result = value;\n">>),
+                    Report = #{facts => ts_extract_typescript:file(SourcePath),
+                               files => [SourcePath]},
+                    {ok, MissingProbe} = symbolic_tsgo:probe(ConfigPath, Compiler),
+                    {ok, SameProbe} = symbolic_tsgo:probe(ConfigPath, Compiler),
+                    ?assertEqual(maps:get(config, MissingProbe), maps:get(config, SameProbe)),
+                    ?assertEqual(maps:get(files, MissingProbe), maps:get(files, SameProbe)),
+                    {ok, Missing} = symbolic_tsgo:analyze(Report, ConfigPath, Compiler),
+                    ?assertNot(lists:member(unicode:characters_to_binary(Dependency),
+                                            maps:get(<<"inputFiles">>, Missing))),
+                    ok = file:write_file(Dependency, <<"export const value = 1;\n">>),
+                    {ok, ResolvedProbe} = symbolic_tsgo:probe(ConfigPath, Compiler),
+                    ?assertNot(lists:member(unicode:characters_to_binary(Dependency),
+                                            maps:get(files, MissingProbe))),
+                    ?assert(lists:member(unicode:characters_to_binary(Dependency),
+                                         maps:get(files, ResolvedProbe))),
+                    {ok, Resolved} = symbolic_tsgo:analyze(Report, ConfigPath, Compiler),
+                    ?assert(lists:member(unicode:characters_to_binary(Dependency),
+                                         maps:get(<<"inputFiles">>, Resolved))),
+                    ok = file:write_file(ConfigPath,
+                        <<"{\"compilerOptions\":{\"strict\":false},\"include\":[\"src/**/*.ts\"]}">>),
+                    {ok, ChangedConfig} = symbolic_tsgo:probe(ConfigPath, Compiler),
+                    ?assertNotEqual(maps:get(config, ResolvedProbe),
+                                    maps:get(config, ChangedConfig))
+            end
         end)
     end.
 

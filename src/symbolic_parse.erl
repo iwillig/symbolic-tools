@@ -98,19 +98,22 @@ extract_file_safely(File) ->
 %%  mutable shared across calls). A worker crash outside the per-file
 %%  extractor rescue is re-raised in the calling process.
 parallel_extract(Files, Cache) ->
-    Results = parallel_map(fun(File) -> extract_cached(File, Cache) end, Files),
+    %% A worker must not capture the entire per-file cache: spawn copies its
+    %% closure into the new process for every file in the scan. Give each
+    %% worker only its own cache entry instead.
+    Items = [{File, maps:get(filename:absname(File), Cache, undefined)} || File <- Files],
+    Results = parallel_map(fun({File, Entry}) -> extract_cached(File, Entry) end, Items),
     Facts = lists:append([FileFacts || {_File, FileFacts, _Failed, _Entry} <- Results]),
     FailedFiles = [File || {File, _FileFacts, true, _Entry} <- Results],
     Entries = maps:from_list([{filename:absname(File), Entry} ||
         {File, _FileFacts, false, Entry} <- Results, Entry =/= undefined]),
     {Facts, FailedFiles, Entries}.
 
-extract_cached(File, Cache) ->
-    Key = filename:absname(File),
+extract_cached(File, Entry) ->
     case file:read_file(File) of
         {ok, Bytes} ->
             Hash = crypto:hash(sha256, Bytes),
-            case maps:get(Key, Cache, undefined) of
+            case Entry of
                 #{hash := Hash, path := File, facts := Facts} when is_list(Facts) ->
                     {File, Facts, false, #{hash => Hash, path => File, facts => Facts}};
                 _ ->
@@ -518,8 +521,9 @@ maybe_store_report(DbPath, Report) ->
             || Path <- maps:get(failed_files, Report)],
         <<"typescript_analysis">> => symbolic_ts_project:summary_json(
             maps:get(type_analysis, Report))},
-    symbolic_fact_store:write_bundle(DbPath, maps:get(facts, Report), Metadata,
-                                     maps:get(file_cache, Report)).
+    symbolic_fact_store:write_bundle(DbPath, maps:get(facts, Report),
+        maps:merge(Metadata, symbolic_ts_inputs:metadata(Report)),
+        maps:get(file_cache, Report)).
 
 print_summary_report(Report) ->
     FailedFiles = [filename:absname(P) || P <- maps:get(failed_files, Report)],

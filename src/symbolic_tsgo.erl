@@ -4,7 +4,7 @@
 %%% not require Node or TypeScript source code.
 -module(symbolic_tsgo).
 
--export([resolve/1, analyze/3]).
+-export([resolve/1, analyze/3, probe/2]).
 
 %% Whole-project deadline; a large project can spend 30s in diagnostics alone.
 %% Keep a finite cap so a stuck compiler cannot stall the scan indefinitely.
@@ -82,6 +82,44 @@ analyze(Report, ConfigPath, Compiler) ->
     end,
     add_worker_total_timing(Result, elapsed_ms(Started)).
 
+%% A cheap compiler-resolution probe for freshness checks. It does not ask
+%% for diagnostics, types, or symbols, and is not itself proof of reuse:
+%% callers must also validate source contents and resolution inventory.
+-spec probe(file:filename(), map()) -> {ok, map()} | {error, term()}.
+probe(ConfigPath, Compiler) ->
+    Exe = maps:get(executable, Compiler),
+    Cwd = filename:dirname(filename:absname(ConfigPath)),
+    try open_port({spawn_executable, Exe},
+            [binary, exit_status, use_stdio, hide, {args, ["--api", "--cwd", Cwd]},
+             {env, [{"GOMEMLIMIT", "768MiB"}]}]) of
+        Port ->
+            try probe_port(Port, ConfigPath, maps:get(version, Compiler), Exe)
+            after try port_close(Port) catch _:_ -> ok end
+            end
+    catch error:Reason -> {error, {worker_start, Reason}}
+    end.
+
+probe_port(Port, ConfigPath, Version, Exe) ->
+    Deadline = erlang:monotonic_time(millisecond) + ?TIMEOUT_MS,
+    try
+        {_Init, B1} = rpc(Port, <<>>, Deadline, "initialize", null),
+        {Parsed, B2} = rpc(Port, B1, Deadline, "parseConfigFile",
+                           #{<<"file">> => filename_binary(ConfigPath)}),
+        {Snapshot, B3} = rpc(Port, B2, Deadline, "updateSnapshot",
+                             #{<<"openProjects">> => [filename_binary(ConfigPath)]}),
+        SnapshotId = required_json_value(Snapshot, <<"snapshot">>),
+        [Project | _] = required_json_value(Snapshot, <<"projects">>),
+        ProjectId = required_json_value(Project, <<"id">>),
+        {Files, _} = rpc(Port, B3, Deadline, "getSourceFileNames",
+                         #{<<"snapshot">> => SnapshotId, <<"project">> => ProjectId}),
+        true = is_list(Files) andalso lists:all(fun is_binary/1, Files),
+        {ok, #{config => Parsed, files => Files, version => Version,
+               executable => Exe}}
+    catch
+        throw:{tsgo, Reason} -> {error, Reason};
+        error:Reason -> {error, {invalid_probe, Reason}}
+    end.
+
 analyze_port(Port, Report, ConfigPath, Version) ->
     Deadline = erlang:monotonic_time(millisecond) + ?TIMEOUT_MS,
     put(symbolic_tsgo_current_stage, initialize),
@@ -117,8 +155,8 @@ analyze_port(Port, Report, ConfigPath, Version) ->
             build_type_graph(Port, Buffer6, Deadline, Context, LocationTypes)
         end),
         Result = timed_stage(result_conversion, fun() ->
-            make_result(Version, Snapshot, ProjectFiles, SourceMap, Diagnostics0,
-                        LocationTypes, Graph, Truncated orelse GraphTruncated)
+            make_result(Version, Snapshot, SourceFileNames, ProjectFiles, SourceMap,
+                        Diagnostics0, LocationTypes, Graph, Truncated orelse GraphTruncated)
         end),
         {ok, Result#{<<"timingsMs">> => stage_timings()}}
     catch
@@ -462,7 +500,8 @@ type_kind(Flags) when is_integer(Flags), Flags band 524288 =/= 0 -> <<"type_para
 type_kind(Flags) when is_integer(Flags), Flags band 1048576 =/= 0 -> <<"object">>;
 type_kind(_) -> <<"other">>.
 
-make_result(Version, Snapshot, Files, SourceMap, Diagnostics0, LocationTypes, Graph, Truncated) ->
+make_result(Version, Snapshot, SourceFileNames, Files, SourceMap, Diagnostics0,
+            LocationTypes, Graph, Truncated) ->
     Allowed = maps:from_list([{filename:absname(F), true} || F <- Files]),
     Diagnostics = [diagnostic_json(D, Allowed, SourceMap) || D <- Diagnostics0,
                     is_map(D), diagnostic_in_scope(D, Allowed)],
@@ -473,6 +512,10 @@ make_result(Version, Snapshot, Files, SourceMap, Diagnostics0, LocationTypes, Gr
     #{<<"schemaVersion">> => 1, <<"status">> => Status, <<"reason">> => Reason,
       <<"compilerVersion">> => Version, <<"optionsHash">> => null,
       <<"filesProcessed">> => project_file_count(Snapshot),
+      %% Compiler program closure, not merely the files selected for facts.
+      %% Do not use this alone as a reuse key: resolution can change when
+      %% previously absent files or config dependencies appear.
+      <<"inputFiles">> => SourceFileNames,
       <<"symbols">> => Symbols, <<"declarations">> => Declarations,
       <<"declaredTypes">> => DeclaredTypes,
       <<"typeNodes">> => maps:get(nodes, Graph), <<"typeEdges">> => maps:get(edges, Graph),
