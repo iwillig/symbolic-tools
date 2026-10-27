@@ -2,6 +2,26 @@
 
 This file records notable user-facing changes for each release.
 
+## [0.5.0] - 2026-10-27
+
+### Added
+
+- Scan Python `.py` files for syntax-only definitions, comments, and conservatively representable calls; ambiguous calls are omitted rather than treated as resolved.
+- Expose source-written TypeScript types and opt-in project-checker facts with explicit partial/failed status.
+- Discover function definitions by name, including via MCP, and report live parse/query progress.
+
+### Changed
+
+- Keep repeated scans and large-project queries responsive while bounding TypeScript checker work. Checker-cache candidates remain non-reusable until input freshness can be proved.
+- Reject incomplete scans and stale or insufficient evidence rather than presenting them as complete answers.
+
+### Fixed
+
+- Restore the full-suite recursion performance guard as the call graph grows, without changing its mutual-recursion result.
+- Refresh ASK benchmark source-line expectations after code moved; answer and evidence checks remain intact.
+
+[0.5.0]: https://github.com/iwillig/symbolic-tools/compare/v0.4.0...v0.5.0
+
 ## [0.4.0] - 2026-10-12
 
 ### Added

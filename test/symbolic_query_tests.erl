@@ -694,6 +694,20 @@ all_mutual_recursion_finds_an_indirect_cycle_test() ->
             symbolic_query:run_result(?DB, real_rules(), "all_mutual_recursion(Pairs)"))
     end).
 
+%% The compiled SCC helper must not mistake a one-way bridge for mutual
+%% reachability or include a self-loop as an A-B pair. The same test also
+%% pins the all_mutual_recursion/1 result on more than one component.
+mutual_recursion_separates_components_and_bridges_test() ->
+    with_db([{calls, a, 0, {local, b, 0}, 'p.erl', 1},
+             {calls, b, 0, {local, a, 0}, 'p.erl', 2},
+             {calls, b, 0, {local, c, 0}, 'p.erl', 3},
+             {calls, c, 0, {local, d, 0}, 'p.erl', 4},
+             {calls, d, 0, {local, c, 0}, 'p.erl', 5},
+             {calls, e, 0, {local, e, 0}, 'p.erl', 6}], fun() ->
+        ?assertEqual({solutions, [{'Pairs', [dash(a, b), dash(c, d)]}]},
+            symbolic_query:run_result(?DB, real_rules(), "all_mutual_recursion(Pairs)"))
+    end).
+
 %% called: has a local caller. remote_entry: only a remote caller (the
 %% no_local_callers/3 false-positive truly_uncalled/3 exists to close).
 %% never_called: no caller of any kind.

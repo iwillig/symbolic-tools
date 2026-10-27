@@ -62,7 +62,7 @@
 
 -export([load/1]).
 -export([sub_atom_5/3, sub_text_5/3, atom_from_binary_2/3, count_pairs_2/3,
-    text_search_2/3, text_search_3/3]).
+    mutual_pairs_2/3, text_search_2/3, text_search_3/3]).
 
 -import(erlog_int, [prove_body/2, fail/1, unify/3, add_compiled_proc/4]).
 
@@ -74,8 +74,9 @@ load(Db0) ->
     Db2 = add_compiled_proc({sub_text, 5}, ?MODULE, sub_text_5, Db1),
     Db3 = add_compiled_proc({atom_from_binary, 2}, ?MODULE, atom_from_binary_2, Db2),
     Db4 = add_compiled_proc({count_pairs, 2}, ?MODULE, count_pairs_2, Db3),
-    Db5 = add_compiled_proc({text_search, 2}, ?MODULE, text_search_2, Db4),
-    add_compiled_proc({text_search, 3}, ?MODULE, text_search_3, Db5).
+    Db5 = add_compiled_proc({mutual_pairs, 2}, ?MODULE, mutual_pairs_2, Db4),
+    Db6 = add_compiled_proc({text_search, 2}, ?MODULE, text_search_2, Db5),
+    add_compiled_proc({text_search, 3}, ?MODULE, text_search_3, Db6).
 
 %% count_pairs_2(Head, NextGoal, State) -> void.
 %%
@@ -114,6 +115,43 @@ count_pairs_1([{'-', K, _} | Rest], Counts) ->
     count_pairs_1(Rest, maps:update_with(K, fun(N) -> N + 1 end, 1, Counts));
 count_pairs_1([Bad | _], _Counts) ->
     error({count_pairs_bad_element, Bad}).
+
+%% mutual_pairs(Edges, Pairs) — the canonical A-B pairs whose vertices
+%% belong to the same strongly connected component (excluding A = B).
+%% Unlike an interpreted all-pairs reachability closure, SCC computation is
+%% linear in vertices + edges before enumerating the pairs that must be
+%% returned. Edges must be a bound list of A-B terms; the caller's
+%% all_call_edges/1 already sorts and deduplicates that list.
+mutual_pairs_2({mutual_pairs, Edges0, Pairs0}, Next, #est{bs = Bs} = St) ->
+    case deref(Edges0, Bs) of
+        Edges when is_list(Edges) ->
+            Input = erlog_int:dderef_list(Edges, Bs),
+            Pairs = mutual_pairs_1(Input),
+            erlog_int:unify_prove_body(Pairs0, Pairs, Next, St);
+        {_} -> erlog_int:instantiation_error(St);
+        Other -> erlog_int:type_error(list, Other, St)
+    end.
+
+mutual_pairs_1(Edges) ->
+    Graph = digraph:new([private]),
+    try
+        lists:foreach(fun
+            ({'-', A, B}) ->
+                digraph:add_vertex(Graph, A),
+                digraph:add_vertex(Graph, B),
+                digraph:add_edge(Graph, A, B);
+            (Bad) -> error({mutual_pairs_bad_element, Bad})
+        end, Edges),
+        Components = digraph_utils:strong_components(Graph),
+        lists:sort(lists:flatmap(fun component_pairs/1, Components))
+    after
+        digraph:delete(Graph)
+    end.
+
+component_pairs(Component) -> component_pairs(lists:sort(Component), []).
+component_pairs([], Acc) -> Acc;
+component_pairs([A | Rest], Acc) ->
+    component_pairs(Rest, [{'-', A, B} || B <- Rest] ++ Acc).
 
 %% sub_atom_5(Head, NextGoal, State) -> void.
 %%

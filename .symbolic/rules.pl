@@ -405,13 +405,15 @@ closure(Edges, Frontier, Known, Closed) :-
     closure(Edges, Fresh, NextKnown, Closed).
 
 %% Every A-B pair such that A's call chain reaches B, computed once.
-%% Full reachability over the WHOLE call graph — deliberately not the
-%% cycle-core pruning all_mutual_recursion/1 uses below, because this
-%% predicate's contract is every reaches pair, not just the cycle ones.
+%% Full reachability over the WHOLE call graph — unlike cycle-core
+%% pruning, this predicate's contract is every reaches pair, not just
+%% the cycle ones.
 all_reaches_pairs(Closed) :-
     all_call_edges(Edges),
     closure(Edges, Edges, Edges, Closed).
 
+%% Retained as an independently queryable helper, though mutual recursion
+%% now uses the faster compiled SCC walk instead of closing this core.
 %% The cycle core of a call graph: a node on a cycle always has both an
 %% in-edge and an out-edge, so repeated rounds of "keep only edges whose
 %% BOTH endpoints are in Sources \cap Targets" converge on a subgraph
@@ -477,18 +479,15 @@ ordered_intersect([X|Xs], [X|Ys], [X|Zs]) :- !, ordered_intersect(Xs, Ys, Zs).
 ordered_intersect([X|Xs], [Y|Ys], Zs) :- X @< Y, !, ordered_intersect(Xs, [Y|Ys], Zs).
 ordered_intersect(Xs, [_Y|Ys], Zs) :- ordered_intersect(Xs, Ys, Zs).
 
-%% Mutual pairs = Closed ∩ reverse(Closed), canonicalized via A @< B,
-%% over the CYCLE CORE (see cycle_core/2) — same pairs as the full-graph
-%% version (pruning preserves every SCC and every SCC-internal path), at
-%% a fraction of the closure cost.
+%% Mutual reachability is exactly membership in the same strongly
+%% connected component. The interpreted cycle-core closure worked on the
+%% original graph, but exceeded the standard proof budget as this repo
+%% grew past 3,000 distinct call edges. Keep the same sorted A @< B pair
+%% contract, now computed by the compiled SCC helper (linear graph walk,
+%% then pair generation only inside each component).
 all_mutual_recursion(Pairs) :-
     all_call_edges(Edges),
-    cycle_core(Edges, Core),
-    closure(Core, Core, Core, Closed),
-    swap_pairs(Closed, Swapped),
-    ordered_intersect(Closed, Swapped, Mutual),
-    findall(A-B, ( member(A-B, Mutual), A @< B ), Raw),
-    sort(Raw, Pairs).
+    mutual_pairs(Edges, Pairs).
 
 %% --- Entry points ---
 
