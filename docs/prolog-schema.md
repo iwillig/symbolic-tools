@@ -20,6 +20,8 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 | `function_decl/7` | Erlang, TypeScript, Rust | Normalized syntax-level function declaration/clause with parse-local identity and language kind |
 | `export/4` | Erlang | A function an `-export` list makes callable from outside the file |
 | `calls/5` | Erlang, TypeScript, Bash, Rust, Ruby, Python | A call site, shape varies per language |
+| `py_definition/9` | Python | Named definition with file-scoped source identity and lexical qualified name |
+| `py_call_site/11` | Python | Source-written call site with optional lexical caller, not a resolved call edge |
 | `comment/3` | Erlang, TypeScript, Bash, Clojure, Ruby, Python | Every comment, unconditionally |
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
 | `doc_tag/8` | TypeScript | One structured `@`-tag from inside a `doc/5` comment |
@@ -98,8 +100,9 @@ per language (no shared extraction code between them, a deliberate choice
 explained in each module's own header). The common predicate names provide
 useful shared entry points, but do not erase language-specific semantics.
 The exceptions include Erlang's `export/4`, TypeScript's
-`export_decl/4`, and Rust's additional `rust_*` facts — see below and the
-Rust section at the end of this document.
+`export_decl/4`, Rust's additional `rust_*` facts, and Python's
+`py_definition/9` and `py_call_site/11` — see below and the corresponding
+language-specific sections.
 
 ### `defines(Function, Arity, Params, File, Line)`
 
@@ -129,6 +132,23 @@ say) used to be indistinguishable from true recursion or genuine
 duplication in any query that only looked at `Function` — `.symbolic/rules.pl`'s
 `duplicate_name/3`, `self_recursive/3`, `fan_in/3`, `no_local_callers/3`
 now key on `Fun`+`Arity` to avoid that.
+
+### Python-only source identities and sites
+
+- `py_definition(Id, Name, Qualified, Kind, Arity, File, Line, StartByte, EndByte)`:
+  `Id` is `(File, StartByte, EndByte)`; `Qualified` is a binary lexical path;
+  `Kind` is `module_function`, `nested_function` or `method`. `Arity` is
+  the number of declared parameter nodes, not a callable's accepted arity.
+- `py_call_site(Id, CallerId, Callee, Form, Positional, Keywords, Unpacks,
+  File, Line, StartByte, EndByte)`: `Id` has the same span shape; `CallerId`
+  is a `py_definition/9` ID or `undefined`. `Callee` is source text as a
+  binary; `Form` is `name`, `attribute` or `computed`; `Positional` counts
+  explicit positional arguments; `Keywords` is a list of binary keyword
+  names; `Unpacks` contains `star_args`, `star_kwargs`, or `bare_generator`.
+  All offsets are UTF-8 bytes and ends are exclusive. These facts do not
+  assert that a call resolves to a particular function, even when a name
+  happens to match a definition. The generic reachability/dead-code rules
+  do not use them. See [the Python integration contract](tree-sitter-python.md).
 
 ### `export(Function, Arity, File, Line)`
 

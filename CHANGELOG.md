@@ -2,6 +2,19 @@
 
 This file records notable user-facing changes for each release.
 
+## [0.6.0] - 2026-10-27
+
+### Added
+
+- Preserve Python definition identities and lexical qualified names in `py_definition/9`, including methods and nested definitions with the same name.
+- Record all parsed Python calls as unresolved `py_call_site/11` facts, including calls with keyword arguments and unpacking; call sites can be joined to their lexical enclosing definition without claiming callee resolution.
+
+### Fixed
+
+- Do not attribute calls inside nested class bodies to an outer function's `calls/5` facts. Existing `calls/5` remains conservative.
+
+[0.6.0]: https://github.com/iwillig/symbolic-tools/compare/v0.5.0...v0.6.0
+
 ## [0.5.0] - 2026-10-27
 
 ### Added

@@ -10,7 +10,40 @@ pipeline as the other languages. Grammar upgrades must be pinned and tested
 against the emitted fact shapes.
 
 This is **syntax-only** extraction, not Python execution, name resolution,
-import resolution, inferred types, or a complete call graph:
+import resolution, inferred types, or a complete call graph. Two additive
+Python-only facts preserve scoped definitions and all parsed call sites,
+without changing the legacy cross-language facts:
+
+- `py_definition(Id, Name, Qualified, Kind, Arity, File, Line, StartByte, EndByte)`
+  records every named `def`/`async def`. `Id` is the compound
+  `(File, StartByte, EndByte)`, unique within a snapshot; it changes when
+  source offsets change. `Qualified` is a binary of **lexical** class and
+  function names joined by `.` (for example, `<<"Outer.run">>`), not a
+  resolved Python `__qualname__`. `Kind` is `module_function`,
+  `nested_function`, or `method`, based on the nearest containing definition
+  or class. `Arity` has the same declared-parameter meaning as `defines/5`.
+  Two definitions with identical names and arities still have distinct IDs.
+- `py_call_site(Id, CallerId, Callee, Form, Positional, Keywords, Unpacks,
+  File, Line, StartByte, EndByte)` records each parsed call expression.
+  `Id` uses the same file-and-byte-span convention. `CallerId` joins to a
+  `py_definition/9` only when the call is inside that definition's body;
+  it is `undefined` in module/class bodies, decorators, defaults and lambdas.
+  `Callee` is a binary containing its source spelling. `Form` is `name`,
+  `attribute` or `computed`. `Positional` counts explicit positional
+  arguments; `Keywords` is an ordered list of binary keyword names;
+  `Unpacks` lists `star_args` / `star_kwargs` where used. A bare generator
+  argument has `Positional=1` and `Unpacks=[bare_generator]` to preserve its
+  syntax. `CallerId` identifies a lexical container, **not** a callee.
+  Neither `py_call_site/11` nor `py_definition/9` is used by existing
+  reachability or dead-code rules. Byte offsets refer to the accepted UTF-8
+  source, with an exclusive end offset.
+
+For example, `py_definition(Id, _, _, _, _, File, _, _, _),
+py_call_site(_, Id, _, _, _, _, _, File, Line, _, _)` lists sites in a
+specific lexical definition. Inspect `Callee`, `Keywords`, and `Unpacks`
+without interpreting the site as a resolved edge.
+
+The original shared predicates remain deliberately limited:
 
 - `defines(Name, Arity, Params, File, Line)` is emitted for named `def` and
   `async def`, including nested functions and class methods. `Arity` is the
@@ -29,7 +62,7 @@ import resolution, inferred types, or a complete call graph:
   is a bare identifier. These are *spellings of call sites*, not resolved
   callee identities: `foo` may be rebound, imported or a callable instance,
   and `obj` may refer to anything. Top-level calls, calls in class/nested
-  definitions or lambdas, and calls with a keyword argument, `*args`,
+  definitions, class bodies or lambdas, and calls with a keyword argument, `*args`,
   `**kwargs`, a generator argument without parentheses, or a complex callee
   are omitted. Calls in decorators, defaults and annotations are omitted
   rather than assigned to a function body. Nested simple calls still appear

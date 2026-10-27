@@ -113,3 +113,90 @@ scan_and_cache_refresh_test() ->
 unicode_identifier_test() ->
     Facts = ts_extract_python:text("utf8.py", <<"def caf\xC3\xA9():\n    run()\n">>),
     ?assert(lists:member({defines, 'café', 0, <<"()">>, 'utf8.py', 1}, Facts)).
+
+scoped_definition_and_call_sites_test() ->
+    Source = <<"class A:\n    def run(self):\n        target(x=1)\n"
+               "class B:\n    def run(self):\n        target(*args, **kw)\n"
+               "def outer():\n    def run():\n        target()\n"
+               "    run()\n    (factory()).method(1)\n"
+               "top(1)\n">>,
+    Facts = ts_extract_python:text("scope.py", Source),
+    A = only_python_definition(<<"A.run">>, Facts),
+    B = only_python_definition(<<"B.run">>, Facts),
+    Inner = only_python_definition(<<"outer.run">>, Facts),
+    Outer = only_python_definition(<<"outer">>, Facts),
+    {py_definition, AId, run, <<"A.run">>, method, 1, 'scope.py', 2, _, _} = A,
+    {py_definition, BId, run, <<"B.run">>, method, 1, 'scope.py', 5, _, _} = B,
+    {py_definition, InnerId, run, <<"outer.run">>, nested_function, 0, 'scope.py', 8, _, _} = Inner,
+    {py_definition, OuterId, outer, <<"outer">>, module_function, 0, 'scope.py', 7, _, _} = Outer,
+    ?assert(AId =/= BId),
+    ?assert(InnerId =/= AId),
+    ?assertEqual({ 'scope.py', element(9, A), element(10, A)}, AId),
+    ?assertEqual([AId], site_callers(<<"target">>, 3, Facts)),
+    ?assertEqual([BId], site_callers(<<"target">>, 6, Facts)),
+    ?assertEqual([InnerId], site_callers(<<"target">>, 9, Facts)),
+    ?assertEqual([OuterId], site_callers(<<"run">>, 10, Facts)),
+    ?assertEqual([undefined], site_callers(<<"top">>, 12, Facts)),
+    ?assertEqual([], [F || F = {calls, _, _, _, _, _} <- Facts,
+                           element(6, F) =:= 3 orelse element(6, F) =:= 6]),
+    ?assertMatch([{py_call_site, _, AId, <<"target">>, name, 0, [<<"x">>], [],
+                   'scope.py', 3, _, _}],
+                 [F || F = {py_call_site, _, _, _, _, _, _, _, _, 3, _, _} <- Facts]),
+    ?assertMatch([{py_call_site, _, BId, <<"target">>, name, 0, [],
+                   [star_args, star_kwargs], 'scope.py', 6, _, _}],
+                 [F || F = {py_call_site, _, _, _, _, _, _, _, _, 6, _, _} <- Facts]),
+    ?assertMatch([{py_call_site, _, OuterId, <<"(factory()).method">>, attribute,
+                   1, [], [], 'scope.py', 11, _, _}],
+                 [F || F = {py_call_site, _, _, <<"(factory()).method">>, _, _, _, _, _, _, _, _} <- Facts]).
+
+definition_time_and_lambda_sites_have_no_caller_test() ->
+    Source = <<"@decorate(factory())\ndef outer(x=setup()):\n"
+               "    cb = lambda: later()\n"
+               "    class Local:\n        class_time()\n"
+               "    body()\n">>,
+    Facts = ts_extract_python:text("contexts.py", Source),
+    Outer = only_python_definition(<<"outer">>, Facts),
+    OuterId = element(2, Outer),
+    ?assertEqual([undefined], site_callers(<<"decorate">>, 1, Facts)),
+    ?assertEqual([undefined], site_callers(<<"factory">>, 1, Facts)),
+    ?assertEqual([undefined], site_callers(<<"setup">>, 2, Facts)),
+    ?assertEqual([undefined], site_callers(<<"later">>, 3, Facts)),
+    ?assertEqual([undefined], site_callers(<<"class_time">>, 5, Facts)),
+    ?assertEqual([OuterId], site_callers(<<"body">>, 6, Facts)),
+    ?assertNot(lists:member({calls, outer, 1, {local, class_time, 0},
+                             'contexts.py', 5}, Facts)).
+
+same_name_definitions_keep_distinct_ids_test() ->
+    Facts = ts_extract_python:text("dup.py", <<"def f():\n    x()\ndef f():\n    y()\n">>),
+    Ids = [Id || {py_definition, Id, f, _, _, _, _, _, _, _} <- Facts],
+    ?assertEqual(2, length(Ids)),
+    ?assertEqual(2, length(lists:usort(Ids))),
+    [XId] = site_callers(<<"x">>, 2, Facts),
+    [YId] = site_callers(<<"y">>, 4, Facts),
+    ?assert(XId =/= YId),
+    ?assertEqual([], [F || F = {calls, _, _, _, _, _} <- Facts]).
+
+site_facts_survive_store_and_prolog_join_test() ->
+    Facts = ts_extract_python:text("fixture.py", <<"def run():\n    target(x=1)\n">>),
+    Db = filename:join("_build", "python_sites_query_scratch.dets"),
+    %% A second call fact keeps the calls/5 family loaded for this negative query.
+    ok = symbolic_fact_store:write(Db,
+        [{calls, other, 0, {local, target, 1}, 'other.py', 1} | Facts]),
+    try
+        ?assertMatch({solutions, _}, symbolic_query:run_result(Db, undefined,
+            "py_definition(Id, run, _, _, 0, 'fixture.py', 1, _, _), "
+            "py_call_site(_, Id, _, name, 0, _, _, 'fixture.py', 2, _, _)")),
+        ?assertEqual(no_solution, symbolic_query:run_result(Db, undefined,
+            "calls(run, 0, local(target, 1), 'fixture.py', 2)"))
+    after
+        ok = file:delete(Db)
+    end.
+
+site_callers(Callee, Line, Facts) ->
+    [Caller || {py_call_site, _, Caller, Callee0, _, _, _, _, _, Line0, _, _} <- Facts,
+               Callee0 =:= Callee, Line0 =:= Line].
+
+only_python_definition(Qualified, Facts) ->
+    [Fact] = [F || F = {py_definition, _, _, QName, _, _, _, _, _, _} <- Facts,
+                   QName =:= Qualified],
+    Fact.

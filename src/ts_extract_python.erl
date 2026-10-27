@@ -1,7 +1,9 @@
 %%% Syntax-only Python facts. Calls are sites, never resolved callees.
 %%% In particular, calls with keywords/unpacking, methods, nested definitions,
 %%% and lambdas cannot be represented unambiguously by calls/5's name+arity
-%%% caller identity, so they do not emit calls/5 facts.
+%%% caller identity, so they do not emit calls/5 facts. Python-specific
+%%% py_definition/9 and py_call_site/11 preserve their syntax without
+%%% claiming that a callee has been resolved.
 -module(ts_extract_python).
 -export([file/1, text/2]).
 -import(ts_extract_text, [to_atom/1, to_text/1]).
@@ -38,7 +40,9 @@ text(Path, Source) when is_binary(Source) ->
     Identities = [definition_identity(Node, Source) || Node <- TopLevel],
     lists:usort(
         [definition_fact(Node, Source, PathAtom) || Node <- Definitions] ++
+        [scoped_definition_fact(Node, Source, PathAtom) || Node <- Definitions] ++
         lists:flatmap(fun(Node) -> call_facts(Node, Source, PathAtom, Identities) end, Calls) ++
+        [call_site_fact(Node, Source, PathAtom) || Node <- Calls] ++
         [{comment, PathAtom, line(Node), to_text(symbolic_ts:node_text(Node, Source))}
          || Node <- Comments]).
 
@@ -81,6 +85,110 @@ definition_identity(Node, Source) ->
     NameNode = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
     ParamsNode = symbolic_ts:node_child_by_field_name(Node, <<"parameters">>),
     {identifier(NameNode, Source), parameter_count(ParamsNode)}.
+
+%% The source span is an identity within this version of a file, not a
+%% persistent symbol ID across edits. Keep the full path and offsets together.
+node_id(Node, Path) ->
+    {Path, symbolic_ts:node_start_byte(Node), symbolic_ts:node_end_byte(Node)}.
+
+scoped_definition_fact(Node, Source, Path) ->
+    {Name, Arity} = definition_identity(Node, Source),
+    Parts = lexical_context(symbolic_ts:node_parent(Node), Source, []),
+    Qualified = iolist_to_binary(lists:join(<<".">>, Parts ++ [atom_to_binary(Name, utf8)])),
+    Kind = case Parts of
+        [] -> module_function;
+        _ -> context_kind(symbolic_ts:node_parent(Node))
+    end,
+    {py_definition, node_id(Node, Path), Name, Qualified, Kind, Arity, Path,
+     line(Node), symbolic_ts:node_start_byte(Node), symbolic_ts:node_end_byte(Node)}.
+
+lexical_context(Node, Source, Acc) ->
+    case symbolic_ts:node_is_null(Node) of
+        true -> Acc;
+        false ->
+            Next = case symbolic_ts:node_type(Node) of
+                "function_definition" -> [definition_name_text(Node, Source) | Acc];
+                "class_definition" -> [definition_name_text(Node, Source) | Acc];
+                _ -> Acc
+            end,
+            lexical_context(symbolic_ts:node_parent(Node), Source, Next)
+    end.
+
+definition_name_text(Node, Source) ->
+    Name = symbolic_ts:node_child_by_field_name(Node, <<"name">>),
+    to_text(symbolic_ts:node_text(Name, Source)).
+
+context_kind(Node) ->
+    case symbolic_ts:node_is_null(Node) of
+        true -> module_function;
+        false ->
+            case symbolic_ts:node_type(Node) of
+                "function_definition" -> nested_function;
+                "class_definition" -> method;
+                _ -> context_kind(symbolic_ts:node_parent(Node))
+            end
+    end.
+
+%% Each call expression gets a site fact even if its callee or containing
+%% definition is ambiguous. No py_call_site/11 is a resolved graph edge.
+call_site_fact(Node, Source, Path) ->
+    Function = symbolic_ts:node_child_by_field_name(Node, <<"function">>),
+    Arguments = symbolic_ts:node_child_by_field_name(Node, <<"arguments">>),
+    Caller = case site_definition(Node) of
+        undefined -> undefined;
+        Definition -> node_id(Definition, Path)
+    end,
+    {Positional, Keywords, Unpacks} = site_arguments(Arguments, Source),
+    Form = case symbolic_ts:node_type(Function) of
+        "identifier" -> name;
+        "attribute" -> attribute;
+        _ -> computed
+    end,
+    {py_call_site, node_id(Node, Path), Caller,
+     to_text(symbolic_ts:node_text(Function, Source)), Form, Positional,
+     Keywords, Unpacks, Path, line(Node), symbolic_ts:node_start_byte(Node),
+     symbolic_ts:node_end_byte(Node)}.
+
+site_arguments(Node, Source) ->
+    case symbolic_ts:node_type(Node) of
+        "generator_expression" -> {1, [], [bare_generator]};
+        "argument_list" ->
+            Children = [symbolic_ts:node_named_child(Node, Index) ||
+                        Index <- lists:seq(0, symbolic_ts:node_named_child_count(Node) - 1)],
+            {Pos, KeysRev, FlagsRev} = lists:foldl(fun(Child, {Count, Keys, Flags}) ->
+                case symbolic_ts:node_type(Child) of
+                    "keyword_argument" ->
+                        Name = symbolic_ts:node_child_by_field_name(Child, <<"name">>),
+                        {Count, [to_text(symbolic_ts:node_text(Name, Source)) | Keys], Flags};
+                    "list_splat" -> {Count, Keys, [star_args | Flags]};
+                    "parenthesized_list_splat" -> {Count, Keys, [star_args | Flags]};
+                    "dictionary_splat" -> {Count, Keys, [star_kwargs | Flags]};
+                    _ -> {Count + 1, Keys, Flags}
+                end
+            end, {0, [], []}, Children),
+            {Pos, lists:reverse(KeysRev), lists:reverse(FlagsRev)}
+    end.
+
+%% Do not attribute a call in a decorator, default or annotation to the
+%% function being defined; likewise, a lambda or class body isn't that
+%% function's body. A call in an inner function belongs to the inner ID.
+site_definition(Node) -> site_definition(symbolic_ts:node_parent(Node), Node).
+
+site_definition(Parent, Call) ->
+    case symbolic_ts:node_is_null(Parent) of
+        true -> undefined;
+        false ->
+            case symbolic_ts:node_type(Parent) of
+                "lambda" -> undefined;
+                "class_definition" -> undefined;
+                "function_definition" ->
+                    case within_body(Call, Parent) of
+                        true -> Parent;
+                        false -> undefined
+                    end;
+                _ -> site_definition(symbolic_ts:node_parent(Parent), Call)
+            end
+    end.
 
 parameter_count(ParamsNode) ->
     count_named(ParamsNode, fun(Type) -> Type =/= "positional_separator" andalso
@@ -156,6 +264,7 @@ enclosing_definition(Node) ->
             case symbolic_ts:node_type(Parent) of
                 "function_definition" -> Parent;
                 "lambda" -> undefined;
+                "class_definition" -> undefined;
                 _ -> enclosing_definition(Parent)
             end
     end.
