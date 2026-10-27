@@ -16,11 +16,11 @@ these facts, see [`agent-examples.md`](agent-examples.md) and
 
 | Predicate | Produced by | Meaning |
 |---|---|---|
-| `defines/5` | Erlang, TypeScript, Bash, Rust, Ruby | A named function/definition exists |
+| `defines/5` | Erlang, TypeScript, Bash, Rust, Ruby, Python | A named function/definition exists |
 | `function_decl/7` | Erlang, TypeScript, Rust | Normalized syntax-level function declaration/clause with parse-local identity and language kind |
 | `export/4` | Erlang | A function an `-export` list makes callable from outside the file |
-| `calls/5` | Erlang, TypeScript, Bash, Rust, Ruby | A call site, shape varies per language |
-| `comment/3` | Erlang, TypeScript, Bash, Clojure, Ruby | Every comment, unconditionally |
+| `calls/5` | Erlang, TypeScript, Bash, Rust, Ruby, Python | A call site, shape varies per language |
+| `comment/3` | Erlang, TypeScript, Bash, Clojure, Ruby, Python | Every comment, unconditionally |
 | `doc/5` | Erlang, TypeScript, Bash | A comment run immediately preceding a definition |
 | `doc_tag/8` | TypeScript | One structured `@`-tag from inside a `doc/5` comment |
 | `branch/5` | Erlang, TypeScript, Bash | A decision point inside a definition, for real complexity |
@@ -92,7 +92,8 @@ itself.
 
 Produced by `src/ts_extract_erlang.erl`, `src/ts_extract_typescript.erl`,
 `src/ts_extract_bash.erl`, `src/ts_extract_rust.erl`, and
-`src/ts_extract_clojure.erl`, and `src/ts_extract_ruby.erl` — one query set
+`src/ts_extract_clojure.erl`, `src/ts_extract_ruby.erl`, and
+`src/ts_extract_python.erl` — one query set
 per language (no shared extraction code between them, a deliberate choice
 explained in each module's own header). The common predicate names provide
 useful shared entry points, but do not erase language-specific semantics.
@@ -212,6 +213,7 @@ a local one) and `anonymous_fun` (names nothing at all).
   | TypeScript | `local(Callee, ArgCount)`, `member(Object, Method, ArgCount)`, `new(Constructor, ArgCount)` | `local(bar, 1)`, `member(console, log, 1)`, `new(RegExp, 1)` |
   | Bash | `local(Command, ArgCount)` only | `local(build, 0)` |
   | Rust | `path(PathText, ArgCount)`, `member(Receiver, Method, ArgCount)` | `path(parse, 1)`, `member(self, save, 1)`, `path('crate::io::read', 1)` |
+  | Python | `local(Name, ArgCount)`, `member(Object, Method, ArgCount)` (restricted syntax-only sites) | `local(work, 1)`, `member(client, send, 1)` |
 
   Bash has no qualified-call syntax (nothing like `mod:fun()` or
   `obj.method()`) to tell a call to a same-script function apart from a
@@ -222,6 +224,11 @@ a local one) and `anonymous_fun` (names nothing at all).
   the command name (`scp a b c` → `ArgCount` 3), not anything bash
   itself validates against a declared parameter list — bash functions
   accept any number of arguments always.
+
+  Python records only calls inside unique top-level function identities and
+  only simple positional call syntax. Keyword, unpacked, nested-function,
+  class-method and lambda call sites are omitted; `local`/`member` do not
+  establish resolved callees. See [Python integration](tree-sitter-python.md).
 
   `new(Constructor, ArgCount)` — `new X(...)`, modeled as one more
   `CallSpec` shape rather than a separate fact family, since it's
@@ -257,7 +264,7 @@ shape. TypeScript only.
 Every comment node, unconditionally — whether or not it documents
 anything. `Text` is the comment's content with its language's own
 comment-marker syntax stripped (`%`/`%%` for Erlang, `//`/`/** */` for
-TypeScript, `#` for Bash; Clojure retains its `;` marker and Ruby its `#` marker) and, for a multi-line run (consecutive `//`
+TypeScript, `#` for Bash; Clojure retains its `;` marker; Ruby and Python retain their `#` marker) and, for a multi-line run (consecutive `//`
 lines, or a multi-line `/** ... */` block), joined into a single space-
 separated line — legally a JSON string (and a quoted Prolog atom) *can*
 contain a raw newline, but nothing else this project emits does, and
@@ -269,6 +276,9 @@ emits method definitions, syntactically nested calls, and comments. Its
 `defines/5` arity counts declared parameter nodes (including optional or
 rest parameters as one each), not Ruby's runtime `Method#arity` value;
 receiver calls use the shared `{member, Receiver, Method, Arity}` shape.
+Python emits named definitions, `#` comments and only conservatively
+representable syntactic call sites; docstrings are not comments, and invalid
+syntax/non-UTF-8 source marks a file failed. See [Python integration](tree-sitter-python.md).
 
 `Text` is an Erlang **binary**, not an atom — see the shared caveat
 below.

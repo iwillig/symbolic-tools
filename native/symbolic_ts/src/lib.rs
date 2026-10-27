@@ -79,6 +79,7 @@ atoms! {
     unable_to_create_language_rust,
     unable_to_create_language_clojure,
     unable_to_create_language_ruby,
+    unable_to_create_language_python,
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +325,15 @@ fn tree_sitter_ruby(env: Env) -> Term {
     )
 }
 
+#[rustler::nif]
+fn tree_sitter_python(env: Env) -> Term {
+    make_language(
+        env,
+        unsafe { ffi::tree_sitter_python() },
+        unable_to_create_language_python(),
+    )
+}
+
 // ---- parser ----
 
 #[rustler::nif]
@@ -443,6 +453,11 @@ fn node_end_point<'a>(env: Env<'a>, node: ResourceArc<NodeRes>) -> NifResult<Ter
 #[rustler::nif]
 fn node_is_null(node: ResourceArc<NodeRes>) -> bool {
     unsafe { ffi::ts_node_is_null(node.node) }
+}
+
+#[rustler::nif]
+fn node_has_error(node: ResourceArc<NodeRes>) -> bool {
+    unsafe { ffi::ts_node_has_error(node.node) }
 }
 
 #[rustler::nif]

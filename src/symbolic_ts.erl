@@ -28,6 +28,7 @@
     tree_sitter_rust/0,
     tree_sitter_clojure/0,
     tree_sitter_ruby/0,
+    tree_sitter_python/0,
     parser_new/0,
     parser_set_language/2,
     parser_parse_string/2,
@@ -39,6 +40,7 @@
     node_end_point/1,
     node_text/2,
     node_is_null/1,
+    node_has_error/1,
     node_parent/1,
     node_named_child/2,
     node_named_child_count/1,
@@ -75,6 +77,7 @@ tree_sitter_jsdoc() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_rust() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_clojure() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_ruby() -> erlang:nif_error(nif_not_loaded).
+tree_sitter_python() -> erlang:nif_error(nif_not_loaded).
 parser_new() -> erlang:nif_error(nif_not_loaded).
 parser_set_language(_Parser, _Language) -> erlang:nif_error(nif_not_loaded).
 parser_parse_string(_Parser, _Source) -> erlang:nif_error(nif_not_loaded).
@@ -85,6 +88,7 @@ node_end_byte(_Node) -> erlang:nif_error(nif_not_loaded).
 node_start_point(_Node) -> erlang:nif_error(nif_not_loaded).
 node_end_point(_Node) -> erlang:nif_error(nif_not_loaded).
 node_is_null(_Node) -> erlang:nif_error(nif_not_loaded).
+node_has_error(_Node) -> erlang:nif_error(nif_not_loaded).
 node_parent(_Node) -> erlang:nif_error(nif_not_loaded).
 node_named_child(_Node, _Index) -> erlang:nif_error(nif_not_loaded).
 node_named_child_count(_Node) -> erlang:nif_error(nif_not_loaded).

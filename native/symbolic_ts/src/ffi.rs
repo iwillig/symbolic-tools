@@ -60,6 +60,7 @@ extern "C" {
     pub fn tree_sitter_rust() -> *const TSLanguage;
     pub fn tree_sitter_clojure() -> *const TSLanguage;
     pub fn tree_sitter_ruby() -> *const TSLanguage;
+    pub fn tree_sitter_python() -> *const TSLanguage;
 
     // Parser.
     pub fn ts_parser_new() -> *mut TSParser;
@@ -78,6 +79,7 @@ extern "C" {
 
     // Node.
     pub fn ts_node_is_null(node: TSNode) -> bool;
+    pub fn ts_node_has_error(node: TSNode) -> bool;
     pub fn ts_node_type(node: TSNode) -> *const c_char;
     pub fn ts_node_start_byte(node: TSNode) -> u32;
     pub fn ts_node_end_byte(node: TSNode) -> u32;

@@ -10,6 +10,7 @@ file(Path) ->
         ".rs" -> ts_extract_rust:file(Path);
         ".clj" -> ts_extract_clojure:file(Path);
         ".rb" -> ts_extract_ruby:file(Path);
+        ".py" -> ts_extract_python:file(Path);
         ".ts" -> ts_extract_typescript:file(Path);
         ".tsx" -> ts_extract_typescript:file(Path);
         ".md" -> ts_extract_markdown:file(Path);
