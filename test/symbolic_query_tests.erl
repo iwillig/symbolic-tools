@@ -71,14 +71,48 @@ sub_text_long_literal_absent_and_tail_match_test() ->
             "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"needle\")), Rows)"))
     end).
 
-sub_text_ascii_needle_uses_byte_offsets_and_non_ascii_fallback_test() ->
+sub_text_ascii_needle_uses_byte_offsets_test() ->
     with_db([{sample, <<"caf\xc3\xa9 caf\xc3\xa9">>}], fun() ->
         ?assertEqual([[0,3,8],[6,3,2]], query_rows(
             "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"caf\")), Rows)")),
-        %% Existing binary_to_list semantics do not decode UTF-8: a
-        %% goal-level non-ASCII codepoint cannot match UTF-8 bytes here.
+        %% The haystack keeps the byte-level needle semantics: the needle
+        %% é as raw bytes [195,169] matches each occurrence.
+        ?assertEqual([[3,2,6],[9,2,0]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,[195,169])), Rows)")),
+        %% A Latin-1-range codepoint needle (é = 233) is indistinguishable
+        %% from a raw byte and keeps the byte interpretation: it cannot
+        %% match a UTF-8 byte sequence.
         ?assertEqual(no_solution, symbolic_query:run_result(?DB, undefined,
             "sample(T), sub_text(T,_,_,_,\"é\")"))
+    end).
+
+sub_text_non_ascii_codepoint_needle_matches_utf8_bytes_test() ->
+    %% The em dash from the issue repro, written as a goal-level codepoint
+    %% (what erlog_io gives a CLI/codepoint path). It must normalize to its
+    %% UTF-8 bytes and match the haystack, in Before/Length/After order.
+    with_db([{sample, <<"a — b — c"/utf8>>}], fun() ->
+        ?assertEqual([[2,3,8],[8,3,2]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"—\")), Rows)")),
+        %% The same needle as raw UTF-8 bytes (what an MCP stdio goal's
+        %% quoted literal decodes to) must match identically.
+        ?assertEqual([[2,3,8],[8,3,2]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,[226,128,148])), Rows)")),
+        ?assertEqual(no_solution, symbolic_query:run_result(?DB, undefined,
+            "sample(T), sub_text(T,_,_,_,\"–\")"))
+    end).
+
+sub_text_long_haystack_non_ascii_needle_stays_fast_test() ->
+    %% Issue #5: a real-paragraph-length haystack with a non-ASCII needle
+    %% used to fall back to the O(Total^2) split enumerator and blow the
+    %% query timeout. The fast path must keep this well under budget.
+    Long = binary:copy(<<"The quick brown fox jumps over the lazy dog near the riverbank. ">>, 33),
+    Text = <<Long/binary, " — trailing em dash."/utf8>>,
+    ?assert(byte_size(Text) >= 2000),
+    with_db([{sample, Text}], fun() ->
+        %% Long ends in a space, so the appended " —" puts the dash one
+        %% byte after Long's end.
+        ?assertEqual([[byte_size(Long) + 1,3,18]], query_rows(
+            "findall([B,L,A], (sample(T), sub_text(T,B,L,A,\"—\")), Rows)"))
     end).
 
 sub_atom_rejects_unbound_sub_test() ->

@@ -211,15 +211,17 @@ sub_text_5({sub_text, T0, B0, L0, Af0, S0}, Next, #est{bs = Bs} = St) ->
     case deref(T0, Bs) of
         T when is_binary(T) ->
             %% A goal-level quoted needle is a code list. For the common
-            %% bound ASCII mode, match directly against the binary rather
-            %% than constructing every possible substring. Keep the old
-            %% byte-list enumerator for all other modes and their errors.
+            %% bound mode, match directly against the binary rather than
+            %% constructing every possible substring — for ANY needle, not
+            %% just ASCII ones. Keep the old byte-list enumerator for all
+            %% other modes and their errors.
             case deref(S0, Bs) of
                 Needle when is_list(Needle) ->
-                    case ascii_needle(Needle) of
-                        true -> fast_sub_text(T, list_to_binary(Needle), Needle, 0,
-                            B0, L0, Af0, S0, Next, St);
-                        false -> slow_sub_text(T, B0, L0, Af0, S0, Next, St)
+                    case needle_pattern(Needle) of
+                        {ok, Pattern} ->
+                            fast_sub_text(T, Pattern, Needle, 0,
+                                B0, L0, Af0, S0, Next, St);
+                        slow -> slow_sub_text(T, B0, L0, Af0, S0, Next, St)
                     end;
                 _ -> slow_sub_text(T, B0, L0, Af0, S0, Next, St)
             end;
@@ -234,14 +236,35 @@ slow_sub_text(T, B0, L0, Af0, S0, Next, St) ->
     sub_chars_search(Codes, length(Codes), 0, 0, B0, L0, Af0, S0, Next, St,
         fun(Cs) -> Cs end).
 
-ascii_needle([C | Rest]) when is_integer(C), C >= 0, C =< 127 ->
-    ascii_tail(Rest);
-ascii_needle(_) -> false.
+%% needle_pattern(Needle) -> {ok, Pattern} | slow.
+%%
+%% The byte pattern fast_sub_text/10 matches against, for any fully-bound
+%% integer needle list. Haystacks are binaries (raw UTF-8 bytes), so the
+%% byte list [226,128,148] — what an MCP-stdio goal's quoted "—" decodes
+%% to — must match AS BYTES: list_to_binary/1, not a codepoint re-encode.
+%% A needle containing a codepoint above 255 ([8212], what a CLI/codepoint
+%% goal's quoted "—" decodes to through erlog_io) can never unify with a
+%% byte list, so it is normalized to its UTF-8 bytes first — the same text
+%% a caller means either way. Anything else (variables, non-integers,
+%% improper lists, undecodable codepoints) falls back to the slow
+%% enumerator, preserving the old unify-and-error behavior.
+%% An empty needle cannot match through binary:match/3 (it badargs on an
+%% empty pattern), so it keeps the old slow enumerator, which walks every
+%% (Before, Length) split and unifies — the exact behavior the empty-needle
+%% test documents.
+needle_pattern([]) -> slow;
+needle_pattern(Needle) -> needle_pattern(Needle, []).
 
-ascii_tail([]) -> true;
-ascii_tail([C | Rest]) when is_integer(C), C >= 0, C =< 127 ->
-    ascii_tail(Rest);
-ascii_tail(_) -> false.
+needle_pattern([], Acc) -> {ok, list_to_binary(lists:reverse(Acc))};
+needle_pattern([C | Rest], Acc) when is_integer(C), C >= 0, C =< 255 ->
+    needle_pattern(Rest, [C | Acc]);
+needle_pattern([C | Rest], Acc) when is_integer(C), C > 255 ->
+    try unicode:characters_to_binary(lists:reverse(Acc, [C | Rest])) of
+        Pattern when is_binary(Pattern) -> {ok, Pattern}
+    catch _:_ -> slow
+    end;
+needle_pattern(_Needle, _Acc) ->
+    slow.
 
 %% Search again from one byte after the last hit. binary:matches/2 would
 %% omit overlapping matches; sub_text/5 must enumerate every occurrence.

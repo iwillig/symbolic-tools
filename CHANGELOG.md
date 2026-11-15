@@ -2,6 +2,19 @@
 
 This file records notable user-facing changes for each release.
 
+## [Unreleased]
+
+### Fixed
+
+- `sub_text/5` no longer falls back to the quadratic split enumerator for a
+  bound non-ASCII needle: any bound needle now matches at the byte level, so
+  real-paragraph-length haystacks (e.g. `paragraph/3` text) stay well inside
+  the query timeout instead of hanging. A needle containing codepoints above
+  255 (such as a quoted em dash through a codepoint-decoded goal) is
+  normalized to its UTF-8 bytes, so the same needle matches through both
+  byte-decoded and codepoint-decoded entry paths. Empty needles and
+  Latin-1-range needles keep their existing byte-list semantics.
+
 ## [0.6.0] - 2026-10-27
 
 ### Added
