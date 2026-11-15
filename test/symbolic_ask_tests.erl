@@ -150,6 +150,83 @@ enumerate_lists_distinct_callers_sorted_test() ->
             Evidence))
     end).
 
+%% Issue #7: a Python callee's resolved-caller coverage is partial (most
+%% call sites live in py_call_site/11, not calls/5), so an empty caller
+%% answer must not claim evidence_complete: true.
+python_caller_answer_does_not_claim_complete_evidence_test() ->
+    %% A calls/5 fact from another Python function keeps the calls/5
+    %% predicate defined, mirroring a real scan; run_evaluation/5 itself
+    %% still has no resolved caller edge.
+    with_db([
+        {defines, run_evaluation, 5, <<"(Cfg, Db, Frag, Opts, Log)">>,
+            <<"/project/src/spb/evaluation.py">>, 213},
+        {defines, load_config, 1, <<"(Path)">>,
+            <<"/project/src/spb/config.py">>, 10},
+        {calls, load_config, 1, {local, open, 1},
+            <<"/project/src/spb/config.py">>, 11},
+        {py_call_site, <<"/project/src/spb/cli.py:295-301">>,
+            <<"/project/src/spb/evaluation.py:213-240">>,
+            <<"run_evaluation">>, name, 1, [], [],
+            <<"/project/src/spb/cli.py">>, 295, 7600, 7650}
+    ], fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "which functions call run_evaluation/5?"),
+        ?assertEqual(<<"enumerate">>, maps:get(<<"type">>, Answer)),
+        ?assertEqual([], maps:get(<<"answer">>, Answer)),
+        ?assertEqual(false, maps:get(<<"evidence_complete">>, Answer)),
+        ?assert(is_binary(maps:get(<<"caveat">>, Answer))),
+        {ok, Count} = symbolic_ask:run_result(Db,
+            "how many functions call run_evaluation/5?"),
+        ?assertEqual(0, maps:get(<<"answer">>, Count)),
+        ?assertEqual(false, maps:get(<<"evidence_complete">>, Count)),
+        ?assert(is_binary(maps:get(<<"caveat">>, Count)))
+    end).
+
+%% The caveat is Python-specific: an Erlang-defined callee with full
+%% resolved coverage keeps evidence_complete: true and carries no caveat.
+erlang_caller_answer_keeps_complete_evidence_test() ->
+    with_db(facts(), fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "which functions call bar/1?"),
+        ?assertEqual([<<"baz/3">>, <<"foo/2">>], maps:get(<<"answer">>, Answer)),
+        ?assertEqual(true, maps:get(<<"evidence_complete">>, Answer)),
+        ?assertNot(maps:is_key(<<"caveat">>, Answer))
+    end).
+
+%% A Python callee WITH resolved calls/5 edges is still partial coverage —
+%% the caveat applies to a non-empty answer too.
+python_caller_answer_with_resolved_edges_still_caveats_test() ->
+    with_db([
+        {defines, run_evaluation, 5, <<"(Cfg, Db, Frag, Opts, Log)">>,
+            <<"/project/src/spb/evaluation.py">>, 213},
+        {calls, main, 0, {local, run_evaluation, 5},
+            <<"/project/src/spb/cli.py">>, 295}
+    ], fun(Db) ->
+        {ok, Answer} = symbolic_ask:run_result(Db,
+            "which functions call run_evaluation/5?"),
+        ?assertEqual([<<"main/0">>], maps:get(<<"answer">>, Answer)),
+        ?assertEqual(false, maps:get(<<"evidence_complete">>, Answer)),
+        ?assert(is_binary(maps:get(<<"caveat">>, Answer)))
+    end).
+
+%% The catalog advertises the optional caveat so an answer consumer knows
+%% the field can appear on caller answers.
+callers_catalog_declares_optional_caveat_test() ->
+    #{<<"operations">> := Operations} = symbolic_ask_catalog:describe(),
+    [{_, CallersOp}, {_, CountOp}] = [lists:keyfind(Id, 1,
+        [{maps:get(<<"id">>, Op), Op} || Op <- Operations])
+        || Id <- [<<"callers">>, <<"callers_count">>]],
+    ?assertMatch(#{<<"properties">> := #{<<"caveat">> :=
+        #{<<"type">> := <<"string">>}}},
+        maps:get(<<"answer_shape">>, CallersOp)),
+    ?assertMatch(#{<<"properties">> := #{<<"caveat">> :=
+        #{<<"type">> := <<"string">>}}},
+        maps:get(<<"answer_shape">>, CountOp)),
+    ?assertNotEqual(nomatch, binary:match(maps:get(<<"limits">>, CallersOp),
+        <<"Python-defined callee">>)),
+    ?assertNotEqual(nomatch, binary:match(maps:get(<<"limits">>, CountOp),
+        <<"Python-defined callee">>)).
+
 tsx_files_are_scanned_and_ask_can_verify_their_calls_test() ->
     Fixture = filename:absname("test/fixtures/sample.tsx"),
     Root = filename:join(["_build", "ask_tsx_scan_scratch"]),

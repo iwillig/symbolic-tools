@@ -6,6 +6,11 @@ This file records notable user-facing changes for each release.
 
 ### Fixed
 
+- ASK `callers` and `callers_count` answers for a Python-defined callee no
+  longer claim complete caller coverage: they now set `evidence_complete`
+  to `false` and include a `caveat` explaining that most Python call sites
+  are syntax-only `py_call_site/11` facts, so an empty caller list does not
+  mean no callers.
 - The `symbolic` CLI now supports `-h`/`--help` at the top level and after
   any subcommand: it prints that command's usage and exits 0 without running
   the command. Invalid arguments still exit non-zero.

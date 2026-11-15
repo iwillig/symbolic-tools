@@ -974,13 +974,16 @@ execute_answer(Pid, count, {callers_of, Object}) ->
             case enumerate_callers(Pid, Object) of
                 {ok, #{<<"answer">> := Callers,
                        <<"evidence">> := Evidence,
-                       <<"evidence_complete">> := Complete}} ->
-                    {ok, #{
+                       <<"evidence_complete">> := Complete} = Enumerated} ->
+                    Count = #{
                         <<"type">> => <<"count">>,
                         <<"answer">> => length(Callers),
                         <<"evidence">> => Evidence,
                         <<"evidence_complete">> => Complete
-                    }};
+                    },
+                    %% A Python target's partial-coverage caveat applies to
+                    %% the count just as much as to the enumeration.
+                    {ok, maps:merge(Count, maps:with([<<"caveat">>], Enumerated))};
                 Other ->
                     Other
             end;
@@ -1646,10 +1649,11 @@ enumerate_callers(Pid, {'/', OName, OArity}) ->
                     Callers = [render_ident(I) || I <- CallerIdentities],
                     case caller_evidence(Pid, Callers, {'/', OName, OArity}) of
                         {ok, Evidence, Complete} ->
-                            {ok, #{<<"type">> => <<"enumerate">>,
-                                <<"answer">> => Callers,
-                                <<"evidence">> => Evidence,
-                                <<"evidence_complete">> => Complete}};
+                            {ok, python_caller_caveat(Pid, OName, OArity,
+                                #{<<"type">> => <<"enumerate">>,
+                                  <<"answer">> => Callers,
+                                  <<"evidence">> => Evidence,
+                                  <<"evidence_complete">> => Complete})};
                         Error -> Error
                     end
             end;
@@ -1658,6 +1662,41 @@ enumerate_callers(Pid, {'/', OName, OArity}) ->
         {error, Reason} ->
             {error, {query_failed, Reason}}
     end.
+
+%% For a target defined in a Python source file, resolved-calls coverage is
+%% inherently partial: the Python extractor stores most call sites as
+%% syntax-only py_call_site/11 facts rather than resolved calls/5 edges
+%% (docs/tree-sitter-python.md), so the caller list — including an empty
+%% one — never means "no callers". Demote evidence_complete to false and
+%% say so, rather than presenting partial coverage as complete (issue #7).
+python_caller_caveat(Pid, OName, OArity, Answer) ->
+    Goal = "findall(F, defines(" ++ quoted_atom_name(OName) ++ ", " ++
+        arity_text(OArity) ++ ", _, F, _), Fs)",
+    case prolog_session:query(Pid, Goal) of
+        %% Bindings can carry leaked findall variables — read 'Fs' by name
+        %% like every other findall consumer in this module.
+        {ok, Bindings} ->
+            Files = proplists:get_value('Fs', Bindings, []),
+            case lists:any(fun is_python_file/1, Files) of
+                true ->
+                    Answer#{<<"evidence_complete">> => false,
+                        <<"caveat">> =>
+                            <<"Python resolved-caller coverage is partial: most Python "
+                              "call sites are stored as syntax-only py_call_site/11 facts, "
+                              "not resolved calls/5 edges, so this caller list may be "
+                              "incomplete. An empty list does not mean no callers.">>};
+                false -> Answer
+            end;
+        _ ->
+            %% The gate already verified the target exists, so a defines
+            %% lookup failure here is unexpected; answer without the caveat
+            %% rather than losing the caller answer entirely.
+            Answer
+    end.
+
+is_python_file(File) ->
+    Path = to_bin(File),
+    byte_size(Path) >= 3 andalso binary:part(Path, byte_size(Path) - 3, 3) =:= <<".py">>.
 
 caller_name_unknown({'-', undefined, _Arity}) -> true;
 caller_name_unknown(_) -> false.
