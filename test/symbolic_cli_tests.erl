@@ -227,6 +227,35 @@ ask_handler_forwards_question_to_shared_answer_runner_test() ->
         meck:unload(symbolic_ask)
     end.
 
+%% -h/--help resolve to the command path they follow; tokens before any
+%% known subcommand never become one (an unknown first token stays an
+%% argparse error), and anything after the path is scanned for the flag.
+help_request_resolves_subcommand_paths_test() ->
+    ?assertEqual({ok, []}, symbolic_cli:help_request(["--help"])),
+    ?assertEqual({ok, []}, symbolic_cli:help_request(["-h"])),
+    ?assertEqual({ok, ["parse"]}, symbolic_cli:help_request(["parse", "--help"])),
+    ?assertEqual({ok, ["query"]},
+        symbolic_cli:help_request(["query", "-db", "f.dets", "--help"])),
+    ?assertEqual(none, symbolic_cli:help_request(["query", "-db", "f.dets", "foo(X)"])),
+    ?assertEqual(none, symbolic_cli:help_request(["--bogus"])),
+    ?assertEqual(none, symbolic_cli:help_request([])).
+
+source_checkout_launcher_prints_top_level_help_and_exits_zero_test() ->
+    {Status, Output} = run_source_launcher(["--help"]),
+    ?assertEqual(0, Status),
+    ?assertNotEqual(nomatch, binary:match(Output, <<"Subcommands">>)).
+
+source_checkout_launcher_prints_subcommand_help_and_exits_zero_test() ->
+    {Status, Output} = run_source_launcher(["parse", "--help"]),
+    ?assertEqual(0, Status),
+    ?assertNotEqual(nomatch,
+        binary:match(Output, <<"Parse the paths listed in the project's .symbolic/config.json">>)).
+
+source_checkout_launcher_prints_short_help_flag_test() ->
+    {Status, Output} = run_source_launcher(["query", "-h"]),
+    ?assertEqual(0, Status),
+    ?assertNotEqual(nomatch, binary:match(Output, <<"Load a fact database and prove a goal">>)).
+
 source_checkout_launcher_runs_catalog_test() ->
     {Status, Output} = run_source_launcher(["ask", "-catalog"]),
     ?assertEqual(0, Status),

@@ -6,6 +6,11 @@ This file records notable user-facing changes for each release.
 
 ### Fixed
 
+- The `symbolic` CLI now supports `-h`/`--help` at the top level and after
+  any subcommand: it prints that command's usage and exits 0 without running
+  the command. Invalid arguments still exit non-zero.
+- The `parse` launcher's RSS sampler no longer delays a caller that reads
+  the script's output pipe by up to 5 seconds after the CLI exits.
 - `sub_text/5` no longer falls back to the quadratic split enumerator for a
   bound non-ASCII needle: any bound needle now matches at the byte level, so
   real-paragraph-length haystacks (e.g. `paragraph/3` text) stay well inside

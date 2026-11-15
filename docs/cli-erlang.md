@@ -223,10 +223,13 @@ default prefix is a *single* dash — `long => "file"` produces `-file`, not
 `-name`), not GNU's. A switch with no value is `type => boolean` plus a
 `default` (that's how `-no-rules` works — verified against a real
 `argparse:run/3`, since the key is then always present in the handler's
-Args map). There is also no automatic `-help`/`--help` — running
+Args map). There is also no automatic `-help`/`--help` in `argparse` — running
 `symbolic` with no subcommand, or any parse error, prints usage and exits
-non-zero on its own, but an explicit help flag would need to be added as
-its own argument if wanted.
+non-zero on its own. `symbolic_cli:main/1` closes that gap before handing
+argv to `argparse:run/3`: `-h` or `--help` anywhere after the subcommand
+path (e.g. `symbolic --help`, `symbolic parse --help`) prints the resolved
+command's help and exits 0 without running the command. Invalid arguments
+still print usage and exit non-zero through `argparse:run/3`.
 
 Conventions: exit code `0` on success, non-zero on error; results to
 `stdout`, diagnostics to `stderr`.

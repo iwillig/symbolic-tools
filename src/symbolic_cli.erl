@@ -9,12 +9,58 @@
 %% argparse command tree (help text, required flags) and invoke each
 %% handler closure directly (mocking the downstream halt()-invoking
 %% modules with meck) without going through argparse:run/3 itself.
--export([cli/0]).
+-export([cli/0, help_request/1]).
 
 %% The CLI entry point: argv through argparse's command tree (cli/0
-%% below). argparse owns usage text, help, and bad-input halts.
+%% below). argparse owns usage text and bad-input halts — including the
+%% nonzero exit for invalid arguments. One gap it leaves open (OTP's
+%% argparse adds no automatic help flags, see docs/cli-erlang.md) is
+%% closed here first: -h/--help anywhere in the argument list prints the
+%% resolved command's help and exits successfully, without running the
+%% command.
 main(Argv) ->
-    argparse:run(Argv, cli(), #{progname => "symbolic"}).
+    case help_request(Argv) of
+        {ok, Path} ->
+            io:format("~ts", [argparse:help(cli(),
+                #{progname => "symbolic", command => ["symbolic" | Path]})]),
+            erlang:halt(0);
+        none ->
+            argparse:run(Argv, cli(), #{progname => "symbolic"})
+    end.
+
+%% help_request(Argv) -> {ok, CmdPath} | none.
+%%
+%% Walks the leading argv tokens that name subcommands (the command path,
+%% e.g. "query" in "symbolic query --db f.dets --help"), then reports a
+%% help request if -h or --help appears anywhere after them. Scanning the
+%% whole remainder — not just the first unknown token — is deliberate: a
+%% help flag conventionally wins wherever it appears, including after
+%% other options and positionals. Anything before the command path is
+%% never a help request, so an unknown command still gets argparse's
+%% own error-and-exit-1 treatment.
+help_request(Argv) ->
+    help_request(Argv, []).
+
+help_request([Token | Rest], Path) when is_list(Token) ->
+    case maps:is_key(Token, subcommands_at(Path)) of
+        true -> help_request(Rest, Path ++ [Token]);
+        false ->
+            case lists:member(Token, ["--help", "-h"]) of
+                true -> {ok, Path};
+                false -> help_request(Rest, Path)
+            end
+    end;
+help_request(_, _) ->
+    none.
+
+%% The command map available at the given path down cli()'s tree.
+subcommands_at(Path) ->
+    Cmd = lists:foldl(
+        fun(Name, Acc) ->
+            #{commands := Subs} = Acc,
+            maps:get(Name, Subs)
+        end, cli(), Path),
+    maps:get(commands, Cmd, #{}).
 
 %% The argparse command tree, one entry per subcommand module
 %% (symbolic_query, symbolic_parse, symbolic_serve, symbolic_extract,
