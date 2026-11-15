@@ -57,14 +57,36 @@
 -define(LIBNAME, symbolic_ts).
 
 init() ->
-    SoFile =
-        case code:priv_dir(?APPNAME) of
-            {error, bad_name} ->
-                filename:join(["priv", atom_to_list(?LIBNAME)]);
-            Dir ->
-                filename:join(Dir, atom_to_list(?LIBNAME))
-        end,
-    ok = erlang:load_nif(SoFile, 0).
+    ok = load_first_so_candidate(so_candidates()).
+
+%% so_candidates() -> [file()].
+%%
+%% code:priv_dir/1 resolves into _build/<profile>/lib/symbolic_tools/priv —
+%% a copy rebar3 syncs unreliably: it has been observed missing the .so
+%% entirely on a cache-restored CI workspace and holding stale builds whose
+%% rpath points into a since-deleted libtorch cache (CI's warm-the-tagger
+%% step failed exactly this way after the ubuntu-26.04 runner migration).
+%% Try it first — it is the right answer for a packaged release — then
+%% fall back to the repo-relative priv/ that build_nif.sh writes on every
+%% compile.
+so_candidates() ->
+    RepoPriv = filename:join(["priv", atom_to_list(?LIBNAME)]),
+    case code:priv_dir(?APPNAME) of
+        {error, bad_name} -> [RepoPriv];
+        Dir -> [filename:join(Dir, atom_to_list(?LIBNAME)), RepoPriv]
+    end.
+
+%% Load the first candidate that succeeds. The last candidate's result is
+%% returned directly, so a total failure crashes this on_load hook with
+%% the load error as a badmatch on ok — the same class of failure the
+%% single-path version produced.
+load_first_so_candidate([SoFile]) ->
+    erlang:load_nif(SoFile, 0);
+load_first_so_candidate([SoFile | Rest]) ->
+    case erlang:load_nif(SoFile, 0) of
+        ok -> ok;
+        {error, _LoadReason} -> load_first_so_candidate(Rest)
+    end.
 
 tree_sitter_erlang() -> erlang:nif_error(nif_not_loaded).
 tree_sitter_typescript() -> erlang:nif_error(nif_not_loaded).

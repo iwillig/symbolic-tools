@@ -6,6 +6,17 @@ This file records notable user-facing changes for each release.
 
 ### Fixed
 
+- The NIF wrappers (`symbolic_ts`, `symbolic_text`, `symbolic_nlprule`,
+  `symbolic_nlp`) no longer trust `code:priv_dir/1` alone: it can resolve
+  into a `_build` profile copy of `priv/` that is missing the `.so` or
+  holds a stale build (observed on a cache-restored CI workspace after the
+  ubuntu-26.04 runner migration, which broke the statistical tier's
+  warm-up and its tests). Each wrapper now falls back to the
+  repo-relative `priv/` that the build script writes on every compile.
+- `scripts/build_nif.sh` locates libtorch by its actual shared object
+  instead of a layout glob, warns loudly instead of silently skipping when
+  the rpath cannot be set, and syncs fresh `.so` files into every existing
+  `_build` profile `priv` copy.
 - ASK `callers` and `callers_count` answers for a Python-defined callee no
   longer claim complete caller coverage: they now set `evidence_complete`
   to `false` and include a `caveat` explaining that most Python call sites

@@ -65,8 +65,13 @@ mkdir -p priv
 cp "$artifact" "priv/$crate.so"
 
 if [ "$crate" = "symbolic_nlp" ]; then
-    libdir=$(ls -d "$PWD"/native/symbolic_nlp/target/release/build/torch-sys-*/out/libtorch/libtorch/lib 2>/dev/null | head -1 || true)
-    if [ -n "$libdir" ]; then
+    # Locate libtorch by its actual shared object instead of a layout glob:
+    # torch-sys's build-dir hash and nesting shift with toolchain updates,
+    # and a silent miss here leaves the NIF without an rpath — it builds
+    # fine but cannot dlopen libtorch at load time (the ubuntu-26.04
+    # runner migration surfaced exactly this in CI).
+    libdir=$(dirname "$(find native/symbolic_nlp/target/release/build -type f -name libtorch_cpu.so 2>/dev/null | head -1)" 2>/dev/null || true)
+    if [ -n "$libdir" ] && [ -d "$libdir" ]; then
         case "$(uname -s)" in
             Darwin)
                 # macOS: post-link surgery, because a link-time rpath
@@ -84,11 +89,26 @@ if [ "$crate" = "symbolic_nlp" ]; then
                 # tests would silently degrade to skipping.
                 if command -v patchelf >/dev/null 2>&1; then
                     patchelf --set-rpath "$libdir" "priv/$crate.so" 2>/dev/null || true
+                else
+                    echo "WARNING: patchelf not found; priv/symbolic_nlp.so carries no libtorch rpath (install patchelf, or set LD_LIBRARY_PATH to $libdir at load time)." >&2
                 fi
                 ;;
         esac
+    else
+        echo "WARNING: libtorch shared objects not found under native/symbolic_nlp/target; priv/symbolic_nlp.so carries no libtorch rpath, so the statistical tier will degrade at load time (set LIBTORCH or install patchelf and rebuild)." >&2
     fi
 fi
 
 echo "$crate NIF: $artifact -> priv/$crate.so"
+done
+
+# code:priv_dir/1 resolves into _build/<profile>/lib/symbolic_tools/priv —
+# a copy rebar3 syncs unreliably (observed missing files entirely and
+# holding stale builds, e.g. after a cache restore or a runner-image
+# migration). Sync every fresh .so into each existing profile copy so
+# priv_dir never resolves to a stale artifact; the NIF wrappers also fall
+# back to this repo's priv/ when a copy lacks the file.
+for profile_priv in _build/*/lib/symbolic_tools/priv; do
+    [ -d "$profile_priv" ] || continue
+    cp -f priv/*.so "$profile_priv"/ || true
 done
