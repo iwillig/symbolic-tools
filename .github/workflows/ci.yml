@@ -60,8 +60,17 @@ jobs:
           path: ~/.cache/rustbert
           key: ${{ runner.os }}-rustbert-v1
 
-      - name: Warm the tagger model
-        run: erl -noshell -pa _build/*/lib/*/ebin -eval 'case symbolic_nlp:tag(<<"warm the model cache">>) of {ok, _} -> halt(0); _ -> halt(1) end.'
+      - name: Warm the tagger model (diagnostic)
+        run: |
+          ls -la priv/symbolic_nlp.so || true
+          (command -v patchelf >/dev/null && patchelf --print-rpath priv/symbolic_nlp.so) || echo "no patchelf or no rpath"
+          ldd priv/symbolic_nlp.so | grep -Ei "not found|libtorch" || true
+          erl -noshell -pa _build/*/lib/*/ebin -eval '
+            PrivDir = case code:priv_dir(symbolic_tools) of {error, _} -> "priv"; D -> D end,
+            io:format("priv_dir=~p~n", [PrivDir]),
+            io:format("so_exists=~p~n", [filelib:is_file(filename:join(PrivDir, "symbolic_nlp"))]),
+            io:format("load_nif: ~p~n", [erlang:load_nif(filename:join(PrivDir, "symbolic_nlp"), 0)]),
+            halt(0).'
 
       - name: Run EUnit tests
         run: rebar3 eunit
