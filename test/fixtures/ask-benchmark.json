@@ -101,7 +101,7 @@
   },
   {
     "id": "real-ask-interpreter-delegation",
-    "plan_reference": "docs/plans/ask-expert-machine.md#1-make-the-operation-catalog-a-client-contract",
+    "plan_reference": "docs/research-expert-machine-completeness.md#3-coverage-of-question-meaning-is-more-important-than-question-grammar-size",
     "source": "project_src",
     "question": "does ask_detailed/3 call ask/3?",
     "operation": "calls",
@@ -111,7 +111,7 @@
   },
   {
     "id": "real-scan-report-extraction",
-    "plan_reference": "docs/plans/ask-expert-machine.md#3-make-negative-and-unknown-answers-scope-aware",
+    "plan_reference": "docs/research-expert-machine-completeness.md#2-unknown-is-not-the-same-as-false",
     "source": "project_src",
     "question": "does scan_report/2 call parallel_extract/2?",
     "operation": "calls",
@@ -121,7 +121,7 @@
   },
   {
     "id": "real-mcp-ambiguity-adapter",
-    "plan_reference": "docs/plans/ask-expert-machine.md#4-improve-entity-grounding-and-ambiguity-handling",
+    "plan_reference": "docs/research-expert-machine-completeness.md#candidate-completeness-criteria-to-test",
     "source": "project_src",
     "question": "does render_ask/1 call ambiguity_answer/1?",
     "operation": "calls",
@@ -131,7 +131,7 @@
   },
   {
     "id": "real-atomic-snapshot-persistence-callers",
-    "plan_reference": "docs/plans/typescript-type-system.md#implementation-status",
+    "plan_reference": "docs/incremental-parsing.md#failure-diagnostics",
     "source": "project_src",
     "question": "which functions call write_bundle/4?",
     "operation": "callers",
@@ -145,7 +145,7 @@
   },
   {
     "id": "real-scope-scan-negative",
-    "plan_reference": "docs/plans/ask-expert-machine.md#3-make-negative-and-unknown-answers-scope-aware",
+    "plan_reference": "docs/research-expert-machine-completeness.md#2-unknown-is-not-the-same-as-false",
     "source": "project_src",
     "question": "does scan_report/1 call write_metadata/2?",
     "operation": "calls",
@@ -155,7 +155,7 @@
   },
   {
     "id": "nearby-name-is-not-an-alias",
-    "plan_reference": "docs/plans/ask-expert-machine.md#4-improve-entity-grounding-and-ambiguity-handling",
+    "plan_reference": "docs/research-expert-machine-completeness.md#candidate-completeness-criteria-to-test",
     "source": "overloaded",
     "question": "is lookupExtra/1 defined?",
     "operation": "defines",
@@ -165,7 +165,7 @@
   },
   {
     "id": "relation-word-identifier",
-    "plan_reference": "docs/plans/ask-expert-machine.md#4-improve-entity-grounding-and-ambiguity-handling",
+    "plan_reference": "docs/research-expert-machine-completeness.md#candidate-completeness-criteria-to-test",
     "source": "relation_word",
     "question": "does call/0 call bar/1?",
     "operation": "calls",
