@@ -27,8 +27,8 @@
 %% Exported for symbolic_query_tests.erl — run_result/3 is the halt-free
 %% core (see its own doc comment); resolve_rules/3, maybe_consult_rules/2,
 %% print_bindings/1 and name_to_list/1 are its remaining halt-free pieces.
--export([run_result/3, resolve_rules/3, maybe_consult_rules/2, print_bindings/1,
-    name_to_list/1, discover_rules_from_dir/1, discover_up/2]).
+-export([run_result/3, run_result/4, resolve_rules/3, maybe_consult_rules/2,
+    print_bindings/1, name_to_list/1, discover_rules_from_dir/1, discover_up/2]).
 
 %% The project-relative default rule library: <project root>/.symbolic/rules.pl
 -define(DEFAULT_RULES_DIR, ".symbolic").
@@ -92,16 +92,33 @@ run(DbPath, RulesPath, NoRules, Goal) ->
 %% clean session either way, never one left running after this returns.
 run_result(DbPath, RulesPath, Goal) ->
     case filelib:is_regular(DbPath) of
-        true -> run_checked(DbPath, RulesPath, Goal);
+        true -> run_checked(DbPath, RulesPath, Goal, default);
         false -> {error, {no_such_db, DbPath}}
     end.
 
-run_checked(DbPath, RulesPath, Goal) ->
+%% run_result/3 with an explicit proof timeout instead of the standard
+%% ?QUERY_TIMEOUT_MS budget — the same escape hatch prolog_session:query/3
+%% gives its direct callers. No rules_perf-style guard can assert a fixed
+%% wall-clock budget against a base that grows with the repo, so callers
+%% scanning a live tree need the timeout to be theirs, not the default's.
+-spec run_result(file:filename(), file:filename() | undefined, string(),
+    timeout()) ->
+    {solutions, [{atom(), term()}]} | no_solution
+    | {error, {no_such_db, file:filename()}}
+    | {error, {rules_error, file:filename() | undefined, term()}}
+    | {error, {query_failed, term()}}.
+run_result(DbPath, RulesPath, Goal, TimeoutMs) ->
+    case filelib:is_regular(DbPath) of
+        true -> run_checked(DbPath, RulesPath, Goal, TimeoutMs);
+        false -> {error, {no_such_db, DbPath}}
+    end.
+
+run_checked(DbPath, RulesPath, Goal, TimeoutMs) ->
     {ok, Pid} = prolog_session:start_link(),
     ok = prolog_session:load_database(Pid, DbPath),
     Result =
         case maybe_consult_rules(Pid, RulesPath) of
-            ok -> query_result(Pid, Goal);
+            ok -> query_result(Pid, Goal, TimeoutMs);
             {error, Reason} -> {error, {rules_error, RulesPath, Reason}}
         end,
     prolog_session:stop(Pid),
@@ -185,8 +202,16 @@ search_up(Dir, RelPathParts) ->
             end
     end.
 
-query_result(Pid, Goal) ->
+query_result(Pid, Goal, default) ->
+    %% query/2, not query/3 with a copied 5000: prolog_session owns the
+    %% ?QUERY_TIMEOUT_MS number, and this keeps it that way.
     case prolog_session:query(Pid, Goal) of
+        {ok, Bindings} -> {solutions, Bindings};
+        no_solution -> no_solution;
+        {error, Reason} -> {error, {query_failed, Reason}}
+    end;
+query_result(Pid, Goal, TimeoutMs) ->
+    case prolog_session:query(Pid, Goal, TimeoutMs) of
         {ok, Bindings} -> {solutions, Bindings};
         no_solution -> no_solution;
         {error, Reason} -> {error, {query_failed, Reason}}

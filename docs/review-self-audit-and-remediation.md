@@ -176,17 +176,29 @@ direct, asserted coverage via the `count_pairs/2`, `sub_text/5`,
    `atom_from_binary/2`.
 
 4. **DONE — the rules-library performance regression guard.**
-   `test/rules_perf_tests.erl` scans this repo's full configured tree
-   (src, test, docs) fresh, then runs the four flagship goals through
-   `run_result/3` — whose standard 5s proof budget IS the assertion:
-   a timeout surfaces as `{error, {query_failed, timeout}}` and fails the
-   test. Deliberately no wall-clock assert (flakey on loaded CI); the
-   budget already gives ~6x headroom over the measured 0.3–0.8s proofs.
-   Verified to actually guard: a temporarily reintroduced O(n²)
-   `reverse/2` in `top_fan_out/2` fails the test on this base — and
-   PASSES it on a src-only base, which is why the guard uses the full
-   tree (a quadratic regression is invisible until the base is big
-   enough; src alone isn't).
+   `test/rules_perf_tests.erl` is now a two-layer guard. Layer 1 is the
+   performance guard: the four flagship goals run through `run_result/3`
+   — whose standard 5s proof budget IS the assertion: a timeout
+   surfaces as `{error, {query_failed, timeout}}` and fails the test —
+   but against a SYNTHETIC fact base of fixed size (600 defines, 1800
+   calls, 60 files, calibrated 2026-11-16), not the live tree.
+   Deliberately no wall-clock assert (flakey on loaded CI); measured
+   proofs at that size are 0.3–0.75s locally (CI ~2–2.5x slower), so
+   the budget keeps multi-second headroom. Verified to actually guard:
+   a temporarily reintroduced O(n²) `reverse/2` in `top_fan_out/2`
+   costs ~14s at 600 ranking keys and fails the test — and PASSES on a
+   src-only base, which is why the base is not tiny. The base is fixed
+   because the original single-layer guard scanned the live tree, and
+   the tree grew ~33k→~83k facts between 2026-10 and 2026-11 until the
+   honest proofs legitimately crossed the 5s budget and every CI run
+   since 2026-10-15 failed without any rules regression. Layer 2 keeps
+   the live tree covered: `scan_paths/1` over (src, test, docs) with
+   floor assertions that catch a walk that LOST files, plus the four
+   goals again asserting answer SHAPE under a generous 45s hang-class
+   cap (at the 2026-11 base size the honest costs are top_fan_out ~16s
+   and all_truly_uncalled ~19s — the latter is inherently
+   O(defines x calls) in the current rules — so any tight budget on the
+   live tree would re-create the growth collision).
 
 5. **Two known-cost edges, watch rather than fix now.**
    `all_reaches_pairs/1` deliberately computes the full closure (~9s on this
