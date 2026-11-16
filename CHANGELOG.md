@@ -2,6 +2,40 @@
 
 This file records notable user-facing changes for each release.
 
+## [Unreleased]
+
+### Fixed
+
+- The NIF wrappers (`symbolic_ts`, `symbolic_text`, `symbolic_nlprule`,
+  `symbolic_nlp`) no longer trust `code:priv_dir/1` alone: it can resolve
+  into a `_build` profile copy of `priv/` that is missing the `.so` or
+  holds a stale build (observed on a cache-restored CI workspace after the
+  ubuntu-26.04 runner migration, which broke the statistical tier's
+  warm-up and its tests). Each wrapper now falls back to the
+  repo-relative `priv/` that the build script writes on every compile.
+- `scripts/build_nif.sh` locates libtorch by its actual shared object
+  instead of a layout glob, warns loudly instead of silently skipping when
+  the rpath cannot be set, and syncs fresh `.so` files into every existing
+  `_build` profile `priv` copy.
+- ASK `callers` and `callers_count` answers for a Python-defined callee no
+  longer claim complete caller coverage: they now set `evidence_complete`
+  to `false` and include a `caveat` explaining that most Python call sites
+  are syntax-only `py_call_site/11` facts, so an empty caller list does not
+  mean no callers.
+- The `symbolic` CLI now supports `-h`/`--help` at the top level and after
+  any subcommand: it prints that command's usage and exits 0 without running
+  the command. Invalid arguments still exit non-zero.
+- The `parse` launcher's RSS sampler no longer delays a caller that reads
+  the script's output pipe by up to 5 seconds after the CLI exits.
+- `sub_text/5` no longer falls back to the quadratic split enumerator for a
+  bound non-ASCII needle: any bound needle now matches at the byte level, so
+  real-paragraph-length haystacks (e.g. `paragraph/3` text) stay well inside
+  the query timeout instead of hanging. A needle containing codepoints above
+  255 (such as a quoted em dash through a codepoint-decoded goal) is
+  normalized to its UTF-8 bytes, so the same needle matches through both
+  byte-decoded and codepoint-decoded entry paths. Empty needles and
+  Latin-1-range needles keep their existing byte-list semantics.
+
 ## [0.6.0] - 2026-10-27
 
 ### Added

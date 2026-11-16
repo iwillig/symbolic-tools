@@ -200,17 +200,23 @@ answer_shape(file_scanned, yes_no) ->
 answer_shape(_Id, yes_no) ->
     answer_object(<<"yes_no">>, #{<<"answer">> => #{<<"type">> => <<"boolean">>}},
         [<<"type">>, <<"answer">>]);
+%% A Python-target caller answer carries an optional `caveat` explaining
+%% partial resolved-caller coverage (docs/ask-evidence.md); it is present
+%% only when the callee is defined in a .py file, so it stays out of
+%% `required`.
 answer_shape(callers, enumerate) ->
     answer_object(<<"enumerate">>, #{
         <<"answer">> => array_of(#{<<"type">> => <<"string">>}),
         <<"evidence">> => array_of(call_evidence_schema()),
-        <<"evidence_complete">> => #{<<"type">> => <<"boolean">>}},
+        <<"evidence_complete">> => #{<<"type">> => <<"boolean">>},
+        <<"caveat">> => #{<<"type">> => <<"string">>}},
         [<<"type">>, <<"answer">>, <<"evidence">>, <<"evidence_complete">>]);
 answer_shape(callers_count, count) ->
     answer_object(<<"count">>, #{
         <<"answer">> => #{<<"type">> => <<"integer">>},
         <<"evidence">> => array_of(call_evidence_schema()),
-        <<"evidence_complete">> => #{<<"type">> => <<"boolean">>}},
+        <<"evidence_complete">> => #{<<"type">> => <<"boolean">>},
+        <<"caveat">> => #{<<"type">> => <<"string">>}},
         [<<"type">>, <<"answer">>, <<"evidence">>, <<"evidence_complete">>]);
 answer_shape(_Id, enumerate) ->
     answer_object(<<"enumerate">>, #{<<"answer">> => array_of(#{<<"type">> => <<"string">>})},
@@ -424,9 +430,9 @@ evidence_mode(prose_search) -> ranked_results;
 evidence_mode(_) -> none.
 
 evidence_description(callers, source_location) ->
-    <<"Returns one calls fact per distinct caller, capped at 50; evidence_complete indicates whether every caller has a witness.">>;
+    <<"Returns one calls fact per distinct caller, capped at 50; evidence_complete indicates whether every caller has a witness. For a Python-defined callee, coverage is partial (syntax-only py_call_site/11 facts), so evidence_complete is false and a caveat field explains it.">>;
 evidence_description(callers_count, source_location) ->
-    <<"Returns one calls fact per distinct caller, capped at 50; evidence_complete indicates whether every caller is cited.">>;
+    <<"Returns one calls fact per distinct caller, capped at 50; evidence_complete indicates whether every caller is cited. For a Python-defined callee, coverage is partial (syntax-only py_call_site/11 facts), so evidence_complete is false and a caveat field explains it.">>;
 evidence_description(calls, source_location) ->
     <<"Returns one deterministic matching calls fact as a source witness; false answers have no witness.">>;
 evidence_description(returns_mention, source_location) ->
@@ -461,8 +467,8 @@ evidence_limit(callers_count) -> 50;
 evidence_limit(_) -> undefined.
 
 operation_limits(callers) ->
-    <<"Callers with a known name but unknown arity appear as name/?. If any caller name is missing, returns unknown instead of a partial list. Cites at most 50 callers; evidence_complete reports citation truncation.">>;
+    <<"Callers with a known name but unknown arity appear as name/?. If any caller name is missing, returns unknown instead of a partial list. Cites at most 50 callers; evidence_complete reports citation truncation. For a Python-defined callee, resolved-caller coverage is partial, so evidence_complete is false and a caveat field is included.">>;
 operation_limits(callers_count) ->
-    <<"Callers with a known name but unknown arity appear as name/?. If any caller name is missing, returns unknown instead of a partial count. Cites at most 50 callers; evidence_complete reports citation truncation.">>;
+    <<"Callers with a known name but unknown arity appear as name/?. If any caller name is missing, returns unknown instead of a partial count. Cites at most 50 callers; evidence_complete reports citation truncation. For a Python-defined callee, resolved-caller coverage is partial, so evidence_complete is false and a caveat field is included.">>;
 operation_limits(_Id) ->
     <<"Results describe extracted facts in the configured scan; they do not establish behavior outside that scope.">>.

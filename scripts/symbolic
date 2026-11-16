@@ -75,6 +75,10 @@ if [ "${1:-}" = parse ]; then
     CHILD=$!
     # RSS is an OS measurement; erlang:memory/0 excludes native NIF memory.
     # Keep sampling outside the VM so the final recorded sample survives it.
+    # The subshell's own stdio is detached: killing it orphans its in-flight
+    # `sleep`, which would otherwise hold this script's stdout open for up
+    # to 5s and delay a caller that waits on our output pipe (Erlang ports
+    # with exit_status, CI harnesses).
     (
         while kill -0 "$CHILD" 2>/dev/null; do
             RSS=$(ps -o rss= -p "$CHILD" 2>/dev/null | tr -d ' ')
@@ -83,7 +87,7 @@ if [ "${1:-}" = parse ]; then
             fi
             sleep 5
         done
-    ) &
+    ) >/dev/null 2>&1 &
     SAMPLER=$!
     wait "$CHILD"
     RC=$?
