@@ -66,7 +66,8 @@ mkdir -p priv
 # complete file in the destination directory and atomically replace its name.
 staged=$(mktemp "priv/.$crate.XXXXXXXX")
 trap 'rm -f "$staged"' EXIT
-cp "$artifact" "$staged"
+# mktemp starts at 0600; preserve the artifact's mode for other runtime users.
+cp -p "$artifact" "$staged"
 
 if [ "$crate" = "symbolic_nlp" ]; then
     # Locate libtorch by its actual shared object instead of a layout glob:
@@ -92,7 +93,10 @@ if [ "$crate" = "symbolic_nlp" ]; then
                 # find libtorch at test time and the statistical tier's
                 # tests would silently degrade to skipping.
                 if command -v patchelf >/dev/null 2>&1; then
-                    patchelf --set-rpath "$libdir" "$staged" 2>/dev/null || true
+                    if ! patchelf --set-rpath "$libdir" "$staged"; then
+                        echo "ERROR: failed to set libtorch rpath on $crate NIF" >&2
+                        exit 1
+                    fi
                 else
                     echo "WARNING: patchelf not found; priv/symbolic_nlp.so carries no libtorch rpath (install patchelf, or set LD_LIBRARY_PATH to $libdir at load time)." >&2
                 fi
@@ -108,6 +112,16 @@ trap - EXIT
 echo "$crate NIF: $artifact -> priv/$crate.so"
 done
 
+# A skipped tier must also be absent in a reused workspace. Unlinking an
+# old NIF leaves any already-loaded mapping intact until that VM exits.
+if [ -n "$SKIP_NLP" ]; then
+    rm -f priv/symbolic_nlp.so
+    for profile_priv in _build/*/lib/symbolic_tools/priv; do
+        [ -d "$profile_priv" ] || continue
+        rm -f "$profile_priv/symbolic_nlp.so"
+    done
+fi
+
 # code:priv_dir/1 resolves into _build/<profile>/lib/symbolic_tools/priv —
 # a copy rebar3 syncs unreliably (observed missing files entirely and
 # holding stale builds, e.g. after a cache restore or a runner-image
@@ -122,7 +136,7 @@ for profile_priv in _build/*/lib/symbolic_tools/priv; do
         [ "$source" -ef "$target" ] && continue
         staged=$(mktemp "$profile_priv/.nif.XXXXXXXX")
         trap 'rm -f "$staged"' EXIT
-        cp "$source" "$staged"
+        cp -p "$source" "$staged"
         mv -f "$staged" "$target"
         trap - EXIT
     done
