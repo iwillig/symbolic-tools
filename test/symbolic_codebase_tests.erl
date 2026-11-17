@@ -47,8 +47,8 @@ codebase_test_() ->
         fun query_before_parse_is_error/1,
         fun parse_then_overview_reports_state/1,
         fun inline_doc_attribute_is_queryable/1,
-        fun cache_matches_side_effect_free_scan/1,
-        fun query_all_solutions_match_scan/1,
+        integration_timeout(fun cache_matches_side_effect_free_scan/1),
+        integration_timeout(fun query_all_solutions_match_scan/1),
         fun query_limit_caps_results/1,
         fun query_no_solution_is_empty_ok/1,
         fun query_undefined_predicate_is_error/1,
@@ -78,11 +78,16 @@ codebase_test_() ->
         fun parse_with_no_path_and_no_config_is_error/1,
         fun path_is_a_project_root_uses_its_own_config/1,
         fun parse_config_by_explicit_path_uses_that_config/1,
-        fun configured_typescript_analysis_status_is_cached_and_queryable/1,
+        integration_timeout(fun configured_typescript_analysis_status_is_cached_and_queryable/1),
         fun configured_database_is_shared_with_cli_query_and_refreshes_on_reparse/1,
         fun two_projects_stay_independently_cached_via_their_own_roots/1,
         fun path_pointing_inside_a_configured_project_is_scanned_literally/1
     ]}.
+
+%% These cases perform multiple scans or start a Node worker. Keep the
+%% assertions intact while allowing slower CI and loaded developer machines.
+integration_timeout(Test) ->
+    fun(Setup) -> {timeout, 30, Test(Setup)} end.
 
 overview_before_parse(_Setup) ->
     fun() ->

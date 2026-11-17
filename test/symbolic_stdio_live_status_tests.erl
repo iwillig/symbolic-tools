@@ -57,7 +57,10 @@ with_server(Fun) ->
     end,
     ok.
 
-status_reaches_the_client_while_parse_blocks_test() ->
+status_reaches_the_client_while_parse_blocks_test_() ->
+    {timeout, 30, fun status_reaches_the_client_while_parse_blocks/0}.
+
+status_reaches_the_client_while_parse_blocks() ->
     with_server(fun() ->
         send_initialize(),
         arm_block(),
@@ -89,7 +92,10 @@ status_reaches_the_client_while_parse_blocks_test() ->
                      receive_payload())
     end).
 
-status_reaches_the_client_while_query_proves_test() ->
+status_reaches_the_client_while_query_proves_test_() ->
+    {timeout, 30, fun status_reaches_the_client_while_query_proves/0}.
+
+status_reaches_the_client_while_query_proves() ->
     with_server(fun() ->
         send_initialize(),
         send_call(<<"p1">>, <<"parse">>, #{}),

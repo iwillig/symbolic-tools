@@ -5,7 +5,10 @@
 %% assertions hidden in the implementation: each row carries the intended
 %% catalog operation, slots, expected epistemic status, answer, and citations.
 
-benchmark_cases_match_intent_slots_answers_and_evidence_test() ->
+benchmark_cases_match_intent_slots_answers_and_evidence_test_() ->
+    {timeout, 60, fun benchmark_cases_match_intent_slots_answers_and_evidence/0}.
+
+benchmark_cases_match_intent_slots_answers_and_evidence() ->
     BenchmarkPath = "test/fixtures/ask-benchmark.json",
     {ok, Json} = file:read_file(BenchmarkPath),
     Cases = jsx:decode(Json, [return_maps]),
