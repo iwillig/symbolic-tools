@@ -5,6 +5,7 @@ import pathlib
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -78,6 +79,58 @@ class BuildNifTests(unittest.TestCase):
         result = self.run_build(SYMBOLIC_SKIP_NLP="1")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse((self.profile / "symbolic_nlp.so").exists())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "ELF loading test requires Linux")
+    def test_loaded_shared_libraries_survive_install_and_new_processes_get_update(self):
+        compiler = shutil.which("cc")
+        self.assertIsNotNone(compiler, "C compiler is required for the NIF installation test")
+        source = self.root / "probe.c"
+        artifact = self.root / "native/symbolic_text/target/release/libsymbolic_text.so"
+
+        def compile_probe(value, output):
+            source.write_text(f"__thread int value = {value};\n"
+                              "int probe(void) { return value; }\n")
+            subprocess.run([compiler, "-shared", "-fPIC", "-Wl,-z,now",
+                            str(source), "-o", str(output)], check=True,
+                           capture_output=True, text=True)
+
+        # Both the primary and a real profile copy may be loaded by BEAMs.
+        old = self.priv / "symbolic_text.so"
+        copy = self.profile / "symbolic_text.so"
+        compile_probe(17, old)
+        shutil.copy2(old, copy)
+        compile_probe(29, artifact)
+        program = (
+            "import ctypes, sys\n"
+            "lib = ctypes.CDLL(sys.argv[1])\n"
+            "print(lib.probe(), flush=True)\n"
+            "sys.stdin.readline()\n"
+            "print(lib.probe(), flush=True)\n"
+        )
+        processes = []
+        try:
+            for path in (old, copy):
+                proc = subprocess.Popen([sys.executable, "-c", program, str(path)],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True)
+                processes.append(proc)
+                self.assertEqual("17", proc.stdout.readline().strip())
+            result = self.run_build(SYMBOLIC_SKIP_NLP="1")
+            self.assertEqual(0, result.returncode, result.stderr)
+            for proc in processes:
+                stdout, stderr = proc.communicate(input="continue\n", timeout=10)
+                self.assertEqual(0, proc.returncode, stderr)
+                self.assertEqual("17", stdout.strip())
+            for path in (old, copy):
+                fresh = subprocess.run([sys.executable, "-c", program, str(path)],
+                    input="continue\n", text=True, capture_output=True, timeout=10)
+                self.assertEqual(0, fresh.returncode, fresh.stderr)
+                self.assertEqual(["29", "29"], fresh.stdout.splitlines())
+        finally:
+            for proc in processes:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.communicate()
 
     def test_patchelf_failure_is_visible_and_does_not_replace_old_nlp(self):
         self.add_libtorch()
