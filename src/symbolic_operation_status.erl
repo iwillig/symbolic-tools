@@ -1,6 +1,7 @@
 %%% Independent observer for the cache process's parse/query lifecycle.
 -module(symbolic_operation_status).
 -behaviour(gen_statem).
+-include_lib("kernel/include/logger.hrl").
 -export([start_link/0, started/2, project/1, phase/1, finished/1, cancelled/1, status/0]).
 -export([init/1, callback_mode/0, handle_event/4]).
 
@@ -48,6 +49,11 @@ handle_event(cast, {started, Owner, Token, Kind, Path}, idle, Data) ->
 handle_event(cast, {phase, Owner, Token, Phase}, running,
              #{owner := Owner, token := Token} = Data) ->
     Active = maps:get(active, Data),
+    case maps:get(kind, Active) of
+        parse -> ?LOG_INFO("parse: phase=~p path=~p elapsed_ms=~p",
+                           [Phase, maps:get(path, Active), now_ms() - maps:get(started_ms, Active)]);
+        _ -> ok
+    end,
     {keep_state, Data#{active => Active#{phase => Phase}}};
 handle_event(cast, {project, Owner, Token, Path}, running,
              #{owner := Owner, token := Token} = Data) ->
@@ -63,6 +69,10 @@ handle_event(cast, {cancelled, Owner}, running,
     complete({error, superseded}, Data);
 handle_event(info, {'DOWN', Monitor, process, Owner, Reason}, running,
              #{owner := Owner, monitor := Monitor} = Data) ->
+    Active = maps:get(active, Data),
+    ?LOG_ERROR("operation: owner exited kind=~p phase=~p path=~p elapsed_ms=~p reason=~p",
+               [maps:get(kind, Active), maps:get(phase, Active), maps:get(path, Active),
+                now_ms() - maps:get(started_ms, Active), Reason]),
     complete({crashed, Reason}, Data);
 handle_event(_Type, _Event, _State, _Data) -> keep_state_and_data.
 complete(Outcome, Data) ->

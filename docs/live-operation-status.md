@@ -23,6 +23,22 @@ saved facts during the scan. A failed scan never replaces the previous cache;
 `status` reports the failed attempt while `overview` keeps reporting the last
 good snapshot.
 
+## Diagnosing a disconnected server
+
+The server log records its OS process ID at startup and parse phase changes
+with the project path and elapsed time. If an operation owner exits while the
+VM is running, the log records the last phase and exit reason. Phase events
+are asynchronous, so the last logged phase can lag behind the actual work.
+
+A VM crash, forced kill, or power loss can prevent a final log entry. A later
+server startup is not proof of the cause. On Linux with systemd, inspect the
+kernel journal and core dump for the recorded process ID and time, for example
+`journalctl -k --since '10 minutes ago'` and `coredumpctl info PID`. A core
+dump may be unavailable, and it can contain sensitive process memory; follow
+local access and retention policies. Erlang crash dumps cover some VM failures,
+not all native crashes. The status tracker and log do not replace external
+process supervision.
+
 ## How the concurrency works
 
 Two pieces make live status possible:

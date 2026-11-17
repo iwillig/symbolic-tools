@@ -62,7 +62,11 @@ case "$(uname -s)" in
 esac
 
 mkdir -p priv
-cp "$artifact" "priv/$crate.so"
+# Never truncate a library that a running BEAM may have mapped. Prepare the
+# complete file in the destination directory and atomically replace its name.
+staged=$(mktemp "priv/.$crate.XXXXXXXX")
+trap 'rm -f "$staged"' EXIT
+cp "$artifact" "$staged"
 
 if [ "$crate" = "symbolic_nlp" ]; then
     # Locate libtorch by its actual shared object instead of a layout glob:
@@ -78,8 +82,8 @@ if [ "$crate" = "symbolic_nlp" ]; then
                 # cannot know the libdir before torch-sys has downloaded
                 # libtorch mid-build (and headerpad is already baked via
                 # RUSTFLAGS above so the edit fits).
-                if ! otool -l "priv/$crate.so" | grep -q "$libdir"; then
-                    install_name_tool -add_rpath "$libdir" "priv/$crate.so"
+                if ! otool -l "$staged" | grep -q "$libdir"; then
+                    install_name_tool -add_rpath "$libdir" "$staged"
                 fi
                 ;;
             *)
@@ -88,7 +92,7 @@ if [ "$crate" = "symbolic_nlp" ]; then
                 # find libtorch at test time and the statistical tier's
                 # tests would silently degrade to skipping.
                 if command -v patchelf >/dev/null 2>&1; then
-                    patchelf --set-rpath "$libdir" "priv/$crate.so" 2>/dev/null || true
+                    patchelf --set-rpath "$libdir" "$staged" 2>/dev/null || true
                 else
                     echo "WARNING: patchelf not found; priv/symbolic_nlp.so carries no libtorch rpath (install patchelf, or set LD_LIBRARY_PATH to $libdir at load time)." >&2
                 fi
@@ -99,6 +103,8 @@ if [ "$crate" = "symbolic_nlp" ]; then
     fi
 fi
 
+mv -f "$staged" "priv/$crate.so"
+trap - EXIT
 echo "$crate NIF: $artifact -> priv/$crate.so"
 done
 
@@ -110,5 +116,14 @@ done
 # back to this repo's priv/ when a copy lacks the file.
 for profile_priv in _build/*/lib/symbolic_tools/priv; do
     [ -d "$profile_priv" ] || continue
-    cp -f priv/*.so "$profile_priv"/ || true
+    for source in priv/*.so; do
+        [ -f "$source" ] || continue
+        target="$profile_priv/$(basename "$source")"
+        [ "$source" -ef "$target" ] && continue
+        staged=$(mktemp "$profile_priv/.nif.XXXXXXXX")
+        trap 'rm -f "$staged"' EXIT
+        cp "$source" "$staged"
+        mv -f "$staged" "$target"
+        trap - EXIT
+    done
 done

@@ -84,11 +84,24 @@ unknown_tool_is_not_found_test() ->
         ?assertMatch(#{<<"id">> := 6, <<"error">> := #{<<"code">> := -32601}}, Response)
     end).
 
-missing_arguments_is_invalid_params_test() ->
+omitted_and_empty_arguments_reach_handler_test() ->
     with_adapter(fun() ->
-        send_request(7, <<"tools/call">>, #{<<"name">> => <<"echo">>}),
-        Response = receive_response(),
-        ?assertMatch(#{<<"id">> := 7, <<"error">> := #{<<"code">> := -32602}}, Response)
+        ok = symbolic_stdio:add_tool(<<"noop">>, <<"No arguments">>,
+            fun(Args) -> jsx:encode(Args) end, #{<<"type">> => <<"object">>}),
+        lists:foreach(fun({Id, Params}) ->
+            send_request(Id, <<"tools/call">>, Params),
+            #{<<"result">> := #{<<"content">> := [#{<<"text">> := Text}]}} = receive_response(),
+            ?assertEqual(#{}, jsx:decode(Text, [return_maps]))
+        end, [{7, #{<<"name">> => <<"noop">>}},
+              {70, #{<<"name">> => <<"noop">>, <<"arguments">> => #{}}}])
+    end).
+
+non_object_arguments_are_invalid_params_test() ->
+    with_adapter(fun() ->
+        lists:foreach(fun(Args) ->
+            send_request(7, <<"tools/call">>, #{<<"name">> => <<"echo">>, <<"arguments">> => Args}),
+            ?assertMatch(#{<<"id">> := 7, <<"error">> := #{<<"code">> := -32602}}, receive_response())
+        end, [null, [], 1, <<"bad">>, true])
     end).
 
 unknown_method_is_method_not_found_test() ->

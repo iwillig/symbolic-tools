@@ -20,15 +20,11 @@
 -spec write(file:filename(), [tuple()]) -> ok.
 write(Path, Facts) ->
     ok = filelib:ensure_dir(Path),
-    Table = table_name(Path),
-    {ok, Table} = dets:open_file(Table, [{file, Path}, {type, bag}]),
-    try
+    with_table(Path, fun(Table) ->
         ok = dets:delete_all_objects(Table),
         ok = dets:insert(Table, Facts),
         ok = dets:sync(Table)
-    after
-        ok = dets:close(Table)
-    end,
+    end),
     %% A direct legacy write cannot leave metadata claiming that an old
     %% per-file sidecar belongs to the newly written fact snapshot.
     ok = delete_metadata(Path),
@@ -143,13 +139,9 @@ delete_backups(Saved) ->
 
 -spec read(file:filename()) -> [tuple()].
 read(Path) ->
-    Table = table_name(Path),
-    {ok, Table} = dets:open_file(Table, [{file, Path}, {type, bag}]),
-    try
+    with_table(Path, fun(Table) ->
         dets:foldl(fun(Fact, Acc) -> [Fact | Acc] end, [], Table)
-    after
-        ok = dets:close(Table)
-    end.
+    end).
 
 -spec write_metadata(file:filename(), map()) -> ok | {error, term()}.
 write_metadata(Path, Metadata) ->
@@ -181,9 +173,14 @@ delete_metadata(Path) ->
 
 metadata_path(Path) -> Path ++ ".scan.json".
 
-%% dets:open_file/2 registers Table (an atom) as a process-wide name,
-%% separate from the file path it's backed by — derived from the path so
-%% two different fact databases opened around the same time (e.g. by
-%% concurrent eunit tests) never collide on one literal shared atom.
-table_name(Path) ->
-    list_to_atom("symbolic_fact_store_" ++ integer_to_list(erlang:phash2(Path))).
+%% DETS table names are permanent atoms. Serialize the short DETS operation
+%% under a process-owned lock so every path, including unique staging paths,
+%% can safely share one bounded name. The lock is released if its owner dies.
+with_table(Path, Fun) ->
+    global:trans({symbolic_fact_store_dets, self()}, fun() ->
+        Table = symbolic_fact_store_table,
+        {ok, Table} = dets:open_file(Table, [{file, Path}, {type, bag}]),
+        try Fun(Table)
+        after ok = dets:close(Table)
+        end
+    end).

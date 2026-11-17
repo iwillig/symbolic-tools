@@ -94,6 +94,35 @@ file_cache_follows_bundle_commit_and_metadata_identity_test() ->
         cleanup(Path)
     end.
 
+repeated_bundle_writes_do_not_leak_atoms_test_() ->
+    {timeout, 60, fun() ->
+        Path = tmp_path(),
+        try
+            ok = symbolic_fact_store:write_bundle(Path, [], #{}),
+            Before = erlang:system_info(atom_count),
+            [ok = symbolic_fact_store:write_bundle(Path, [], #{}) || _ <- lists:seq(1, 200)],
+            ?assert(erlang:system_info(atom_count) - Before < 20)
+        after cleanup(Path) end
+    end}.
+
+concurrent_databases_are_isolated_test_() ->
+    {timeout, 60, fun() ->
+        Paths = [tmp_path() || _ <- lists:seq(1, 12)],
+        Parent = self(),
+        try
+            [spawn(fun() ->
+                Facts = [{defines, list_to_binary(Path), 0}],
+                Result = try
+                    ok = symbolic_fact_store:write_bundle(Path, Facts, #{}),
+                    Facts = symbolic_fact_store:read(Path), ok
+                catch C:R -> {C, R} end,
+                Parent ! {done, Path, Result}
+            end) || Path <- Paths],
+            [receive {done, Path, Result} -> ?assertEqual(ok, Result)
+             after 30000 -> error({timeout, Path}) end || Path <- Paths]
+        after lists:foreach(fun cleanup/1, Paths) end
+    end}.
+
 cleanup(Path) ->
     lists:foreach(fun(File) -> _ = file:delete(File) end,
                   filelib:wildcard(Path ++ "*")),

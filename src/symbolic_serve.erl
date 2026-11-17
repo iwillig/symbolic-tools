@@ -46,7 +46,7 @@
 %% and docs/plans/live-mcp-operation-status.md.
 run() ->
     ok = setup_logging(),
-    ?LOG_INFO("symbolic serve starting"),
+    ?LOG_INFO("symbolic serve starting os_pid=~s", [os:getpid()]),
     {ok, _} = application:ensure_all_started(jsx),
     {ok, _StatusPid} = symbolic_operation_status:start_link(),
     {ok, _CachePid} = symbolic_codebase:start_link(#{startup_refresh => true}),
@@ -59,7 +59,12 @@ run() ->
     %% links to this process tear down the tracker and cache with it).
     AdapterRef = erlang:monitor(process, whereis(symbolic_stdio)),
     receive
-        {'DOWN', AdapterRef, process, _Pid, _Reason} -> ok
+        {'DOWN', AdapterRef, process, _Pid, Reason} ->
+            case Reason of
+                normal -> ?LOG_INFO("symbolic serve stopping: stdio closed");
+                _ -> ?LOG_ERROR("symbolic serve stopping: stdio exited reason=~p", [Reason])
+            end,
+            ok
     end.
 
 %% A file under the platform's standard log directory (e.g. ~/Library/Logs

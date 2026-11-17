@@ -113,8 +113,11 @@ dispatch(Line, State) ->
             end, [], maps:get(tools, State)),
             send(response(Id, #{<<"tools">> => Tools}), State), State;
         #{<<"method">> := <<"tools/call">>, <<"id">> := Id,
-          <<"params">> := #{<<"name">> := Name, <<"arguments">> := Args}} when is_map(Args) ->
-            start_tool(Id, Name, Args, State);
+          <<"params">> := #{<<"name">> := Name} = Params} ->
+            case maps:get(<<"arguments">>, Params, #{}) of
+                Args when is_map(Args) -> start_tool(Id, Name, Args, State);
+                _ -> send(failure(Id, -32602, <<"Invalid parameters">>), State), State
+            end;
         #{<<"method">> := <<"tools/call">>, <<"id">> := Id} ->
             send(failure(Id, -32602, <<"Invalid parameters">>), State), State;
         #{<<"method">> := Method, <<"id">> := Id} when is_binary(Method) ->

@@ -57,6 +57,38 @@ reports_owner_crash_test() ->
         ok
     end).
 
+crashed_parse_logs_last_phase_and_reason_test() ->
+    with_tracker(fun(_Pid) ->
+        Handler = symbolic_status_crash_test,
+        ok = logger:add_handler(Handler, symbolic_parse_log_handler,
+                                #{receiver => self(), level => error}),
+        try
+            Owner = spawn(fun() ->
+                symbolic_operation_status:started(parse, <<"/tmp/crash">>),
+                symbolic_operation_status:phase(extracting),
+                receive never -> ok end
+            end),
+            wait_running(),
+            wait_phase(extracting),
+            exit(Owner, deliberate_failure),
+            wait_idle(),
+            receive
+                {parse_log, #{msg := {Format, Args}}} ->
+                    Message = iolist_to_binary(io_lib:format(Format, Args)),
+                    ?assertNotEqual(nomatch, binary:match(Message, <<"phase=extracting">>)),
+                    ?assertNotEqual(nomatch, binary:match(Message, <<"/tmp/crash">>)),
+                    ?assertNotEqual(nomatch, binary:match(Message, <<"deliberate_failure">>))
+            after 2000 -> error(no_crash_log)
+            end
+        after logger:remove_handler(Handler) end
+    end).
+
+wait_phase(Phase) ->
+    case symbolic_operation_status:status() of
+        {ok, #{active := #{phase := Phase}}} -> ok;
+        _ -> timer:sleep(10), wait_phase(Phase)
+    end.
+
 ignores_stale_events_after_finish_test() ->
     with_tracker(fun(_Pid) ->
         symbolic_operation_status:started(query, <<"/tmp/stale_project">>),

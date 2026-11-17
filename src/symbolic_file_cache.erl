@@ -11,7 +11,7 @@ version() ->
     Modules = [ts_extract, ts_extract_common, ts_extract_erlang,
         ts_extract_typescript, ts_extract_jsdoc, ts_extract_markdown,
         ts_extract_json, ts_extract_toml, ts_extract_bash,
-        ts_extract_clojure, ts_extract_ruby, ts_extract_rust,
+        ts_extract_clojure, ts_extract_ruby, ts_extract_rust, ts_extract_python,
         ts_extract_text, symbolic_ts],
     Beams = [begin
         {module, M} = code:ensure_loaded(M),
